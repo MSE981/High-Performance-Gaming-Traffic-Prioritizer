@@ -12,6 +12,8 @@ namespace Scalpel {
         // 诊断数据
         std::atomic<double> internal_limit_mbps{ 0.0 };
         std::atomic<double> isp_limit_mbps{ 0.0 };
+        std::atomic<double> internal_pps{ 0.0 };
+        std::atomic<double> isp_pps{ 0.0 };
         std::atomic<bool> is_probing{ false };
 
         // 线程心跳 (用于 Watchdog)
