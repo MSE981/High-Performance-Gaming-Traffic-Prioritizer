@@ -6,7 +6,7 @@
 #include <chrono>      // 24h, 100ms
 #include <ctime>       // time()
 #include <sys/socket.h> // send() 用于工作循环
-
+#include "NetworkUtils.hpp"
 #include "NetworkEngine.hpp"
 #include "Processor.hpp"
 #include "SystemOptimizer.hpp"
@@ -38,10 +38,36 @@ namespace Scalpel {
 
             // 2. 启动监控线程
             std::jthread monitor([this](std::stop_token st) { watchdog_loop(st); });
+            // 2.1 自动识别 WAN 口环境参数
+            std::string wan_name(Config::IFACE_WAN);
+            std::string local_ip = Utils::Network::get_local_ip(wan_name);
+            std::string gw_ip = Utils::Network::get_gateway_ip();
+
+            // 技巧：为了确保 ARP 表里有网关 MAC，先执行一次微型探测包
+            std::println("[Config] Detected Local IP: {}", local_ip);
+            std::println("[Config] Detected Gateway: {}", gw_ip);
+
+            // 获取网关 MAC
+            std::string gw_mac = Utils::Network::get_mac_from_arp(gw_ip);
+            if (gw_mac.empty() || gw_mac == "00:00:00:00:00:00") {
+                std::println("[Config] ARP cache empty, attempting to wake up gateway...");
+                // 简单发送一个 UDP 包给网关，诱导内核进行 ARP 寻址
+                system(("ping -c 1 -W 1 " + gw_ip + " > /dev/null").c_str());
+                gw_mac = Utils::Network::get_mac_from_arp(gw_ip);
+            }
+            std::println("[Config] Resolved Gateway MAC: {}", gw_mac);
 
             // 3. 执行自检 (使用 eth0 发包)
             Probe::Manager::run_internal_stress();
             Probe::Manager::run_isp_probe(eth0->get_fd());
+            // 模式 C：现在使用自动识别的参数
+            if (!gw_mac.empty()) {
+                Probe::Manager::run_real_isp_probe(eth0->get_fd(), gw_mac, local_ip);
+            }
+            else {
+                std::println(stderr, "[Error] Could not resolve Gateway MAC. Skipping Probe C.");
+            }
+
 
             // 4. 启动转发核心 (Core 2 & 3)
             std::jthread t1([this](std::stop_token st) {
