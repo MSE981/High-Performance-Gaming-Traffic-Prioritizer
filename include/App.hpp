@@ -13,6 +13,9 @@
 #include "Telemetry.hpp"
 #include "ProbeManager.hpp"
 #include "Indicator.hpp"
+#pragma once
+#include "NetworkUtils.hpp"
+#include "Scheduler.hpp"
 
 namespace Scalpel {
     class App {
@@ -31,29 +34,30 @@ namespace Scalpel {
         }
 
         void run() {
-            std::println("=== GamingTrafficPrioritizer V2.2 ===");
+            std::println("=== GamingTrafficPrioritizer V3.0 ===");
 
             // 1. 系统级锁定
             System::lock_cpu_frequency();
 
             // 2. 启动监控线程
             std::jthread monitor([this](std::stop_token st) { watchdog_loop(st); });
-            // 2.1 自动识别 WAN 口环境参数
+            // --- V3.0 修改点：自动识别网络环境 ---
             std::string wan_name(Config::IFACE_WAN);
             std::string local_ip = Utils::Network::get_local_ip(wan_name);
             std::string gw_ip = Utils::Network::get_gateway_ip();
 
-            // 技巧：为了确保 ARP 表里有网关 MAC，先执行一次微型探测包
-            std::println("[Config] Detected Local IP: {}", local_ip);
-            std::println("[Config] Detected Gateway: {}", gw_ip);
-
-            // 获取网关 MAC
+            // 唤醒网关并获取 MAC
             std::string gw_mac = Utils::Network::get_mac_from_arp(gw_ip);
             if (gw_mac.empty() || gw_mac == "00:00:00:00:00:00") {
-                std::println("[Config] ARP cache empty, attempting to wake up gateway...");
-                // 简单发送一个 UDP 包给网关，诱导内核进行 ARP 寻址
-                system(("ping -c 1 -W 1 " + gw_ip + " > /dev/null").c_str());
+                // 发送一个 ping 包强制刷新内核 ARP 表
+                int ret = system(("ping -c 1 -W 1 " + gw_ip + " > /dev/null 2>&1").c_str());
+                (void)ret;
                 gw_mac = Utils::Network::get_mac_from_arp(gw_ip);
+            }
+
+            // 探测模式 C 现在使用自动获取的参数
+            if (!gw_mac.empty()) {
+                Probe::Manager::run_real_isp_probe(eth0->get_fd(), gw_mac, local_ip, "8.8.8.8");
             }
             std::println("[Config] Resolved Gateway MAC: {}", gw_mac);
 
@@ -83,52 +87,95 @@ namespace Scalpel {
         }
 
     private:
-        void worker(std::shared_ptr<Engine::RawSocketManager> rx,
-            std::shared_ptr<Engine::RawSocketManager> tx,
-            int core_id, std::atomic<uint64_t>& heartbeat,
-            std::stop_token st) {
-
+        void worker(...) {
             System::set_thread_affinity(core_id);
             System::set_realtime_priority();
 
-            // 关键：每个线程拥有独立的处理器，无锁设计
             Logic::HeuristicProcessor processor;
             auto& tel = Telemetry::instance();
 
+            // --- V3.0 新增：初始化整形器 ---
+            double current_isp_limit = tel.isp_limit_mbps.load();
+            if (current_isp_limit < 10.0) current_isp_limit = 500.0; // 默认值
+
+            // 把普通流量的上限锁死在物理带宽的 90%
+            Traffic::Shaper shaper(current_isp_limit * 0.90);
+
             uint32_t idx = 0;
+            // 用于减少跨核内存同步开销的局部变量
+            uint64_t local_pkts = 0;
+            uint64_t local_bytes = 0;
+
             while (!st.stop_requested()) {
                 auto* hdr = reinterpret_cast<tpacket_hdr*>(rx->get_ring() + (idx * rx->frame_size()));
 
                 if (hdr->tp_status & TP_STATUS_USER) {
                     std::span pkt{ reinterpret_cast<uint8_t*>(hdr) + hdr->tp_mac, hdr->tp_len };
-
-                    // 启发式决策
                     auto prio = processor.process(pkt);
 
-                    // 转发 (V3.0 将在此处加入令牌桶逻辑)
-                    // MSG_DONTWAIT 防止阻塞
-                    send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT);
+                    // --- V3.0 新增：真正的三级调度分流逻辑 ---
+                    if (prio == Net::Priority::Critical || prio == Net::Priority::High) {
+                        // 游戏包/DNS：直接走零拷贝通道
+                        send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT);
+                    }
+                    else {
+                        // 下载包：扔进 4MB 的内存池里排队等候发落
+                        shaper.enqueue_normal(pkt);
+                    }
 
-                    // 更新统计
-                    tel.pkts_forwarded.fetch_add(1, std::memory_order_relaxed);
-                    heartbeat.store(time(nullptr), std::memory_order_relaxed);
+                    // --- 性能优化：每 32 个包才更新一次全局原子变量 ---
+                    local_pkts++;
+                    local_bytes += pkt.size();
+                    if (local_pkts % 32 == 0) {
+                        tel.pkts_forwarded.fetch_add(local_pkts, std::memory_order_relaxed);
+                        tel.bytes_forwarded.fetch_add(local_bytes, std::memory_order_relaxed);
+                        heartbeat.store(time(nullptr), std::memory_order_relaxed);
+                        local_pkts = 0;
+                        local_bytes = 0;
+                    }
 
-                    // 归还 Frame 给内核
                     hdr->tp_status = TP_STATUS_KERNEL;
                     idx = (idx + 1) % rx->frame_nr();
                 }
                 else {
                     __asm__ __volatile__("yield" ::: "memory");
                 }
+
+                // --- V3.0 新增：不断抽空下载包队列 ---
+                // 注意它在 if (TP_STATUS_USER) 的外面！
+                shaper.process_queue(tx->get_fd());
             }
         }
 
         void watchdog_loop(std::stop_token st) {
             auto& tel = Telemetry::instance();
+            // --- 新增：记录上一秒状态 ---
+            uint64_t last_pkts = 0;
+            uint64_t last_bytes = 0;
+            auto last_time = std::chrono::steady_clock::now();
+
             while (!st.stop_requested()) {
+                std::this_thread::sleep_for(500ms);
                 if (tel.is_probing) {
                     led.set_yellow();
                 }
+                // --- 新增：计算实时速率 ---
+                auto now = std::chrono::steady_clock::now();
+                uint64_t cur_pkts = tel.pkts_forwarded.load(std::memory_order_relaxed);
+                uint64_t cur_bytes = tel.bytes_forwarded.load(std::memory_order_relaxed);
+                uint64_t drops = tel.dropped_pkts.load(std::memory_order_relaxed);
+
+                double seconds = std::chrono::duration<double>(now - last_time).count();
+                uint64_t pps = static_cast<uint64_t>((cur_pkts - last_pkts) / seconds);
+                double mbps = ((cur_bytes - last_bytes) * 8.0 / 1e6) / seconds;
+
+                // 使用 \r 覆盖当前行，实现动态刷新
+                std::print("\r Traffic: {:7} PPS | {:7.2f} Mbps | Dropped: {:5}   ", pps, mbps, drops);
+                std::cout.flush();
+
+                last_pkts = cur_pkts;
+                last_bytes = cur_bytes;
+                last_time = now;
                 else {
                     auto now = time(nullptr);
                     if (now - tel.last_heartbeat_core2 > 5 || now - tel.last_heartbeat_core3 > 5) {
