@@ -19,7 +19,8 @@ namespace Scalpel {
         // 线程心跳 (用于 Watchdog)
         std::atomic<uint64_t> last_heartbeat_core2{ 0 };
         std::atomic<uint64_t> last_heartbeat_core3{ 0 };
-
+        // 新增：主动丢包计数 (用于监控 AQM 效果)
+        std::atomic<uint64_t> dropped_pkts{ 0 };
         static Telemetry& instance() {
             static Telemetry inst;
             return inst;

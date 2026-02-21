@@ -2,7 +2,7 @@
 # 项目特定的逻辑。
 #
 cmake_minimum_required(VERSION 3.20)
-project(GamingTrafficPrioritizer VERSION 2.2 LANGUAGES CXX)
+project(GamingTrafficPrioritizer VERSION 3.0 LANGUAGES CXX)
 
 include_directories(include)
 find_package(Threads REQUIRED)
@@ -18,14 +18,15 @@ target_link_libraries(GamingTrafficPrioritizer PRIVATE
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-
+set(CMAKE_C_COMPILER "gcc-13")
+set(CMAKE_CXX_COMPILER "g++-13")
 
 # 针对树莓派 4B (Cortex-A72) 的极限优化
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     target_compile_options(GamingTrafficPrioritizer PRIVATE 
         -std=c++23
         -O3 
-        -march=native 
+        target_compile_options(GamingTrafficPrioritizer PRIVATE -O3 -mcpu=cortex-a76)
         -Wall -Wextra 
     )
 elseif(MSVC)
