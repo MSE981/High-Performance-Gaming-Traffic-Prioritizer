@@ -21,7 +21,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_C_COMPILER "gcc-13")
 set(CMAKE_CXX_COMPILER "g++-13")
 
-# 针对树莓派 4B (Cortex-A72) 的极限优化
+# 针对树莓派 5 (Cortex-A76) 的极限优化
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     target_compile_options(GamingTrafficPrioritizer PRIVATE 
         -std=c++23
