@@ -1,4 +1,3 @@
-#pragma once
 #include <thread>      // std::jthread
 #include <stop_token>  // std::stop_token
 #include <memory>      // std::shared_ptr, std::unique_ptr
@@ -13,9 +12,12 @@
 #include "Telemetry.hpp"
 #include "ProbeManager.hpp"
 #include "Indicator.hpp"
-#pragma once
-#include "NetworkUtils.hpp"
 #include "Scheduler.hpp"
+#include <print>       // 用于 std::print, std::println
+#include <iostream>    // 用于 std::cout
+#include <cstdio>      // 用于 stderr
+#include <cstdlib>     // 用于 system()
+#include <span>        // 用于 std::span (如果不包含在此前的内部头文件中)
 
 namespace Scalpel {
     class App {
@@ -55,18 +57,12 @@ namespace Scalpel {
                 gw_mac = Utils::Network::get_mac_from_arp(gw_ip);
             }
 
-            // 探测模式 C 现在使用自动获取的参数
-            if (!gw_mac.empty()) {
-                Probe::Manager::run_real_isp_probe(eth0->get_fd(), gw_mac, local_ip, "8.8.8.8");
-            }
-            std::println("[Config] Resolved Gateway MAC: {}", gw_mac);
-
             // 3. 执行自检 (使用 eth0 发包)
             Probe::Manager::run_internal_stress();
             Probe::Manager::run_isp_probe(eth0->get_fd());
             // 模式 C：现在使用自动识别的参数
             if (!gw_mac.empty()) {
-                Probe::Manager::run_real_isp_probe(eth0->get_fd(), gw_mac, local_ip);
+                Probe::Manager::run_real_isp_probe(eth0->get_fd(), gw_mac, local_ip, "8.8.8.8");
             }
             else {
                 std::println(stderr, "[Error] Could not resolve Gateway MAC. Skipping Probe C.");
@@ -87,7 +83,7 @@ namespace Scalpel {
         }
 
     private:
-        void worker(...) {
+        void worker(std::shared_ptr<Engine::RawSocketManager> rx, std::shared_ptr<Engine::RawSocketManager> tx, int core_id, auto& heartbeat, std::stop_token st) {
             System::set_thread_affinity(core_id);
             System::set_realtime_priority();
 
@@ -155,7 +151,7 @@ namespace Scalpel {
             auto last_time = std::chrono::steady_clock::now();
 
             while (!st.stop_requested()) {
-                std::this_thread::sleep_for(500ms);
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 if (tel.is_probing) {
                     led.set_yellow();
                 }
@@ -176,11 +172,13 @@ namespace Scalpel {
                 last_pkts = cur_pkts;
                 last_bytes = cur_bytes;
                 last_time = now;
-                else {
-                    auto now = time(nullptr);
-                    if (now - tel.last_heartbeat_core2 > 5 || now - tel.last_heartbeat_core3 > 5) {
+
+                if (!tel.is_probing) {
+                    auto heartbeat_now = time(nullptr);
+                    if (heartbeat_now - tel.last_heartbeat_core2 > 5 || heartbeat_now - tel.last_heartbeat_core3 > 5) {
                         led.set_red();
-                        std::println(stderr, "Watchdog: Forwarding STALLED!");
+                        // 加入 \n 防止覆盖同行正在打印的速率状态
+                        std::println(stderr, "\nWatchdog: Forwarding STALLED!");
                     }
                     else {
                         led.set_green();

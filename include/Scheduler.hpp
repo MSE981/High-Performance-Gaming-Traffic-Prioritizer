@@ -23,7 +23,7 @@ namespace Scalpel::Traffic {
             rate_bytes_per_sec = static_cast<uint64_t>((limit_mbps * 1e6) / 8.0);
 
             // 桶容量设定：允许的最大突发量（约 20ms 的数据量，且至少容纳 10 个满载 MTU）
-            capacity = std::max<uint64_t>(15000, rate_bytes_per_sec * 0.02);
+            capacity = std::max<uint64_t>(15000ULL, static_cast<uint64_t>(rate_bytes_per_sec * 0.02));
             tokens = capacity;
             last_refill = std::chrono::steady_clock::now();
         }
@@ -56,7 +56,7 @@ namespace Scalpel::Traffic {
         // 彻底消除 TLB Miss，大幅提升 CPU 寻址效率。
         struct alignas(4096) PacketSlot {
             uint16_t size = 0;
-            uint8_t payload; // 足够装下标准的 1514 字节 MTU
+            uint8_t payload[2048]; // 足够装下标准的 1514 字节 MTU
         };
 
         // 运行时永不扩容，启动时一次性在堆上划拨 4MB 连续内存
@@ -75,7 +75,7 @@ namespace Scalpel::Traffic {
                 return false;
             }
 
-            auto& slot = pool;
+            auto& slot = pool[tail];
             slot.size = static_cast<uint16_t>(pkt.size());
             // 极速内存拷贝
             std::memcpy(slot.payload, pkt.data(), pkt.size());
@@ -87,7 +87,7 @@ namespace Scalpel::Traffic {
 
         std::span<const uint8_t> front() const {
             if (count == 0) return {};
-            const auto& slot = pool;
+            const auto& slot = pool[head];
             return { slot.payload, slot.size };
         }
 
