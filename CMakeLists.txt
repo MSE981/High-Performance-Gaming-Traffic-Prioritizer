@@ -18,15 +18,16 @@ target_link_libraries(GamingTrafficPrioritizer PRIVATE
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_C_COMPILER "gcc-13")
-set(CMAKE_CXX_COMPILER "g++-13")
+set(CMAKE_CXX_COMPILER "g++-14")
+set(CMAKE_C_COMPILER "gcc-14")
+
 
 # 针对树莓派 5 (Cortex-A76) 的极限优化
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     target_compile_options(GamingTrafficPrioritizer PRIVATE 
         -std=c++23
-        -O3 
-        target_compile_options(GamingTrafficPrioritizer PRIVATE -O3 -mcpu=cortex-a76)
+        -O3
+        -mcpu=cortex-a76 
         -Wall -Wextra 
     )
 elseif(MSVC)
