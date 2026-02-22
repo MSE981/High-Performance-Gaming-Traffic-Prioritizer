@@ -9,8 +9,8 @@ namespace Scalpel::Config {
 
     // 启发式阈值
     constexpr uint32_t LARGE_PACKET_THRESHOLD = 1000; // 超过此大小视为大包
-    constexpr uint32_t PUNISH_TRIGGER_COUNT = 15;     // 前N个包中有15个大包则降级
-    constexpr uint32_t CLEANUP_INTERVAL = 2000;       // 处理多少个包清理一次流表
+    constexpr uint32_t PUNISH_TRIGGER_COUNT = 20;     // 前N个包中有15个大包则降级
+    constexpr uint32_t CLEANUP_INTERVAL = 5000;       // 处理多少个包清理一次流表
 
     // 游戏端口白名单 (示例)
     constexpr bool is_game_port(uint16_t port) {
