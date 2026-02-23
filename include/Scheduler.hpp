@@ -22,8 +22,8 @@ namespace Scalpel::Traffic {
             // 将 Mbps 转换为 每秒字节数
             rate_bytes_per_sec = static_cast<uint64_t>((limit_mbps * 1e6) / 8.0);
 
-            // 桶容量设定：允许的最大突发量（约 20ms 的数据量，且至少容纳 10 个满载 MTU）
-            capacity = std::max<uint64_t>(15000ULL, static_cast<uint64_t>(rate_bytes_per_sec * 0.02));
+            // 桶容量设定：允许的最大突发量放宽至 100ms，适配网页浏览的突发特性
+            capacity = std::max<uint64_t>(15000ULL, static_cast<uint64_t>(rate_bytes_per_sec * 0.1));
             tokens = capacity;
             last_refill = std::chrono::steady_clock::now();
         }
@@ -64,10 +64,10 @@ namespace Scalpel::Traffic {
         size_t head = 0;
         size_t tail = 0;
         size_t count = 0;
-        const size_t capacity_limit = 1024;
+        const size_t capacity_limit = 8192;
 
     public:
-        ZeroAllocRingBuffer() : pool(1024) {}
+        ZeroAllocRingBuffer() : pool(8192) {}
 
         bool push(std::span<const uint8_t> pkt) {
             // AQM 机制：队列满时实施 Tail Drop，主动丢弃下载包触发 TCP 降速
