@@ -29,6 +29,13 @@ namespace Scalpel {
             eth0 = std::make_shared<Engine::RawSocketManager>(Config::IFACE_WAN);
             eth1 = std::make_shared<Engine::RawSocketManager>(Config::IFACE_LAN);
 
+            // 强行关闭 Linux 网卡硬件/软件层面的包合并(GRO/TSO/GSO)，确保 Raw Socket 只接收标准 MTU 包
+            // 显式将 string_view 转换为 std::string 参与拼接
+            std::string cmd0 = "ethtool -K " + std::string(Config::IFACE_WAN) + " gro off gso off tso off 2>/dev/null";
+            std::string cmd1 = "ethtool -K " + std::string(Config::IFACE_LAN) + " gro off gso off tso off 2>/dev/null";
+            system(cmd0.c_str());
+            system(cmd1.c_str());
+
             if (auto r = eth0->init(); !r) return r;
             if (auto r = eth1->init(); !r) return r;
 
