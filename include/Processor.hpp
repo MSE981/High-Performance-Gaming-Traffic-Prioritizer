@@ -39,8 +39,11 @@ namespace Scalpel::Logic {
             if (pkt.size() < sizeof(EthernetHeader)) return Priority::Normal;
             auto eth = reinterpret_cast<const EthernetHeader*>(pkt.data());
 
+            // ===== 替换后 =====
             if (ntohs(eth->proto) != 0x0800) return Priority::Normal; // Only IPv4
 
+            // 安全检查：确保包长足够提取 IP 协议号和 UDP 端口防止内存越界 (14+20+4 = 38)
+            if (pkt.size() < 38) return Priority::Normal;
 
             // 2. 定位到 IP 协议位 (14字节偏移 + 9字节偏移 = 23字节处)
             uint8_t protocol = pkt[23];
@@ -58,19 +61,13 @@ namespace Scalpel::Logic {
 
 
 
-
-
-
-
-
-
             // Check bounds for IP
             if (pkt.size() < sizeof(EthernetHeader) + sizeof(IPv4Header)) return Priority::Normal;
             auto ip = reinterpret_cast<const IPv4Header*>(pkt.data() + sizeof(EthernetHeader));
             size_t ihl = (ip->ver_ihl & 0x0F) * 4;
 
             // 1. TCP ACK Optimization 
-            if (ip->protocol == 6 && pkt.size() < 64) return Priority::Critical;
+            if (ip->protocol == 6 && pkt.size() < 74) return Priority::Critical;
 
             // 2. UDP Heuristic Analysis 
             if (ip->protocol == 17) {
@@ -87,11 +84,6 @@ namespace Scalpel::Logic {
                     // 赋予 High 优先级，但不执行下面判断大包并降级的逻辑
                     return Priority::High;
                 }
-
-
-
-
-
 
                 // Flow Analysis
                 FlowKey key{ ip->saddr, ip->daddr, sport, dport };
@@ -119,12 +111,25 @@ namespace Scalpel::Logic {
                 process_counter = 0;
             }
 
-            return Priority::Normal;
             if (ip->protocol == 6) {
                 // 识别 SYN 包 (TCP 头部偏移在 IHL 之后)
-                // 简单判定：长度很小的 TCP 包通常是握手或确认包
-                if (pkt.size() < 70) return Priority::Critical;
+                if (pkt.size() < 74) return Priority::Critical;
+
+                // 修复：利用新增的 TCPHeader 提取端口，拯救 Bing 搜索的高延迟
+                size_t offset = sizeof(EthernetHeader) + ihl;
+                if (pkt.size() >= offset + sizeof(TCPHeader)) {
+                    auto tcp = reinterpret_cast<const TCPHeader*>(pkt.data() + offset);
+                    uint16_t dport = ntohs(tcp->dest);
+                    uint16_t sport = ntohs(tcp->source);
+
+                    // 将 HTTPS(443) 网页流量和 TCP 游戏流量直接提权为 High，彻底免除排队限速
+                    if (dport == 443 || sport == 443 || Config::is_game_port(dport) || Config::is_game_port(sport)) {
+                        return Priority::High;
+                    }
+                }
             }
+
+            return Priority::Normal;
         }
 
     private:

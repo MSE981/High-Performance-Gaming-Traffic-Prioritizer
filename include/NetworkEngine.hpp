@@ -20,16 +20,19 @@ namespace Scalpel::Engine {
         size_t ring_size = 0;
 
         // TPACKET_V1/V2 默认配置
-        static constexpr uint32_t BLOCK_SIZE = 4096 * 8;
+        // TPACKET_V1/V2 默认配置
+        static constexpr uint32_t BLOCK_SIZE = 4096 * 816
         static constexpr uint32_t FRAME_SIZE = 2048;
-        static constexpr uint32_t BLOCK_NR = 64;
+        // 修复：将内核 RX Ring 扩大 8 倍，彻底接住 Bing 等网页的突发大数据流
+        static constexpr uint32_t BLOCK_NR = 1024;
         static constexpr uint32_t FRAME_NR = (BLOCK_SIZE * BLOCK_NR) / FRAME_SIZE;
 
     public:
         explicit RawSocketManager(std::string_view iface_name) : iface(iface_name) {}
 
         ~RawSocketManager() {
-            if (ring) munmap(ring, ring_size);
+            // 修复：mmap 失败时返回 MAP_FAILED 而不是 nullptr
+            if (ring && ring != MAP_FAILED) munmap(ring, ring_size);
             if (fd >= 0) close(fd);
         }
 
