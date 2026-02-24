@@ -111,7 +111,7 @@ namespace Scalpel::Probe {
             udp->len = htons(64 - 14 - 20);
 
             // --- ½×ÌÝÊ½Ñ¹²âÂß¼­ ---
-            for (uint32_t step_pps = 100000; step_pps <= 500000; step_pps += 50000) {
+            for (uint32_t step_pps = 100000; step_pps <= 500000; step_pps += 100000) {
                 uint64_t sent_step = 0;
                 auto interval = std::chrono::nanoseconds(1000000000 / step_pps);
                 auto step_start = std::chrono::high_resolution_clock::now();
