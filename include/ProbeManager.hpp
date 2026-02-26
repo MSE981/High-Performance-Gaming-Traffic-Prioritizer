@@ -79,9 +79,9 @@ namespace Scalpel::Probe {
       /**
        * @param gateway_mac 路由器的真实 MAC 地址
        * @param local_ip 树莓派当前内网 IP
-       * @param target_ip 探测目标 (默认使用 Google DNS 8.8.8.8)
+       * @param target_ip 探测目标 (默认使用 阿里公共DNS 223.5.5.5)
        */
-        static void run_real_isp_probe(int fd, const std::string& gateway_mac, const std::string& local_ip, const std::string& target_ip = "8.8.8.8") {
+        static void run_real_isp_probe(int fd, const std::string& gateway_mac, const std::string& local_ip, const std::string& target_ip = "223.5.5.5") {
             auto& tel = Telemetry::instance();
             tel.is_probing = true;
             std::println("[Probe C] Starting Real-world ISP PPS Probe to {}...", target_ip);

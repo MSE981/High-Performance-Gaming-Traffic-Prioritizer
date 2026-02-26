@@ -62,7 +62,7 @@ namespace Scalpel {
             Probe::Manager::run_isp_probe(eth0->get_fd());
             // 模式 C：现在使用自动识别的参数
             if (!gw_mac.empty()) {
-                Probe::Manager::run_real_isp_probe(eth0->get_fd(), gw_mac, local_ip, "8.8.8.8");
+                Probe::Manager::run_real_isp_probe(eth0->get_fd(), gw_mac, local_ip, "223.5.5.5");
             }
             else {
                 std::println(stderr, "[Error] Could not resolve Gateway MAC. Skipping Probe C.");
@@ -94,8 +94,8 @@ namespace Scalpel {
             double current_isp_limit = tel.isp_limit_mbps.load();
             if (current_isp_limit < 10.0) current_isp_limit = 500.0; // 默认值
 
-            // 把普通流量的上限锁死在物理带宽的 90%
-            Traffic::Shaper shaper(current_isp_limit * 0.90);
+            // 把普通流量的上限锁死在物理带宽的 80%
+            Traffic::Shaper shaper(current_isp_limit * 0.80);
 
             uint32_t idx = 0;
             // 用于减少跨核内存同步开销的局部变量

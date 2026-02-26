@@ -21,7 +21,7 @@ namespace Scalpel::Engine {
 
         // TPACKET_V1/V2 默认配置
         // TPACKET_V1/V2 默认配置
-        static constexpr uint32_t BLOCK_SIZE = 4096 * 816
+		static constexpr uint32_t BLOCK_SIZE = 4096 * 16; // 4K * 816 = 32768 bytes
         static constexpr uint32_t FRAME_SIZE = 2048;
         // 修复：将内核 RX Ring 扩大 8 倍，彻底接住 Bing 等网页的突发大数据流
         static constexpr uint32_t BLOCK_NR = 1024;
@@ -45,6 +45,23 @@ namespace Scalpel::Engine {
             struct ifreq ifr {};
             iface.copy(ifr.ifr_name, IFNAMSIZ - 1);
             if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) return std::unexpected("Interface lookup failed");
+
+            // --- 自动开启网卡混杂模式逻辑 ---
+            struct ifreq ifr_p {};
+            iface.copy(ifr_p.ifr_name, IFNAMSIZ - 1);
+
+            // 获取当前网卡标志位
+            if (ioctl(fd, SIOCGIFFLAGS, &ifr_p) < 0) {
+                return std::unexpected("Failed to get interface flags for promisc mode");
+            }
+
+            // 加上混杂模式位并写回内核
+            ifr_p.ifr_flags |= IFF_PROMISC;
+            if (ioctl(fd, SIOCSIFFLAGS, &ifr_p) < 0) {
+                // 如果这里报错，通常是因为没加 CAP_NET_ADMIN 权限
+                return std::unexpected("Failed to set IFF_PROMISC. Check sudo/setcap permissions.");
+            }
+            std::println("[Engine] Promiscuous mode enabled on {}", iface);
 
             // 3. 配置 PACKET_RX_RING
             tpacket_req req{
