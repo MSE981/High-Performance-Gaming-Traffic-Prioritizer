@@ -36,7 +36,6 @@ namespace Scalpel::Net {
         uint16_t check;
     };
 
-    // 修复：补齐缺失的 TCP 头部结构。缺失此结构导致底层无法识别网页的 TCP 443 流量
     struct TCPHeader {
         uint16_t source;
         uint16_t dest;
