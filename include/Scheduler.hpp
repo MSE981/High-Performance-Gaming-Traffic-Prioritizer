@@ -49,10 +49,9 @@ namespace Scalpel::Traffic {
         }
     };
 
-    // 2. 零动态分配环形缓冲区 (4MB 完美对齐版)
+    // 2. 零动态分配环形缓冲区
     class ZeroAllocRingBuffer {
-        // 核心黑科技：alignas(4096) 
-        // 强制编译器将每个槽位对齐到 4KB (树莓派系统页大小)。
+        // 强制编译器将每个槽位对齐到 4KB。
         // 彻底消除 TLB Miss，大幅提升 CPU 寻址效率。
         struct alignas(4096) PacketSlot {
             uint16_t size = 0;

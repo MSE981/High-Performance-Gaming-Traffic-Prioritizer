@@ -1,17 +1,17 @@
 #pragma once
 #include <string>
-#include <expected> // C++23: std::expected
-#include <span>     // C++20/23: std::span
-#include <cstring>  // strerror
-#include <cerrno>   // errno
-#include <unistd.h> // close
-#include <sys/socket.h>      // socket(), bind(), setsockopt()
-#include <sys/mman.h>        // mmap(), munmap()
-#include <sys/ioctl.h>       // ioctl()
-#include <linux/if_packet.h> // AF_PACKET, tpacket_req
-#include <net/ethernet.h>    // ETH_P_ALL
-#include <net/if.h>          // ifreq, IFNAMSIZ
-#include <arpa/inet.h>       // htons() 修复之前的报错
+#include <expected>
+#include <span>
+#include <cstring>
+#include <cerrno>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <linux/if_packet.h>
+#include <net/ethernet.h>
+#include <net/if.h>
+#include <arpa/inet.h>
 
 namespace Scalpel::Engine {
     class RawSocketManager {
