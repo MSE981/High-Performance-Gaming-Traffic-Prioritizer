@@ -59,7 +59,7 @@ namespace Scalpel::Probe {
             uint8_t pkt[64]; std::memset(pkt, 0xEE, 64);
             auto start = std::chrono::high_resolution_clock::now();
             uint64_t sent = 0;
-            auto interval = std::chrono::nanoseconds(1000000000 / 900000); // Target 450k PPS
+            auto interval = std::chrono::nanoseconds(1000000000 / 1800000); // Target 1.8M PPS
 
             while (std::chrono::high_resolution_clock::now() - start < std::chrono::seconds(5)) {
                 auto loop_start = std::chrono::high_resolution_clock::now();

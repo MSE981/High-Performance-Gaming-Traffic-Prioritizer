@@ -1,6 +1,6 @@
 #pragma once
 #include <cstdint>
-#include <netinet/in.h> // 必须有：用于 ntohs, htons
+#include <netinet/in.h>
 
 namespace Scalpel::Net {
     enum class Priority : uint8_t {
