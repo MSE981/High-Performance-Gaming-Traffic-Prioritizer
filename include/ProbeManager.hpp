@@ -75,7 +75,7 @@ namespace Scalpel::Probe {
             std::println("[Probe B] ISP Result: {:.2f} Mbps ({} PPS)", tel.isp_limit_mbps.load(), pps);
             tel.is_probing = false;
         }
-        // --- [新增] 模式 C：真实 ISP 限制探测 (穿透公网) ---
+        // 式 C：真实 ISP 限制探测 (穿透公网) ---
       /**
        * @param gateway_mac 路由器的真实 MAC 地址
        * @param local_ip 树莓派当前内网 IP

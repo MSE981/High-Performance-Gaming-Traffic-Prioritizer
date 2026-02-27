@@ -1,10 +1,10 @@
-#include <thread>      // std::jthread
-#include <stop_token>  // std::stop_token
-#include <memory>      // std::shared_ptr, std::unique_ptr
-#include <expected>    // std::expected
-#include <chrono>      // 24h, 100ms
-#include <ctime>       // time()
-#include <sys/socket.h> // send() 用于工作循环
+#include <thread>
+#include <stop_token>
+#include <memory>
+#include <expected>
+#include <chrono>
+#include <ctime>
+#include <sys/socket.h>
 #include "NetworkUtils.hpp"
 #include "NetworkEngine.hpp"
 #include "Processor.hpp"
@@ -12,12 +12,11 @@
 #include "Telemetry.hpp"
 #include "ProbeManager.hpp"
 #include "Indicator.hpp"
-#include "Scheduler.hpp"
-#include <print>       // 用于 std::print, std::println
-#include <iostream>    // 用于 std::cout
-#include <cstdio>      // 用于 stderr
-#include <cstdlib>     // 用于 system()
-#include <span>        // 用于 std::span (如果不包含在此前的内部头文件中)
+#include "Schedu
+#include <iostream>
+#include <cstdio>
+#include <cstdlib>
+#include <span>
 
 namespace Scalpel {
     class App {
@@ -43,7 +42,7 @@ namespace Scalpel {
 
             // 2. 启动监控线程
             std::jthread monitor([this](std::stop_token st) { watchdog_loop(st); });
-            // --- V3.0 修改点：自动识别网络环境 ---
+            // ---自动识别网络环境 ---
             std::string wan_name(Config::IFACE_WAN);
             std::string local_ip = Utils::Network::get_local_ip(wan_name);
             std::string gw_ip = Utils::Network::get_gateway_ip();
@@ -90,7 +89,7 @@ namespace Scalpel {
             Logic::HeuristicProcessor processor;
             auto& tel = Telemetry::instance();
 
-            // --- V3.0 新增：初始化整形器 ---
+            // ---初始化整形器 ---
             double current_isp_limit = tel.isp_limit_mbps.load();
             if (current_isp_limit < 10.0) current_isp_limit = 500.0; // 默认值
 
@@ -109,7 +108,7 @@ namespace Scalpel {
                     std::span pkt{ reinterpret_cast<uint8_t*>(hdr) + hdr->tp_mac, hdr->tp_len };
                     auto prio = processor.process(pkt);
 
-                    // --- V3.0 新增：真正的三级调度分流逻辑 ---
+                    // ---三级调度分流逻辑 ---
                     if (prio == Net::Priority::Critical || prio == Net::Priority::High) {
                         // 游戏包/DNS：直接走零拷贝通道
                         send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT);
@@ -119,7 +118,7 @@ namespace Scalpel {
                         shaper.enqueue_normal(pkt);
                     }
 
-                    // --- 性能优化：每 32 个包才更新一次全局原子变量 ---
+                    // --- 每 32 个包才更新一次全局原子变量 ---
                     local_pkts++;
                     local_bytes += pkt.size();
                     if (local_pkts % 32 == 0) {
@@ -137,15 +136,14 @@ namespace Scalpel {
                     __asm__ __volatile__("yield" ::: "memory");
                 }
 
-                // --- V3.0 新增：不断抽空下载包队列 ---
-                // 注意它在 if (TP_STATUS_USER) 的外面！
+                // ---不断抽空下载包队列 ---
                 shaper.process_queue(tx->get_fd());
             }
         }
 
         void watchdog_loop(std::stop_token st) {
             auto& tel = Telemetry::instance();
-            // --- 新增：记录上一秒状态 ---
+            // ---记录上一秒状态 ---
             uint64_t last_pkts = 0;
             uint64_t last_bytes = 0;
             auto last_time = std::chrono::steady_clock::now();
@@ -155,7 +153,7 @@ namespace Scalpel {
                 if (tel.is_probing) {
                     led.set_yellow();
                 }
-                // --- 新增：计算实时速率 ---
+                // ---计算实时速率 ---
                 auto now = std::chrono::steady_clock::now();
                 uint64_t cur_pkts = tel.pkts_forwarded.load(std::memory_order_relaxed);
                 uint64_t cur_bytes = tel.bytes_forwarded.load(std::memory_order_relaxed);
