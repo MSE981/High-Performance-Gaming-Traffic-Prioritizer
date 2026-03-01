@@ -14,6 +14,11 @@ namespace Scalpel {
         std::atomic<uint64_t> pkts_high{ 0 };
         std::atomic<uint64_t> pkts_normal{ 0 };
 
+        // 分级带宽统计 (Bytes)
+        std::atomic<uint64_t> bytes_critical{ 0 };
+        std::atomic<uint64_t> bytes_high{ 0 };
+        std::atomic<uint64_t> bytes_normal{ 0 };
+
         // 诊断数据
         std::atomic<double> internal_limit_mbps{ 0.0 };
         std::atomic<double> isp_limit_mbps{ 0.0 };
