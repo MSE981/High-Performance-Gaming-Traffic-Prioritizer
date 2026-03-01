@@ -113,6 +113,11 @@ namespace Scalpel {
                     std::span pkt{ reinterpret_cast<uint8_t*>(hdr) + hdr->tp_mac, hdr->tp_len };
                     auto prio = processor.process(pkt);
 
+                    // --- 记录各级别流量状态 ---
+                    if (prio == Net::Priority::Critical) local_pkts_crit++;
+                    else if (prio == Net::Priority::High) local_pkts_high++;
+                    else local_pkts_norm++;
+
                     // ---三级调度分流逻辑 ---
                     if (prio == Net::Priority::Critical || prio == Net::Priority::High) {
                         // 游戏包/DNS：直接走零拷贝通道
@@ -129,9 +134,15 @@ namespace Scalpel {
                     if (local_pkts % 32 == 0) {
                         tel.pkts_forwarded.fetch_add(local_pkts, std::memory_order_relaxed);
                         tel.bytes_forwarded.fetch_add(local_bytes, std::memory_order_relaxed);
+                        tel.pkts_critical.fetch_add(local_pkts_crit, std::memory_order_relaxed);
+                        tel.pkts_high.fetch_add(local_pkts_high, std::memory_order_relaxed);
+                        tel.pkts_normal.fetch_add(local_pkts_norm, std::memory_order_relaxed);
                         heartbeat.store(time(nullptr), std::memory_order_relaxed);
                         local_pkts = 0;
                         local_bytes = 0;
+                        local_pkts_crit = 0;
+                        local_pkts_high = 0;
+                        local_pkts_norm = 0;
                     }
 
                     hdr->tp_status = TP_STATUS_KERNEL;
@@ -151,6 +162,9 @@ namespace Scalpel {
             // ---记录上一秒状态 ---
             uint64_t last_pkts = 0;
             uint64_t last_bytes = 0;
+            uint64_t last_crit = 0;
+            uint64_t last_high = 0;
+            uint64_t last_norm = 0;
             auto last_time = std::chrono::steady_clock::now();
 
             while (!st.stop_requested()) {
@@ -162,18 +176,28 @@ namespace Scalpel {
                 auto now = std::chrono::steady_clock::now();
                 uint64_t cur_pkts = tel.pkts_forwarded.load(std::memory_order_relaxed);
                 uint64_t cur_bytes = tel.bytes_forwarded.load(std::memory_order_relaxed);
+                uint64_t cur_crit = tel.pkts_critical.load(std::memory_order_relaxed);
+                uint64_t cur_high = tel.pkts_high.load(std::memory_order_relaxed);
+                uint64_t cur_norm = tel.pkts_normal.load(std::memory_order_relaxed);
                 uint64_t drops = tel.dropped_pkts.load(std::memory_order_relaxed);
 
                 double seconds = std::chrono::duration<double>(now - last_time).count();
                 uint64_t pps = static_cast<uint64_t>((cur_pkts - last_pkts) / seconds);
+                uint64_t pps_crit = static_cast<uint64_t>((cur_crit - last_crit) / seconds);
+                uint64_t pps_high = static_cast<uint64_t>((cur_high - last_high) / seconds);
+                uint64_t pps_norm = static_cast<uint64_t>((cur_norm - last_norm) / seconds);
                 double mbps = ((cur_bytes - last_bytes) * 8.0 / 1e6) / seconds;
 
-                // 使用 \r 覆盖当前行，实现动态刷新
-                std::print("\r Traffic: {:7} PPS | {:7.2f} Mbps | Dropped: {:5}   ", pps, mbps, drops);
+                // 使用 \r 覆盖当前行，实现动态刷新，分级展示 PPS
+                std::print("\r {:7.2f} Mbps | PPS: C:{:<5} H:{:<5} N:{:<5} | Drop: {:<5}   ",
+                    mbps, pps_crit, pps_high, pps_norm, drops);
                 std::cout.flush();
 
                 last_pkts = cur_pkts;
                 last_bytes = cur_bytes;
+                last_crit = cur_crit;
+                last_high = cur_high;
+                last_norm = cur_norm;
                 last_time = now;
 
                 if (!tel.is_probing) {
