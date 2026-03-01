@@ -35,7 +35,7 @@ namespace Scalpel {
         }
 
         void run() {
-            std::println("=== GamingTrafficPrioritizer V3.0 ===");
+            std::println("=== GamingTrafficPrioritizer ===");
 
             // 1. 系统级锁定
             System::lock_cpu_frequency();
