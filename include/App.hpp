@@ -100,6 +100,11 @@ namespace Scalpel {
             // 用于减少跨核内存同步开销的局部变量
             uint64_t local_pkts = 0;
             uint64_t local_bytes = 0;
+            uint64_t local_pkts_crit = 0;
+            uint64_t local_pkts_high = 0;
+            uint64_t local_pkts_norm = 0;
+
+            while (!st.stop_requested()) {
 
             while (!st.stop_requested()) {
                 auto* hdr = reinterpret_cast<tpacket_hdr*>(rx->get_ring() + (idx * rx->frame_size()));

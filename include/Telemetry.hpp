@@ -9,6 +9,11 @@ namespace Scalpel {
         std::atomic<uint64_t> pkts_forwarded{ 0 };
         std::atomic<uint64_t> bytes_forwarded{ 0 };
 
+        // 分级 PPS 统计
+        std::atomic<uint64_t> pkts_critical{ 0 };
+        std::atomic<uint64_t> pkts_high{ 0 };
+        std::atomic<uint64_t> pkts_normal{ 0 };
+
         // 诊断数据
         std::atomic<double> internal_limit_mbps{ 0.0 };
         std::atomic<double> isp_limit_mbps{ 0.0 };
