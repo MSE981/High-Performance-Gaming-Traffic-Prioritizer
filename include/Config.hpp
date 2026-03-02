@@ -28,7 +28,7 @@ namespace Scalpel::Config {
         return false;
     }
 
-    // 新增：动态加载配置
+    // 动态加载配置
     inline void load_config(const std::string& path = "config.txt") {
         std::ifstream file(path);
         if (!file.is_open()) {
