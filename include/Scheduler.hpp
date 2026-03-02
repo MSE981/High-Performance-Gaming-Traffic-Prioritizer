@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <sys/socket.h>
 #include "Headers.hpp"
-#include "Telemetry.hpp"
+#include "Telemetry.hpp" // 用于记录主动丢包(AQM)的统计
 
 namespace Scalpel::Traffic {
 
@@ -112,7 +112,7 @@ namespace Scalpel::Traffic {
         void enqueue_normal(std::span<const uint8_t> pkt) {
             if (!normal_queue.push(pkt)) {
                 // 如果 push 失败（队列已满），记录一次主动丢包
-                Telemetry::instance().dropped_normal.fetch_add(1, std::memory_order_relaxed);
+                Telemetry::instance().dropped_pkts.fetch_add(1, std::memory_order_relaxed);
             }
         }
 
