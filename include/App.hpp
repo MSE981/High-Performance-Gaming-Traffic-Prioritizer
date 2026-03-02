@@ -182,18 +182,24 @@ namespace Scalpel {
                 uint64_t cur_crit = tel.pkts_critical.load(std::memory_order_relaxed);
                 uint64_t cur_high = tel.pkts_high.load(std::memory_order_relaxed);
                 uint64_t cur_norm = tel.pkts_normal.load(std::memory_order_relaxed);
+                uint64_t cur_b_crit = tel.bytes_critical.load(std::memory_order_relaxed);
+                uint64_t cur_b_high = tel.bytes_high.load(std::memory_order_relaxed);
+                uint64_t cur_b_norm = tel.bytes_normal.load(std::memory_order_relaxed);
                 uint64_t drops = tel.dropped_pkts.load(std::memory_order_relaxed);
 
                 double seconds = std::chrono::duration<double>(now - last_time).count();
-                uint64_t pps = static_cast<uint64_t>((cur_pkts - last_pkts) / seconds);
+
                 uint64_t pps_crit = static_cast<uint64_t>((cur_crit - last_crit) / seconds);
                 uint64_t pps_high = static_cast<uint64_t>((cur_high - last_high) / seconds);
                 uint64_t pps_norm = static_cast<uint64_t>((cur_norm - last_norm) / seconds);
-                double mbps = ((cur_bytes - last_bytes) * 8.0 / 1e6) / seconds;
 
-                // 使用 \r 覆盖当前行，实现动态刷新，分级展示 PPS
-                std::print("\r {:7.2f} Mbps | PPS: C:{:<5} H:{:<5} N:{:<5} | Drop: {:<5}   ",
-                    mbps, pps_crit, pps_high, pps_norm, drops);
+                double mbps_crit = ((cur_b_crit - last_bytes_crit) * 8.0 / 1e6) / seconds;
+                double mbps_high = ((cur_b_high - last_bytes_high) * 8.0 / 1e6) / seconds;
+                double mbps_norm = ((cur_b_norm - last_bytes_norm) * 8.0 / 1e6) / seconds;
+
+                // 使用 \r 覆盖当前行，实现动态刷新，全方位展示各个级别的 Mbps 和 PPS
+                std::print("\r Mbps[C:{:5.1f} H:{:5.1f} N:{:6.1f}] | PPS[C:{:<5} H:{:<5} N:{:<5}] | Drop: {:<4}  ",
+                    mbps_crit, mbps_high, mbps_norm, pps_crit, pps_high, pps_norm, drops);
                 std::cout.flush();
 
                 last_pkts = cur_pkts;
@@ -201,6 +207,9 @@ namespace Scalpel {
                 last_crit = cur_crit;
                 last_high = cur_high;
                 last_norm = cur_norm;
+                last_bytes_crit = cur_b_crit;
+                last_bytes_high = cur_b_high;
+                last_bytes_norm = cur_b_norm;
                 last_time = now;
 
                 if (!tel.is_probing) {
