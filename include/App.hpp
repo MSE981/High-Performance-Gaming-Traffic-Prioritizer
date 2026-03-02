@@ -124,7 +124,11 @@ namespace Scalpel {
                     // ---三级调度分流逻辑 ---
                     if (prio == Net::Priority::Critical || prio == Net::Priority::High) {
                         // 游戏包/DNS：直接走零拷贝通道
-                        send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT);
+                        if (send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT) < 0) {
+                            // 捕捉网卡底层的物理丢包
+                            if (prio == Net::Priority::Critical) tel.dropped_critical.fetch_add(1, std::memory_order_relaxed);
+                            else tel.dropped_high.fetch_add(1, std::memory_order_relaxed);
+                        }
                     }
                     else {
                         // 下载包：扔进 4MB 的内存池里排队等候发落
@@ -185,8 +189,10 @@ namespace Scalpel {
                 uint64_t cur_b_crit = tel.bytes_critical.load(std::memory_order_relaxed);
                 uint64_t cur_b_high = tel.bytes_high.load(std::memory_order_relaxed);
                 uint64_t cur_b_norm = tel.bytes_normal.load(std::memory_order_relaxed);
-                uint64_t drops = tel.dropped_pkts.load(std::memory_order_relaxed);
-
+                uint64_t drops_crit = tel.dropped_critical.load(std::memory_order_relaxed);
+                uint64_t drops_high = tel.dropped_high.load(std::memory_order_relaxed);
+                uint64_t drops_norm = tel.dropped_normal.load(std::memory_order_relaxed);
+                
                 double seconds = std::chrono::duration<double>(now - last_time).count();
 
                 uint64_t pps_crit = static_cast<uint64_t>((cur_crit - last_crit) / seconds);
@@ -197,9 +203,9 @@ namespace Scalpel {
                 double mbps_high = ((cur_b_high - last_bytes_high) * 8.0 / 1e6) / seconds;
                 double mbps_norm = ((cur_b_norm - last_bytes_norm) * 8.0 / 1e6) / seconds;
 
-                // 使用 \r 覆盖当前行，实现动态刷新，全方位展示各个级别的 Mbps 和 PPS
-                std::print("\r Mbps[C:{:5.1f} H:{:5.1f} N:{:6.1f}] | PPS[C:{:<5} H:{:<5} N:{:<5}] | Drop: {:<4}  ",
-                    mbps_crit, mbps_high, mbps_norm, pps_crit, pps_high, pps_norm, drops);
+                // 使用 \r 覆盖当前行，实现动态刷新，全方位展示各个级别的 Mbps、PPS 和 Drop
+                std::print("\r Mbps[C:{:4.1f} H:{:4.1f} N:{:5.1f}] | PPS[C:{:<4} H:{:<4} N:{:<5}] | Drp[C:{} H:{} N:{:<3}]  ",
+                    mbps_crit, mbps_high, mbps_norm, pps_crit, pps_high, pps_norm, drops_crit, drops_high, drops_norm);
                 std::cout.flush();
 
                 last_pkts = cur_pkts;
