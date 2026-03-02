@@ -27,12 +27,14 @@ namespace Scalpel {
         std::atomic<bool> is_probing{ false };
 
         // 线程心跳 (用于 Watchdog)
-        // 强行隔离 Core 2 和 Core 3 的专属变量，彻底消除 CPU 伪共享卡顿
         alignas(64) std::atomic<uint64_t> last_heartbeat_core2{ 0 };
         alignas(64) std::atomic<uint64_t> last_heartbeat_core3{ 0 };
 
         // 主动丢包计数 (用于监控 AQM 效果)
-        alignas(64) std::atomic<uint64_t> dropped_pkts{ 0 };
+        // 分级丢包计数 (涵盖 AQM 主动丢弃与网卡物理丢弃)
+        alignas(64) std::atomic<uint64_t> dropped_critical{ 0 };
+        alignas(64) std::atomic<uint64_t> dropped_high{ 0 };
+        alignas(64) std::atomic<uint64_t> dropped_normal{ 0 };
         static Telemetry& instance() {
             static Telemetry inst;
             return inst;
