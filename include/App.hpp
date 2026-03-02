@@ -103,6 +103,9 @@ namespace Scalpel {
             uint64_t local_pkts_crit = 0;
             uint64_t local_pkts_high = 0;
             uint64_t local_pkts_norm = 0;
+            uint64_t local_bytes_crit = 0;
+            uint64_t local_bytes_high = 0;
+            uint64_t local_bytes_norm = 0;
 
             while (!st.stop_requested()) {
 
