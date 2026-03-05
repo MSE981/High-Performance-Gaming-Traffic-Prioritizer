@@ -1,3 +1,4 @@
+#pragma once
 #include <thread>
 #include <stop_token>
 #include <memory>
@@ -12,7 +13,8 @@
 #include "Telemetry.hpp"
 #include "ProbeManager.hpp"
 #include "Indicator.hpp"
-#include "Schedu
+#include "Scheduler.hpp"
+#include <print>
 #include <iostream>
 #include <cstdio>
 #include <cstdlib>
@@ -38,7 +40,7 @@ namespace Scalpel {
             std::println("=== GamingTrafficPrioritizer ===");
 
             // 1. 系统级锁定
-            System::lock_cpu_frequency();
+            Scalpel::System::lock_cpu_frequency();
 
             // 2. 启动监控线程
             std::jthread monitor([this](std::stop_token st) { watchdog_loop(st); });
@@ -67,7 +69,6 @@ namespace Scalpel {
                 std::println(stderr, "[Error] Could not resolve Gateway MAC. Skipping Probe C.");
             }
 
-
             // 4. 启动转发核心 (Core 2 & 3)
             std::jthread t1([this](std::stop_token st) {
                 worker(eth0, eth1, 2, Telemetry::instance().last_heartbeat_core2, st);
@@ -83,8 +84,8 @@ namespace Scalpel {
 
     private:
         void worker(std::shared_ptr<Engine::RawSocketManager> rx, std::shared_ptr<Engine::RawSocketManager> tx, int core_id, auto& heartbeat, std::stop_token st) {
-            System::set_thread_affinity(core_id);
-            System::set_realtime_priority();
+            Scalpel::System::set_thread_affinity(core_id);
+            Scalpel::System::set_realtime_priority();
 
             Logic::HeuristicProcessor processor;
             auto& tel = Telemetry::instance();
@@ -108,8 +109,6 @@ namespace Scalpel {
             uint64_t local_bytes_norm = 0;
 
             while (!st.stop_requested()) {
-
-            while (!st.stop_requested()) {
                 auto* hdr = reinterpret_cast<tpacket_hdr*>(rx->get_ring() + (idx * rx->frame_size()));
 
                 if (hdr->tp_status & TP_STATUS_USER) {
@@ -117,9 +116,9 @@ namespace Scalpel {
                     auto prio = processor.process(pkt);
 
                     // --- 记录各级别流量状态 ---
-                    if (prio == Net::Priority::Critical) local_pkts_crit++;
-                    else if (prio == Net::Priority::High) local_pkts_high++;
-                    else local_pkts_norm++;
+                    if (prio == Net::Priority::Critical) { local_pkts_crit++; local_bytes_crit += pkt.size(); }
+                    else if (prio == Net::Priority::High) { local_pkts_high++; local_bytes_high += pkt.size(); }
+                    else { local_pkts_norm++; local_bytes_norm += pkt.size(); }
 
                     // ---三级调度分流逻辑 ---
                     if (prio == Net::Priority::Critical || prio == Net::Priority::High) {
@@ -144,12 +143,19 @@ namespace Scalpel {
                         tel.pkts_critical.fetch_add(local_pkts_crit, std::memory_order_relaxed);
                         tel.pkts_high.fetch_add(local_pkts_high, std::memory_order_relaxed);
                         tel.pkts_normal.fetch_add(local_pkts_norm, std::memory_order_relaxed);
+                        tel.bytes_critical.fetch_add(local_bytes_crit, std::memory_order_relaxed);
+                        tel.bytes_high.fetch_add(local_bytes_high, std::memory_order_relaxed);
+                        tel.bytes_normal.fetch_add(local_bytes_norm, std::memory_order_relaxed);
                         heartbeat.store(time(nullptr), std::memory_order_relaxed);
+
                         local_pkts = 0;
                         local_bytes = 0;
                         local_pkts_crit = 0;
                         local_pkts_high = 0;
                         local_pkts_norm = 0;
+                        local_bytes_crit = 0;
+                        local_bytes_high = 0;
+                        local_bytes_norm = 0;
                     }
 
                     hdr->tp_status = TP_STATUS_KERNEL;
@@ -169,16 +175,20 @@ namespace Scalpel {
             // ---记录上一秒状态 ---
             uint64_t last_pkts = 0;
             uint64_t last_bytes = 0;
+            uint64_t last_bytes_crit = 0;
+            uint64_t last_bytes_high = 0;
+            uint64_t last_bytes_norm = 0;
             uint64_t last_crit = 0;
             uint64_t last_high = 0;
             uint64_t last_norm = 0;
             auto last_time = std::chrono::steady_clock::now();
 
             while (!st.stop_requested()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
                 if (tel.is_probing) {
                     led.set_yellow();
                 }
+
                 // ---计算实时速率 ---
                 auto now = std::chrono::steady_clock::now();
                 uint64_t cur_pkts = tel.pkts_forwarded.load(std::memory_order_relaxed);
@@ -192,7 +202,7 @@ namespace Scalpel {
                 uint64_t drops_crit = tel.dropped_critical.load(std::memory_order_relaxed);
                 uint64_t drops_high = tel.dropped_high.load(std::memory_order_relaxed);
                 uint64_t drops_norm = tel.dropped_normal.load(std::memory_order_relaxed);
-                
+
                 double seconds = std::chrono::duration<double>(now - last_time).count();
 
                 uint64_t pps_crit = static_cast<uint64_t>((cur_crit - last_crit) / seconds);
@@ -222,14 +232,12 @@ namespace Scalpel {
                     auto heartbeat_now = time(nullptr);
                     if (heartbeat_now - tel.last_heartbeat_core2 > 5 || heartbeat_now - tel.last_heartbeat_core3 > 5) {
                         led.set_red();
-                        // 加入 \n 防止覆盖同行正在打印的速率状态
                         std::println(stderr, "\nWatchdog: Forwarding STALLED!");
                     }
                     else {
                         led.set_green();
                     }
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
             }
         }
     };
