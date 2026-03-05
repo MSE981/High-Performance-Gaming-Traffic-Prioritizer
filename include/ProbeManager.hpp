@@ -1,8 +1,8 @@
 #include <chrono>
-#include <cstring>  // memset
+#include <cstring>
 #include <vector>
-#include <print>    // std::println
-#include <sys/socket.h> // send()
+#include <print>
+#include <sys/socket.h>
 #include "Telemetry.hpp"
 #include "Processor.hpp"
 #include <cstdint>
