@@ -123,10 +123,16 @@ namespace Scalpel {
                     // ---三级调度分流逻辑 ---
                     if (prio == Net::Priority::Critical || prio == Net::Priority::High) {
                         // 游戏包/DNS：直接走零拷贝通道
-                        if (send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT) < 0) {
-                            // 捕捉网卡底层的物理丢包
-                            if (prio == Net::Priority::Critical) tel.dropped_critical.fetch_add(1, std::memory_order_relaxed);
-                            else tel.dropped_high.fetch_add(1, std::memory_order_relaxed);
+                        int retries = 3; // 允许微秒级重试 3 次以吸收瞬间硬件拥塞
+                        while (send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT) < 0) {
+                            if (--retries == 0) {
+                                // 重试 3 次依然塞不进网卡，判定为真实物理丢包
+                                if (prio == Net::Priority::Critical) tel.dropped_critical.fetch_add(1, std::memory_order_relaxed);
+                                else tel.dropped_high.fetch_add(1, std::memory_order_relaxed);
+                                break;
+                            }
+                            // 极短暂停顿，让出一点点 CPU 周期给网卡驱动去发包清空队列
+                            __asm__ __volatile__("yield" ::: "memory");
                         }
                     }
                     else {
