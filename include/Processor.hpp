@@ -129,7 +129,6 @@ namespace Scalpel::Logic {
                     if ((dport == 443 || sport == 443) && pkt.size() < 512) {
                         return Priority::High;
                     }
-                    }
                 }
             }
 
