@@ -236,7 +236,7 @@ namespace Scalpel {
 
                 if (!tel.is_probing) {
                     auto heartbeat_now = time(nullptr);
-                    if (heartbeat_now - tel.last_heartbeat_core2 > 5 || heartbeat_now - tel.last_heartbeat_core3 > 5) {
+                    if (heartbeat_now - tel.last_heartbeat_core2 > 20 || heartbeat_now - tel.last_heartbeat_core3 > 20) {
                         led.set_red();
                         std::println(stderr, "\nWatchdog: Forwarding STALLED!");
                     }
