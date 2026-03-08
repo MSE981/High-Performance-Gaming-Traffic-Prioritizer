@@ -58,8 +58,8 @@ namespace Scalpel::Probe {
             auto& tel = Telemetry::instance();
             tel.is_probing = true;
             std::println("[Probe B] Probing ISP limits...");
-
-            uint8_t pkt[64]; std::memset(pkt, 0xEE, 64);
+            uint8_t pkt[64] = { 0 };
+            std::memset(pkt, 0xEE, 64);
             auto start = std::chrono::high_resolution_clock::now();
             uint64_t sent = 0;
             auto interval = std::chrono::nanoseconds(1000000000 / 1800000); // Target 1.8M PPS
@@ -108,13 +108,13 @@ namespace Scalpel::Probe {
             // Download: 21.50 Mbit/s
             // Upload: 5.20 Mbit/s
 
-            double download_mbps = 0.0;
-            auto pos = result.find("Download:");
+            double upload_mbps = 0.0;
+            auto pos = result.find("Upload:");
             if (pos != std::string::npos) {
                 try {
-                    // 提取 "Download: " 后面的数字部分
+                    // 提取 "upload: " 后面的数字部分
                     std::string sub = result.substr(pos + 9);
-                    download_mbps = std::stod(sub); // 自动过滤后面的 "Mbit/s" 等非数字字符
+                    upload_mbps = std::stod(sub); // 自动过滤后面的 "Mbit/s" 等非数字字符
                 }
                 catch (...) {
                     std::println(stderr, "[Error] Failed to parse speedtest output.");
@@ -122,9 +122,9 @@ namespace Scalpel::Probe {
             }
 
             // 只有当成功测出合法宽带时，才将其写入全局变量供限速器使用
-            if (download_mbps > 0.0) {
-                tel.isp_limit_mbps = download_mbps;
-                std::println("[Probe C] Speedtest Complete! Real ISP Download Limit: {:.2f} Mbps", download_mbps);
+            if (upload_mbps > 0.0) {
+                tel.isp_limit_mbps = upload_mbps;
+                std::println("[Probe C] Speedtest Complete! Real ISP upload Limit: {:.2f} Mbps", upload_mbps);
             }
             else {
                 std::println(stderr, "[Error] Speedtest failed or returned 0. Please check network connection.");
