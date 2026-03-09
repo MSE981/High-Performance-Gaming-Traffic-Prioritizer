@@ -108,13 +108,13 @@ namespace Scalpel::Probe {
             // Download: 21.50 Mbit/s
             // Upload: 5.20 Mbit/s
 
-            double upload_mbps = 0.0;
-            auto pos = result.find("Upload:");
+            double down_mbps = 0.0;
+            auto pos = result.find("Download:");
             if (pos != std::string::npos) {
                 try {
-                    // 提取 "upload: " 后面的数字部分
+                    // 提取 "Download: " 后面的数字部分
                     std::string sub = result.substr(pos + 9);
-                    upload_mbps = std::stod(sub); // 自动过滤后面的 "Mbit/s" 等非数字字符
+                    down_mbps = std::stod(sub); // 自动过滤后面的 "Mbit/s" 等非数字字符
                 }
                 catch (...) {
                     std::println(stderr, "[Error] Failed to parse speedtest output.");
@@ -122,9 +122,9 @@ namespace Scalpel::Probe {
             }
 
             // 只有当成功测出合法宽带时，才将其写入全局变量供限速器使用
-            if (upload_mbps > 0.0) {
-                tel.isp_limit_mbps = upload_mbps;
-                std::println("[Probe C] Speedtest Complete! Real ISP upload Limit: {:.2f} Mbps", upload_mbps);
+            if (down_mbps > 0.0) {
+                tel.isp_limit_mbps = down_mbps;
+                std::println("[Probe C] Speedtest Complete! Real ISP upload Limit: {:.2f} Mbps", down_mbps);
             }
             else {
                 std::println(stderr, "[Error] Speedtest failed or returned 0. Please check network connection.");
