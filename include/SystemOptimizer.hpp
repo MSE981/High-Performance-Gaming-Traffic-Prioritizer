@@ -1,10 +1,10 @@
-#pragma once
 #include <fstream>
-#include <print>   // C++23: std::println
-#include <format>  // C++23: std::format
+#include <print>
+#include <format>
 #include <string>
-#include <pthread.h> // 必须有：pthread_setaffinity_np
-#include <sched.h>   // 必须有：cpu_set_t, CPU_SET
+#include <cstdio>
+#include <pthread.h>
+#include <sched.h>
 
 namespace Scalpel::System {
     // 锁定 CPU 频率为 Performance 模式

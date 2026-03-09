@@ -1,7 +1,4 @@
-﻿# CMakeList.txt: GamingTrafficPrioritizer 的 CMake 项目，在此处包括源代码并定义
-# 项目特定的逻辑。
-#
-cmake_minimum_required(VERSION 3.20)
+﻿cmake_minimum_required(VERSION 3.20)
 project(GamingTrafficPrioritizer VERSION 3.0 LANGUAGES CXX)
 
 include_directories(include)
@@ -17,7 +14,7 @@ target_link_libraries(GamingTrafficPrioritizer PRIVATE
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_CXX_COMPILER "g++-14")
 set(CMAKE_C_COMPILER "gcc-14")
 
@@ -41,7 +38,3 @@ add_custom_command(TARGET GamingTrafficPrioritizer POST_BUILD
     COMMAND sudo /usr/sbin/setcap 'cap_net_raw,cap_net_admin,cap_sys_nice=eip' $<TARGET_FILE:GamingTrafficPrioritizer>
     COMMENT "Granting CAP_NET_RAW and Realtime permissions..."
 )
-
-
-
-# 将源代码添加到此项目的可执行文件。
