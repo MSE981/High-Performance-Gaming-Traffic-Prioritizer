@@ -47,6 +47,10 @@ namespace Scalpel::Traffic {
             }
             return false;
         }
+        // 新增：用于在网卡拥塞发送失败时，退还被提前扣除的令牌
+        void refund(uint32_t bytes) {
+            tokens = std::min(capacity, tokens + bytes);
+        }
     };
 
     // 2. 零动态分配环形缓冲区
@@ -123,8 +127,27 @@ namespace Scalpel::Traffic {
 
                 // 检查令牌是否足够发这个包
                 if (bucket.try_consume(pkt_span.size())) {
-                    send(tx_fd, pkt_span.data(), pkt_span.size(), MSG_DONTWAIT);
-                    normal_queue.pop();
+                    int retries = 3;
+                    bool sent = false;
+                    while (true) {
+                        if (send(tx_fd, pkt_span.data(), pkt_span.size(), MSG_DONTWAIT) >= 0) {
+                            sent = true;
+                            break;
+                        }
+                        if (--retries == 0) break;
+                        __asm__ __volatile__("yield" ::: "memory");
+                    }
+
+                    if (sent) {
+                        normal_queue.pop(); // 发送成功，出队销毁
+                    }
+                    else {
+                        // 必须冷酷出队销毁。真实的丢包能正确触发发送端的 TCP 拥塞控制(主动降速)。
+                        bucket.refund(pkt_span.size());
+                        normal_queue.pop();
+                        Telemetry::instance().dropped_normal.fetch_add(1, std::memory_order_relaxed);
+                        break; // 硬件正忙，退出本轮发包，让网卡喘息
+                    }
                 }
                 else {
                     break; // 令牌耗尽，退出循环让包继续排队
