@@ -8,7 +8,6 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <cstring>
-#include <sys/socket.h>
 
 namespace Scalpel::Utils {
     class Network {
@@ -16,14 +15,9 @@ namespace Scalpel::Utils {
         // 1. 自动获取指定网卡的本地 IP
         static std::string get_local_ip(const std::string& iface) {
             int fd = socket(AF_INET, SOCK_DGRAM, 0);
-            if (fd < 0) return "127.0.0.1"; // 拦截创建失败的 fd，防止后续系统调用崩溃
-
             struct ifreq ifr {};
             ifr.ifr_addr.sa_family = AF_INET;
-
-            // GNU++23 防御性编程：消除 GCC-14 的字符串截断警告，确保绝对 '\0' 结尾
             strncpy(ifr.ifr_name, iface.c_str(), IFNAMSIZ - 1);
-            ifr.ifr_name[IFNAMSIZ - 1] = '\0';
 
             if (ioctl(fd, SIOCGIFADDR, &ifr) < 0) {
                 close(fd);
@@ -44,7 +38,10 @@ namespace Scalpel::Utils {
                 ss >> iface >> dest >> gateway;
                 // Destination 00000000 代表默认路由
                 if (dest == "00000000") {
-                    unsigned int addr = std::stoul(gateway, nullptr, 16);
+                    unsigned int addr = 0;
+                    std::stringstream conv;
+                    conv << std::hex << gateway;
+                    conv >> addr;
                     struct in_addr in {};
                     in.s_addr = addr;
                     return inet_ntoa(in);

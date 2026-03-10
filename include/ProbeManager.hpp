@@ -1,10 +1,8 @@
 #include <chrono>
-#include <cstring>
+#include <cstring>  // memset
 #include <vector>
-#include <print>
-#include <array>
-#include <memory>
-#include <sys/socket.h>
+#include <print>    // std::println
+#include <sys/socket.h> // send()
 #include "Telemetry.hpp"
 #include "Processor.hpp"
 #include <cstdint>
@@ -13,7 +11,6 @@
 #include <netinet/udp.h>
 #include <net/ethernet.h>
 #include <arpa/inet.h>
-#include <string>
 
 namespace Scalpel::Probe {
     class Manager {       
@@ -58,8 +55,8 @@ namespace Scalpel::Probe {
             auto& tel = Telemetry::instance();
             tel.is_probing = true;
             std::println("[Probe B] Probing ISP limits...");
-            uint8_t pkt[64] = { 0 };
-            std::memset(pkt, 0xEE, 64);
+
+            uint8_t pkt[64]; std::memset(pkt, 0xEE, 64);
             auto start = std::chrono::high_resolution_clock::now();
             uint64_t sent = 0;
             auto interval = std::chrono::nanoseconds(1000000000 / 1800000); // Target 1.8M PPS
@@ -67,70 +64,80 @@ namespace Scalpel::Probe {
             while (std::chrono::high_resolution_clock::now() - start < std::chrono::seconds(5)) {
                 auto loop_start = std::chrono::high_resolution_clock::now();
                 send(socket_fd, pkt, 64, MSG_DONTWAIT);
-                //只有网卡物理层真正接收了该包才计数
-                if (send(socket_fd, pkt, 64, MSG_DONTWAIT) >= 0) {
-                    sent++;
-                }
+                sent++;
                 while (std::chrono::high_resolution_clock::now() - loop_start < interval) {
                      __asm__ __volatile__("yield" ::: "memory");
                 }
             }
             
             double pps = sent / 5.0;
-            tel.isp_limit_mbps = (sent * 64.0 * 8.0) / (5.0 * 1e6);
+            tel.isp_limit_mbps = (sent * 64.0 * 8.0) / (2.0 * 1e6);
             std::println("[Probe B] ISP Result: {:.2f} Mbps ({} PPS)", tel.isp_limit_mbps.load(), pps);
             tel.is_probing = false;
         }
-        // 模式 C：真实 ISP 限制探测 (调用 Ookla Speedtest 官方极简测速)
-        static void run_real_isp_probe(int /*fd*/, const std::string& /*gateway_mac*/, const std::string& /*local_ip*/, const std::string & /*target_ip*/ = "") {
+        // 式 C：真实 ISP 限制探测 (穿透公网) ---
+      /**
+       * @param gateway_mac 路由器的真实 MAC 地址
+       * @param local_ip 树莓派当前内网 IP
+       * @param target_ip 探测目标 (默认使用 阿里公共DNS 223.5.5.5)
+       */
+        static void run_real_isp_probe(int fd, const std::string& gateway_mac, const std::string& local_ip, const std::string& target_ip = "223.5.5.5") {
             auto& tel = Telemetry::instance();
             tel.is_probing = true;
-            std::println("[Probe C] Running Ookla Speedtest (speedtest-cli)... This may take 15-20 seconds.");
+            std::println("[Probe C] Starting Real-world ISP PPS Probe to {}...", target_ip);
 
-            std::array<char, 128> buffer;
-            std::string result;
+            uint8_t frame[64]; std::memset(frame, 0, 64);
 
-            // 使用 popen 调用系统的 speedtest-cli 命令，--simple 参数输出纯文本，2>/dev/null 屏蔽错误警告
-            std::unique_ptr<FILE, decltype(&pclose)> pipe(popen("speedtest-cli --simple 2>/dev/null", "r"), pclose);
-            if (!pipe) {
-                std::println(stderr, "[Error] Failed to start speedtest-cli. Please run 'sudo apt install speedtest-cli' first.");
-                tel.is_probing = false;
-                return;
-            }
+            // 1. 构造以太网头 (L2)
+            auto* eth = reinterpret_cast<struct ether_header*>(frame);
+            sscanf(gateway_mac.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                &eth->ether_dhost[0], &eth->ether_dhost[1], &eth->ether_dhost[2],
+                &eth->ether_dhost[3], &eth->ether_dhost[4], &eth->ether_dhost[5]);
+            eth->ether_type = htons(0x0800); // IPv4
 
-            // 读取命令行输出
-            while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-                result += buffer.data();
-            }
+            // 2. 构造 IP 头 (L3)
+            auto* ip = reinterpret_cast<struct iphdr*>(frame + 14);
+            ip->ihl = 5; ip->version = 4;
+            ip->tot_len = htons(64 - 14);
+            ip->ttl = 64; ip->protocol = IPPROTO_UDP;
+            ip->saddr = inet_addr(local_ip.c_str());
+            ip->daddr = inet_addr(target_ip.c_str());
+            ip->check = calculate_checksum(reinterpret_cast<uint16_t*>(ip), 10);
 
-            // Speedtest-cli --simple 的输出格式通常为：
-            // Ping: 12.34 ms
-            // Download: 21.50 Mbit/s
-            // Upload: 5.20 Mbit/s
+            // 3. 构造 UDP 头 (L4)
+            auto* udp = reinterpret_cast<struct udphdr*>(frame + 14 + 20);
+            udp->source = htons(12345);
+            udp->dest = htons(53); // 使用 DNS 端口降低拦截风险
+            udp->len = htons(64 - 14 - 20);
 
-            double down_mbps = 0.0;
-            auto pos = result.find("Download:");
-            if (pos != std::string::npos) {
-                try {
-                    // 提取 "Download: " 后面的数字部分
-                    std::string sub = result.substr(pos + 9);
-                    down_mbps = std::stod(sub); // 自动过滤后面的 "Mbit/s" 等非数字字符
+            // --- 阶梯式压测逻辑 ---
+            for (uint32_t step_pps = 100000; step_pps <= 500000; step_pps += 100000) {
+                uint64_t sent_step = 0;
+                auto interval = std::chrono::nanoseconds(1000000000 / step_pps);
+                auto step_start = std::chrono::high_resolution_clock::now();
+
+                while (std::chrono::high_resolution_clock::now() - step_start < std::chrono::seconds(1)) {
+                    auto loop_start = std::chrono::high_resolution_clock::now();
+                    if (send(fd, frame, 64, MSG_DONTWAIT) > 0) sent_step++;
+
+                    while (std::chrono::high_resolution_clock::now() - loop_start < interval) {
+                        __asm__ __volatile__("yield" ::: "memory");
+                    }
                 }
-                catch (...) {
-                    std::println(stderr, "[Error] Failed to parse speedtest output.");
-                }
+
+                double mbps = (sent_step * 64.0 * 8.0) / 1e6;
+                std::println("  - Step {:6} PPS: Actual {:10.2f} PPS | {:7.2f} Mbps", step_pps, (double)sent_step, mbps);
+                tel.isp_limit_mbps = mbps; // 更新 Telemetry 记录
             }
 
-            // 只有当成功测出合法宽带时，才将其写入全局变量供限速器使用
-            if (down_mbps > 0.0) {
-                tel.isp_limit_mbps = down_mbps;
-                std::println("[Probe C] Speedtest Complete! Real ISP upload Limit: {:.2f} Mbps", down_mbps);
-            }
-            else {
-                std::println(stderr, "[Error] Speedtest failed or returned 0. Please check network connection.");
-            }
-
+            std::println("[Probe C] ISP Probe Complete.");
             tel.is_probing = false;
         }
+
+
+
+
+
+
     };
 }

@@ -3,7 +3,7 @@ High-Performance Gaming Traffic Prioritizer
 
 Project Introduction
 
-GamingTrafficPrioritizer is a high-performance network engine designed for the Raspberry Pi 5. Developed using GNU++23 standard, this tool acts as a transparent bridge to manage and optimize home network traffic in real-time.
+GamingTrafficPrioritizer is a high-performance network engine designed for the Raspberry Pi 4B. Developed using the latest C++23 standard, this tool acts as a transparent bridge to manage and optimize home network traffic in real-time.
 The primary goal of the project is to eliminate "Bufferbloat"—the lag caused when large downloads or video streams slow down your connection. By sitting between your router and gaming devices, it analyzes every data packet and ensures that critical gaming information is always sent first. This provides a stable, low-latency experience for competitive gaming even when the network is under heavy load.
 
 
