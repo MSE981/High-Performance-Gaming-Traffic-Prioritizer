@@ -71,11 +71,13 @@ namespace Scalpel {
 
             // 4. 启动转发核心 (Core 2 & 3)
             std::jthread t1([this](std::stop_token st) {
-                worker(eth0, eth1, 2, Telemetry::instance().last_heartbeat_core2, st);
+                // eth0(WAN外网) 收到包发给 eth1(LAN内网)：这是【下载】方向 (is_download = true)
+                worker(eth0, eth1, 2, true, Telemetry::instance().last_heartbeat_core2, st);
                 });
 
             std::jthread t2([this](std::stop_token st) {
-                worker(eth1, eth0, 3, Telemetry::instance().last_heartbeat_core3, st);
+                // eth1(LAN内网) 收到包发给 eth0(WAN外网)：这是【上传】方向 (is_download = false)
+                worker(eth1, eth0, 3, false, Telemetry::instance().last_heartbeat_core3, st);
                 });
 
             // 主线程挂起
