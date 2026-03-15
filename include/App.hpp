@@ -215,8 +215,10 @@ namespace Scalpel {
 
                 // ---计算实时速率 ---
                 auto now = std::chrono::steady_clock::now();
-                uint64_t cur_pkts = tel.pkts_forwarded.load(std::memory_order_relaxed);
-                uint64_t cur_bytes = tel.bytes_forwarded.load(std::memory_order_relaxed);
+                uint64_t cur_pkts_down = tel.pkts_down.load(std::memory_order_relaxed);
+                uint64_t cur_bytes_down = tel.bytes_down.load(std::memory_order_relaxed);
+                uint64_t cur_pkts_up = tel.pkts_up.load(std::memory_order_relaxed);
+                uint64_t cur_bytes_up = tel.bytes_up.load(std::memory_order_relaxed);
                 uint64_t cur_crit = tel.pkts_critical.load(std::memory_order_relaxed);
                 uint64_t cur_high = tel.pkts_high.load(std::memory_order_relaxed);
                 uint64_t cur_norm = tel.pkts_normal.load(std::memory_order_relaxed);
