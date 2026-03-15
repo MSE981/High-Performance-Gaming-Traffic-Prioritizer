@@ -123,6 +123,16 @@ namespace Scalpel {
                 auto* hdr = reinterpret_cast<tpacket_hdr*>(rx->get_ring() + (idx * rx->frame_size()));
 
                 if (hdr->tp_status & TP_STATUS_USER) {
+                    // 致命死循环修复：拦截内核数据包反射风暴 (PACKET_OUTGOING)
+                    // 彻底防止树莓派拦截自己刚刚 send 出去的包并再次转发，终结物理网卡死锁！
+                    auto* sll = reinterpret_cast<sockaddr_ll*>(reinterpret_cast<uint8_t*>(hdr) + TPACKET_ALIGN(sizeof(tpacket_hdr)));
+                    if (sll->sll_pkttype == PACKET_OUTGOING) {
+                        hdr->tp_status = TP_STATUS_KERNEL;
+                        idx = (idx + 1) % rx->frame_nr();
+                        shaper.process_queue(tx->get_fd());
+                        continue;
+                    }
+
                     std::span pkt{ reinterpret_cast<uint8_t*>(hdr) + hdr->tp_mac, hdr->tp_len };
                     auto prio = processor.process(pkt);
 
