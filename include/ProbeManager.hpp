@@ -87,7 +87,7 @@ namespace Scalpel::Probe {
             tel.is_probing = true;
             std::println("[Probe C] Running Ookla Speedtest (speedtest-cli)... This may take 15-20 seconds.");
 
-            std::array<char, 128> buffer;
+            std::array<char, 128> buffer{};
             std::string result;
 
             // 使用 popen 调用系统的 speedtest-cli 命令，--simple 参数输出纯文本，2>/dev/null 屏蔽错误警告
