@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <span>
 
+
 namespace Scalpel {
     class App {
         std::shared_ptr<Engine::RawSocketManager> eth0, eth1;
@@ -115,6 +116,8 @@ namespace Scalpel {
             uint64_t local_bytes_crit = 0;
             uint64_t local_bytes_high = 0;
             uint64_t local_bytes_norm = 0;
+            uint64_t idle_loops = 0; // 增加独立的心跳循环计数器
+
 
             while (!st.stop_requested()) {
                 auto* hdr = reinterpret_cast<tpacket_hdr*>(rx->get_ring() + (idx * rx->frame_size()));
@@ -134,6 +137,7 @@ namespace Scalpel {
                         int retries = 3; // 允许微秒级重试 3 次以吸收瞬间硬件拥塞
                         while (send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT) < 0) {
                             if (--retries == 0) {
+
                                 // 重试 3 次依然塞不进网卡，判定为真实物理丢包
                                 if (prio == Net::Priority::Critical) tel.dropped_critical.fetch_add(1, std::memory_order_relaxed);
                                 else tel.dropped_high.fetch_add(1, std::memory_order_relaxed);
@@ -168,7 +172,7 @@ namespace Scalpel {
                         tel.bytes_critical.fetch_add(local_bytes_crit, std::memory_order_relaxed);
                         tel.bytes_high.fetch_add(local_bytes_high, std::memory_order_relaxed);
                         tel.bytes_normal.fetch_add(local_bytes_norm, std::memory_order_relaxed);
-                        heartbeat.store(time(nullptr), std::memory_order_relaxed);
+                        //heartbeat.store(time(nullptr), std::memory_order_relaxed); // 将心跳更新从发包逻辑中剥离，移至大循环底部
 
                         local_pkts = 0;
                         local_bytes = 0;
@@ -179,7 +183,6 @@ namespace Scalpel {
                         local_bytes_high = 0;
                         local_bytes_norm = 0;
                     }
-
                     hdr->tp_status = TP_STATUS_KERNEL;
                     idx = (idx + 1) % rx->frame_nr();
                 }
@@ -189,6 +192,12 @@ namespace Scalpel {
 
                 // ---不断抽空下载包队列 ---
                 shaper.process_queue(tx->get_fd());
+
+                // 纯底层空闲心跳机制。无论当前核心有没有收到数据包，
+                // 每执行 131,072 次循环（约几毫秒）都会强制更新一次心跳。彻底消灭 STALLED 误报！
+                if (++idle_loops % 131072 == 0) {
+                    heartbeat.store(time(nullptr), std::memory_order_relaxed);
+                }
             }
         }
 
@@ -261,9 +270,9 @@ namespace Scalpel {
 
                 if (!tel.is_probing) {
                     auto heartbeat_now = time(nullptr);
-                    if (heartbeat_now - tel.last_heartbeat_core2 > 20 || heartbeat_now - tel.last_heartbeat_core3 > 20) {
+                    if (heartbeat_now - tel.last_heartbeat_core2 > 100 || heartbeat_now - tel.last_heartbeat_core3 > 100) {
                         led.set_red();
-                        std::println(stderr, "\nWatchdog: Forwarding STALLED!");
+                        std::println(stderr, "\r Watchdog: Forwarding STALLED!");
                     }
                     else {
                         led.set_green();
