@@ -85,19 +85,25 @@ namespace Scalpel {
         }
 
     private:
-        void worker(std::shared_ptr<Engine::RawSocketManager> rx, std::shared_ptr<Engine::RawSocketManager> tx, int core_id, auto& heartbeat, std::stop_token st) {
+        // is_download 参数，用于让线程知道自己的转发方向
+        void worker(std::shared_ptr<Engine::RawSocketManager> rx, std::shared_ptr<Engine::RawSocketManager> tx, int core_id, bool is_download, auto& heartbeat, std::stop_token st) {
             Scalpel::System::set_thread_affinity(core_id);
             Scalpel::System::set_realtime_priority();
 
             Logic::HeuristicProcessor processor;
             auto& tel = Telemetry::instance();
 
-            // ---初始化整形器 ---
-            double current_isp_limit = tel.isp_limit_mbps.load();
-            if (current_isp_limit < 10.0) current_isp_limit = 500.0; // 默认值
+            // ---分离初始化上下行整形器 ---
+            // 根据自己的工作方向，加载对应的真实网速上限
+            double limit_mbps = is_download ? tel.isp_down_limit_mbps.load() : tel.isp_up_limit_mbps.load();
 
-            // 把普通流量的上限锁死在物理带宽的 80%
-            Traffic::Shaper shaper(current_isp_limit * 0.80);
+            // 如果没测出网速，给予保守默认值 (下载 500M，上传 50M)
+            if (limit_mbps < 1.0) {
+                limit_mbps = is_download ? 500.0 : 50.0;
+            }
+
+            // 把普通流量的上限锁死在当前方向物理带宽的 80%
+            Traffic::Shaper shaper(limit_mbps * 0.80);
 
             uint32_t idx = 0;
             // 用于减少跨核内存同步开销的局部变量
