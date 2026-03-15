@@ -149,23 +149,33 @@ namespace Scalpel {
 
                     // ---三级调度分流逻辑 ---
                     if (prio == Net::Priority::Critical || prio == Net::Priority::High) {
-                        // 游戏包/DNS：直接走零拷贝通道
-                        int retries = 3; // 允许微秒级重试 3 次以吸收瞬间硬件拥塞
-                        while (send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT) < 0) {
-
-                            // 其他所有错误 (如 EPERM, ENETDOWN 等) 统统视为死包直接抛弃！
-                            if (errno != ENOBUFS && errno != EAGAIN) {
-                                break;
+                        int retries = 3;
+                        while (true) {
+                            if (send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) {
+                                break; // 发送成功
                             }
 
+                            int err = errno;
+                            if (err == EMSGSIZE || err == EINVAL) {
+                                // 【诊断探针 4：极速通道畸形包】
+                                static time_t last_log = 0; time_t now = time(nullptr);
+                                if (now != last_log) { std::println(stderr, "\n[Diag] C/H Drop: EMSGSIZE. Size={}", pkt.size()); last_log = now; }
+                                break;
+                            }
+                            if (err != ENOBUFS && err != EAGAIN) {
+                                // 【诊断探针 5：极速通道未知异常】
+                                static time_t last_log = 0; time_t now = time(nullptr);
+                                if (now != last_log) { std::println(stderr, "\n[Diag] C/H Drop: Unknown errno={} ({})", err, strerror(err)); last_log = now; }
+                                break;
+                            }
                             if (--retries == 0) {
-
-                                // 重试 3 次依然塞不进网卡，判定为真实物理丢包
                                 if (prio == Net::Priority::Critical) tel.dropped_critical.fetch_add(1, std::memory_order_relaxed);
                                 else tel.dropped_high.fetch_add(1, std::memory_order_relaxed);
+                                // 【诊断探针 6：硬件网卡真正爆满】
+                                static time_t last_log = 0; time_t now = time(nullptr);
+                                if (now != last_log) { std::println(stderr, "\n[Diag] C/H Drop: ENOBUFS (Hardware Card Full!)"); last_log = now; }
                                 break;
                             }
-                            // 极短暂停顿，让出一点点 CPU 周期给网卡驱动去发包清空队列
                             __asm__ __volatile__("yield" ::: "memory");
                         }
                     }
