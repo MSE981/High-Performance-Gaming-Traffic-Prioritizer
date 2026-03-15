@@ -152,8 +152,16 @@ namespace Scalpel {
                     local_pkts++;
                     local_bytes += pkt.size();
                     if (local_pkts % 32 == 0) {
-                        tel.pkts_forwarded.fetch_add(local_pkts, std::memory_order_relaxed);
-                        tel.bytes_forwarded.fetch_add(local_bytes, std::memory_order_relaxed);
+                        // 根据当前线程的转发方向，分别统计下载与上传总流量
+                        if (is_download) {
+                            tel.pkts_down.fetch_add(local_pkts, std::memory_order_relaxed);
+                            tel.bytes_down.fetch_add(local_bytes, std::memory_order_relaxed);
+                        }
+                        else {
+                            tel.pkts_up.fetch_add(local_pkts, std::memory_order_relaxed);
+                            tel.bytes_up.fetch_add(local_bytes, std::memory_order_relaxed);
+                        }
+
                         tel.pkts_critical.fetch_add(local_pkts_crit, std::memory_order_relaxed);
                         tel.pkts_high.fetch_add(local_pkts_high, std::memory_order_relaxed);
                         tel.pkts_normal.fetch_add(local_pkts_norm, std::memory_order_relaxed);
