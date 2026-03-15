@@ -146,6 +146,12 @@ namespace Scalpel {
                         // 游戏包/DNS：直接走零拷贝通道
                         int retries = 3; // 允许微秒级重试 3 次以吸收瞬间硬件拥塞
                         while (send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT) < 0) {
+
+                            // 其他所有错误 (如 EPERM, ENETDOWN 等) 统统视为死包直接抛弃！
+                            if (errno != ENOBUFS && errno != EAGAIN) {
+                                break;
+                            }
+
                             if (--retries == 0) {
 
                                 // 重试 3 次依然塞不进网卡，判定为真实物理丢包
