@@ -140,8 +140,8 @@ namespace Scalpel::Traffic {
                             break;
                         }
 
-                        // 智能区分：这是永久发不出去的畸形包，还是网卡真的满载了？
-                        if (errno == EMSGSIZE || errno == EINVAL) {
+                        // 只要不是网卡满载 (ENOBUFS/EAGAIN)，其他所有错误统统视为死包，斩断死锁！
+                        if (errno != ENOBUFS && errno != EAGAIN) {
                             fatal_error = true;
                             break;
                         }
