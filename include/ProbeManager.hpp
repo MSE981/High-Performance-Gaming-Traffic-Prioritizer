@@ -108,29 +108,37 @@ namespace Scalpel::Probe {
             // Download: 21.50 Mbit/s
             // Upload: 5.20 Mbit/s
 
-            double down_mbps = 0.0;
-            auto pos = result.find("Download:");
-            if (pos != std::string::npos) {
+            double download_mbps = 0.0;
+            double upload_mbps = 0.0;
+
+            auto pos_down = result.find("Download:");
+            if (pos_down != std::string::npos) {
                 try {
-                    // 提取 "Download: " 后面的数字部分
-                    std::string sub = result.substr(pos + 9);
-                    down_mbps = std::stod(sub); // 自动过滤后面的 "Mbit/s" 等非数字字符
+                    std::string sub = result.substr(pos_down + 9);
+                    download_mbps = std::stod(sub);
                 }
-                catch (...) {
-                    std::println(stderr, "[Error] Failed to parse speedtest output.");
-                }
+                catch (...) {}
             }
 
-            // 只有当成功测出合法宽带时，才将其写入全局变量供限速器使用
-            if (down_mbps > 0.0) {
-                tel.isp_limit_mbps = down_mbps;
-                std::println("[Probe C] Speedtest Complete! Real ISP upload Limit: {:.2f} Mbps", down_mbps);
+            auto pos_up = result.find("Upload:");
+            if (pos_up != std::string::npos) {
+                try {
+                    std::string sub = result.substr(pos_up + 8);
+                    upload_mbps = std::stod(sub);
+                }
+                catch (...) {}
+            }
+
+            // 成功测出上下行宽带时，分别写入全局变量供限速器分离使用
+            if (download_mbps > 0.0 && upload_mbps > 0.0) {
+                tel.isp_down_limit_mbps = download_mbps;
+                tel.isp_up_limit_mbps = upload_mbps;
+                std::println("[Probe C] Speedtest Complete! Down: {:.2f} Mbps | Up: {:.2f} Mbps", download_mbps, upload_mbps);
             }
             else {
                 std::println(stderr, "[Error] Speedtest failed or returned 0. Please check network connection.");
             }
-
-            tel.is_probing = false;
+            tel.is_probing =    false;
         }
     };
 }
