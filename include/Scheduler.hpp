@@ -115,20 +115,29 @@ namespace Scalpel::Traffic {
     public:
         explicit Shaper(double limit_mbps) : bucket(limit_mbps) {}
 
-        // 将普通包送入缓存排队
         void enqueue_normal(std::span<const uint8_t> pkt) {
             if (!normal_queue.push(pkt)) {
-                // 如果 push 失败（队列已满 8192 或超大包），记录一次真实的主动拥塞丢包 (AQM)
                 Telemetry::instance().dropped_normal.fetch_add(1, std::memory_order_relaxed);
+
+                // 【诊断探针 1：队列满还是包太大？】(每秒最多打印1次防刷屏)
+                static time_t last_log = 0;
+                time_t now = time(nullptr);
+                if (now != last_log) {
+                    if (pkt.size() > 2048) {
+                        std::println(stderr, "\n[Diag] Drop N: Packet too large ({} bytes). GRO is NOT turned off properly!", pkt.size());
+                    }
+                    else {
+                        std::println(stderr, "\n[Diag] Drop N: 8192 Queue is FULL! Shaper is throttling/blocking.");
+                    }
+                    last_log = now;
+                }
             }
         }
 
-        // 抽空队列：由 worker 线程在每一轮循环中调用
         void process_queue(int tx_fd) {
             while (!normal_queue.empty()) {
                 auto pkt_span = normal_queue.front();
 
-                // 检查令牌是否足够发这个包
                 if (bucket.try_consume(pkt_span.size())) {
                     int retries = 3;
                     bool sent = false;
@@ -140,9 +149,27 @@ namespace Scalpel::Traffic {
                             break;
                         }
 
-                        // 只要不是网卡满载 (ENOBUFS/EAGAIN)，其他所有错误统统视为死包，斩断死锁！
-                        if (errno != ENOBUFS && errno != EAGAIN) {
+                        int err = errno; // 捕获瞬间的系统错误码
+                        if (err == EMSGSIZE || err == EINVAL) {
                             fatal_error = true;
+                            // 【诊断探针 2：发现致命畸形包】
+                            static time_t last_log = 0; time_t now = time(nullptr);
+                            if (now != last_log) {
+                                std::println(stderr, "\n[Diag] Fatal N: EMSGSIZE/EINVAL. Packet size: {}", pkt_span.size());
+                                last_log = now;
+                            }
+                            break;
+                        }
+
+                        // 拦截所有未知的错误，统统视为死包防止死锁！
+                        if (err != ENOBUFS && err != EAGAIN) {
+                            fatal_error = true;
+                            // 【诊断探针 3：抓捕未知异常死锁】
+                            static time_t last_log = 0; time_t now = time(nullptr);
+                            if (now != last_log) {
+                                std::println(stderr, "\n[Diag] Unknown Send Error N: errno={} ({})", err, strerror(err));
+                                last_log = now;
+                            }
                             break;
                         }
 
@@ -151,23 +178,19 @@ namespace Scalpel::Traffic {
                     }
 
                     if (sent) {
-                        normal_queue.pop(); // 发送成功，出队销毁
+                        normal_queue.pop();
                     }
                     else if (fatal_error) {
-                        // 致命畸形死包：永远发不出去。必须冷酷销毁，否则会导致队列永久死锁！
                         bucket.refund(pkt_span.size());
-                        normal_queue.pop(); // 斩断队头死锁
+                        normal_queue.pop();
                     }
                     else {
-                        // 网卡是真的满载了 (ENOBUFS/EAGAIN)
-                        // 绝对不能 pop()！把合法包留在队首，依靠 8192 容量的队列来缓冲！
-                        // 真正的拥塞丢包(AQM)只让它发生在 enqueue_normal 队列塞满时。
                         bucket.refund(pkt_span.size());
-                        break; // 退出本轮发包，让网卡喘息
+                        break;
                     }
                 }
                 else {
-                    break; // 令牌耗尽，退出循环让包继续排队
+                    break;
                 }
             }
         }
