@@ -5,6 +5,7 @@
 #include <cstring>
 #include <algorithm>
 #include <sys/socket.h>
+#include <cerrno> // 必须引入：用于智能区分“硬件忙碌”与“致命废包”
 #include "Headers.hpp"
 #include "Telemetry.hpp"
 
@@ -12,18 +13,18 @@ namespace Scalpel::Traffic {
 
     // 1. 令牌桶算法：精确控制普通流量的最高带宽
     class TokenBucket {
-        uint64_t tokens;
-        uint64_t capacity;
-        uint64_t rate_bytes_per_sec;
+        double tokens; // 使用 double 防止高频微秒级循环下小数部分的带宽被截断丢失
+        double capacity;
+        double rate_bytes_per_sec;
         std::chrono::time_point<std::chrono::steady_clock> last_refill;
 
     public:
         explicit TokenBucket(double limit_mbps) {
             // 将 Mbps 转换为 每秒字节数
-            rate_bytes_per_sec = static_cast<uint64_t>((limit_mbps * 1e6) / 8.0);
+            rate_bytes_per_sec = (limit_mbps * 1e6) / 8.0;
 
-            // 桶容量设定：允许的最大突发量（约 20ms 的数据量，且至少容纳 10 个满载 MTU）
-            capacity = std::max<uint64_t>(15000ULL, static_cast<uint64_t>(rate_bytes_per_sec * 0.02));
+            // 桶容量设定：允许的最大突发量放宽至 100ms，完美适配现代网页与下载的突发特性
+            capacity = std::max<double>(15000.0, rate_bytes_per_sec * 0.1);
             tokens = capacity;
             last_refill = std::chrono::steady_clock::now();
         }
@@ -31,7 +32,7 @@ namespace Scalpel::Traffic {
         void refill() {
             auto now = std::chrono::steady_clock::now();
             std::chrono::duration<double> dt = now - last_refill;
-            uint64_t new_tokens = static_cast<uint64_t>(dt.count() * rate_bytes_per_sec);
+            double new_tokens = dt.count() * rate_bytes_per_sec;
 
             if (new_tokens > 0) {
                 tokens = std::min(capacity, tokens + new_tokens);
@@ -47,30 +48,32 @@ namespace Scalpel::Traffic {
             }
             return false;
         }
-        // 新增：用于在网卡拥塞发送失败时，退还被提前扣除的令牌
+
+        // 用于在网卡拥塞或遇到死包发送失败时，退还被提前扣除的令牌
         void refund(uint32_t bytes) {
-            tokens = std::min(capacity, tokens + bytes);
+            tokens = std::min(capacity, tokens + static_cast<double>(bytes));
         }
     };
 
-    // 2. 零动态分配环形缓冲区
+    // 2. 零动态分配环形缓冲区 (大容量对齐版)
     class ZeroAllocRingBuffer {
-        // 强制编译器将每个槽位对齐到 4KB。
+        // 核心黑科技：alignas(4096) 
+        // 强制编译器将每个槽位对齐到 4KB (树莓派系统页大小)。
         // 彻底消除 TLB Miss，大幅提升 CPU 寻址效率。
         struct alignas(4096) PacketSlot {
             uint16_t size = 0;
-            uint8_t payload[2048]; // 足够装下标准的 1514 字节 MTU
+            uint8_t payload[2048]; // 修复：必须声明足够装下标准 1514 字节 MTU 的定长数组，防止内存越界
         };
 
-        // 运行时永不扩容，启动时一次性在堆上划拨 4MB 连续内存
+        // 运行时永不扩容，启动时一次性在堆上划拨连续内存
         std::vector<PacketSlot> pool;
         size_t head = 0;
         size_t tail = 0;
         size_t count = 0;
-        const size_t capacity_limit = 1024;
+        const size_t capacity_limit = 8192; // 修复：扩大 8 倍容量，彻底接住 Steam 等工具的突发流量
 
     public:
-        ZeroAllocRingBuffer() : pool(1024) {}
+        ZeroAllocRingBuffer() : pool(8192) {}
 
         bool push(std::span<const uint8_t> pkt) {
             // AQM 机制：队列满时实施 Tail Drop，主动丢弃下载包触发 TCP 降速
@@ -78,7 +81,7 @@ namespace Scalpel::Traffic {
                 return false;
             }
 
-            auto& slot = pool[tail];
+            auto& slot = pool[tail]; // 修复：补齐缺失的尾部索引
             slot.size = static_cast<uint16_t>(pkt.size());
             // 极速内存拷贝
             std::memcpy(slot.payload, pkt.data(), pkt.size());
@@ -90,7 +93,7 @@ namespace Scalpel::Traffic {
 
         std::span<const uint8_t> front() const {
             if (count == 0) return {};
-            const auto& slot = pool[head];
+            const auto& slot = pool[head]; // 修复：补齐缺失的头部索引
             return { slot.payload, slot.size };
         }
 
@@ -112,45 +115,82 @@ namespace Scalpel::Traffic {
     public:
         explicit Shaper(double limit_mbps) : bucket(limit_mbps) {}
 
-        // 将普通包送入缓存排队
         void enqueue_normal(std::span<const uint8_t> pkt) {
             if (!normal_queue.push(pkt)) {
-                // 如果 push 失败（队列已满），记录一次主动丢包
                 Telemetry::instance().dropped_normal.fetch_add(1, std::memory_order_relaxed);
+
+                // 【诊断探针 1：队列满还是包太大？】(每秒最多打印1次防刷屏)
+                static time_t last_log = 0;
+                time_t now = time(nullptr);
+                if (now != last_log) {
+                    if (pkt.size() > 2048) {
+                        std::println(stderr, "\n[Diag] Drop N: Packet too large ({} bytes). GRO is NOT turned off properly!", pkt.size());
+                    }
+                    else {
+                        std::println(stderr, "\n[Diag] Drop N: 8192 Queue is FULL! Shaper is throttling/blocking.");
+                    }
+                    last_log = now;
+                }
             }
         }
 
-        // 抽空队列：由 worker 线程在每一轮循环中调用
         void process_queue(int tx_fd) {
             while (!normal_queue.empty()) {
                 auto pkt_span = normal_queue.front();
 
-                // 检查令牌是否足够发这个包
                 if (bucket.try_consume(pkt_span.size())) {
                     int retries = 3;
                     bool sent = false;
+                    bool fatal_error = false;
+
                     while (true) {
                         if (send(tx_fd, pkt_span.data(), pkt_span.size(), MSG_DONTWAIT) >= 0) {
                             sent = true;
                             break;
                         }
+
+                        int err = errno; // 捕获瞬间的系统错误码
+                        if (err == EMSGSIZE || err == EINVAL) {
+                            fatal_error = true;
+                            // 【诊断探针 2：发现致命畸形包】
+                            static time_t last_log = 0; time_t now = time(nullptr);
+                            if (now != last_log) {
+                                std::println(stderr, "\n[Diag] Fatal N: EMSGSIZE/EINVAL. Packet size: {}", pkt_span.size());
+                                last_log = now;
+                            }
+                            break;
+                        }
+
+                        // 拦截所有未知的错误，统统视为死包防止死锁！
+                        if (err != ENOBUFS && err != EAGAIN) {
+                            fatal_error = true;
+                            // 【诊断探针 3：抓捕未知异常死锁】
+                            static time_t last_log = 0; time_t now = time(nullptr);
+                            if (now != last_log) {
+                                std::println(stderr, "\n[Diag] Unknown Send Error N: errno={} ({})", err, strerror(err));
+                                last_log = now;
+                            }
+                            break;
+                        }
+
                         if (--retries == 0) break;
                         __asm__ __volatile__("yield" ::: "memory");
                     }
 
                     if (sent) {
-                        normal_queue.pop(); // 发送成功，出队销毁
+                        normal_queue.pop();
                     }
-                    else {
-                        // 必须冷酷出队销毁。真实的丢包能正确触发发送端的 TCP 拥塞控制(主动降速)。
+                    else if (fatal_error) {
                         bucket.refund(pkt_span.size());
                         normal_queue.pop();
-                        Telemetry::instance().dropped_normal.fetch_add(1, std::memory_order_relaxed);
-                        break; // 硬件正忙，退出本轮发包，让网卡喘息
+                    }
+                    else {
+                        bucket.refund(pkt_span.size());
+                        break;
                     }
                 }
                 else {
-                    break; // 令牌耗尽，退出循环让包继续排队
+                    break;
                 }
             }
         }
