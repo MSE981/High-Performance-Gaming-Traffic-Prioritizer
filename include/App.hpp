@@ -28,6 +28,12 @@ namespace Scalpel {
 
     public:
         std::expected<void, std::string> init() {
+            // 强制关闭网卡硬件/软件层面的包合并(GRO/TSO)，防止出现巨型死包和上万次丢包
+            std::string cmd0 = "ethtool -K " + std::string(Config::IFACE_WAN) + " gro off gso off tso off 2>/dev/null";
+            std::string cmd1 = "ethtool -K " + std::string(Config::IFACE_LAN) + " gro off gso off tso off 2>/dev/null";
+            system(cmd0.c_str());
+            system(cmd1.c_str());
+
             eth0 = std::make_shared<Engine::RawSocketManager>(Config::IFACE_WAN);
             eth1 = std::make_shared<Engine::RawSocketManager>(Config::IFACE_LAN);
 
