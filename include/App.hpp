@@ -195,8 +195,10 @@ namespace Scalpel {
         void watchdog_loop(std::stop_token st) {
             auto& tel = Telemetry::instance();
             // ---¼ÇÂ¼ÉÏÒ»Ãë×´Ì¬ ---
-            uint64_t last_pkts = 0;
-            uint64_t last_bytes = 0;
+            uint64_t last_pkts_down = 0;
+            uint64_t last_bytes_down = 0;
+            uint64_t last_pkts_up = 0;
+            uint64_t last_bytes_up = 0;
             uint64_t last_bytes_crit = 0;
             uint64_t last_bytes_high = 0;
             uint64_t last_bytes_norm = 0;
