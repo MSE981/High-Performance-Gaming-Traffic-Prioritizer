@@ -22,6 +22,8 @@ namespace Scalpel {
         // Õï¶ÏÊı¾İ
         std::atomic<double> internal_limit_mbps{ 0.0 };
         std::atomic<double> isp_limit_mbps{ 0.0 };
+        std::atomic<double> isp_down_limit_mbps{ 0.0 };
+        std::atomic<double> isp_up_limit_mbps{ 0.0 };
         std::atomic<double> internal_pps{ 0.0 };
         std::atomic<double> isp_pps{ 0.0 };
         std::atomic<bool> is_probing{ false };
