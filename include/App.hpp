@@ -239,13 +239,18 @@ namespace Scalpel {
                 double mbps_high = ((cur_b_high - last_bytes_high) * 8.0 / 1e6) / seconds;
                 double mbps_norm = ((cur_b_norm - last_bytes_norm) * 8.0 / 1e6) / seconds;
 
-                // 使用 \r 覆盖当前行，实现动态刷新，全方位展示各个级别的 Mbps、PPS 和 Drop
-                std::print("\r Mbps[C:{:4.1f} H:{:4.1f} N:{:5.1f}] | PPS[C:{:<4} H:{:<4} N:{:<5}] | Drp[C:{} H:{} N:{:<3}]  ",
-                    mbps_crit, mbps_high, mbps_norm, pps_crit, pps_high, pps_norm, drops_crit, drops_high, drops_norm);
+                double mbps_down = ((cur_bytes_down - last_bytes_down) * 8.0 / 1e6) / seconds;
+                double mbps_up = ((cur_bytes_up - last_bytes_up) * 8.0 / 1e6) / seconds;
+
+                // 使用 \r 覆盖当前行，直观展示下载(DL)与上传(UL)网速，同时保留各优先级的调度与丢包监控
+                std::print("\r Mbps[DL:{:5.1f} UL:{:5.1f}] | PPS[C:{:<4} H:{:<4} N:{:<5}] | Drp[C:{} H:{} N:{:<3}]  ",
+                    mbps_down, mbps_up, pps_crit, pps_high, pps_norm, drops_crit, drops_high, drops_norm);
                 std::cout.flush();
 
-                last_pkts = cur_pkts;
-                last_bytes = cur_bytes;
+                last_pkts_down = cur_pkts_down;
+                last_bytes_down = cur_bytes_down;
+                last_pkts_up = cur_pkts_up;
+                last_bytes_up = cur_bytes_up;
                 last_crit = cur_crit;
                 last_high = cur_high;
                 last_norm = cur_norm;
