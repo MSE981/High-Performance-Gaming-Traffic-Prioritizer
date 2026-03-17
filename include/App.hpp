@@ -1,4 +1,3 @@
-#pragma once
 #include <thread>
 #include <stop_token>
 #include <memory>
@@ -13,13 +12,11 @@
 #include "Telemetry.hpp"
 #include "ProbeManager.hpp"
 #include "Indicator.hpp"
-#include "Scheduler.hpp"
-#include <print>
+#include "Schedu
 #include <iostream>
 #include <cstdio>
 #include <cstdlib>
 #include <span>
-
 
 namespace Scalpel {
     class App {
@@ -28,12 +25,6 @@ namespace Scalpel {
 
     public:
         std::expected<void, std::string> init() {
-            // 强制关闭网卡硬件/软件层面的包合并(GRO/TSO)，防止出现巨型死包和上万次丢包
-            std::string cmd0 = "ethtool -K " + std::string(Config::IFACE_WAN) + " gro off gso off tso off 2>/dev/null";
-            std::string cmd1 = "ethtool -K " + std::string(Config::IFACE_LAN) + " gro off gso off tso off 2>/dev/null";
-            system(cmd0.c_str());
-            system(cmd1.c_str());
-
             eth0 = std::make_shared<Engine::RawSocketManager>(Config::IFACE_WAN);
             eth1 = std::make_shared<Engine::RawSocketManager>(Config::IFACE_LAN);
 
@@ -47,7 +38,7 @@ namespace Scalpel {
             std::println("=== GamingTrafficPrioritizer ===");
 
             // 1. 系统级锁定
-            Scalpel::System::lock_cpu_frequency();
+            System::lock_cpu_frequency();
 
             // 2. 启动监控线程
             std::jthread monitor([this](std::stop_token st) { watchdog_loop(st); });
@@ -76,15 +67,14 @@ namespace Scalpel {
                 std::println(stderr, "[Error] Could not resolve Gateway MAC. Skipping Probe C.");
             }
 
+
             // 4. 启动转发核心 (Core 2 & 3)
             std::jthread t1([this](std::stop_token st) {
-                // eth0(WAN外网) 收到包发给 eth1(LAN内网)：这是【下载】方向 (is_download = true)
-                worker(eth0, eth1, 2, true, Telemetry::instance().last_heartbeat_core2, st);
+                worker(eth0, eth1, 2, Telemetry::instance().last_heartbeat_core2, st);
                 });
 
             std::jthread t2([this](std::stop_token st) {
-                // eth1(LAN内网) 收到包发给 eth0(WAN外网)：这是【上传】方向 (is_download = false)
-                worker(eth1, eth0, 3, false, Telemetry::instance().last_heartbeat_core3, st);
+                worker(eth1, eth0, 3, Telemetry::instance().last_heartbeat_core3, st);
                 });
 
             // 主线程挂起
@@ -92,25 +82,19 @@ namespace Scalpel {
         }
 
     private:
-        // is_download 参数，用于让线程知道自己的转发方向
-        void worker(std::shared_ptr<Engine::RawSocketManager> rx, std::shared_ptr<Engine::RawSocketManager> tx, int core_id, bool is_download, auto& heartbeat, std::stop_token st) {
-            Scalpel::System::set_thread_affinity(core_id);
-            Scalpel::System::set_realtime_priority();
+        void worker(std::shared_ptr<Engine::RawSocketManager> rx, std::shared_ptr<Engine::RawSocketManager> tx, int core_id, auto& heartbeat, std::stop_token st) {
+            System::set_thread_affinity(core_id);
+            System::set_realtime_priority();
 
             Logic::HeuristicProcessor processor;
             auto& tel = Telemetry::instance();
 
-            // ---分离初始化上下行整形器 ---
-            // 根据自己的工作方向，加载对应的真实网速上限
-            double limit_mbps = is_download ? tel.isp_down_limit_mbps.load() : tel.isp_up_limit_mbps.load();
+            // ---初始化整形器 ---
+            double current_isp_limit = tel.isp_limit_mbps.load();
+            if (current_isp_limit < 10.0) current_isp_limit = 500.0; // 默认值
 
-            // 如果没测出网速，给予保守默认值 (下载 500M，上传 50M)
-            if (limit_mbps < 1.0) {
-                limit_mbps = is_download ? 500.0 : 50.0;
-            }
-
-            // 把普通流量的上限锁死在当前方向物理带宽的 80%
-            Traffic::Shaper shaper(limit_mbps * 0.80);
+            // 把普通流量的上限锁死在物理带宽的 80%
+            Traffic::Shaper shaper(current_isp_limit * 0.80);
 
             uint32_t idx = 0;
             // 用于减少跨核内存同步开销的局部变量
@@ -122,61 +106,28 @@ namespace Scalpel {
             uint64_t local_bytes_crit = 0;
             uint64_t local_bytes_high = 0;
             uint64_t local_bytes_norm = 0;
-            uint64_t idle_loops = 0; // 增加独立的心跳循环计数器
 
+            while (!st.stop_requested()) {
 
             while (!st.stop_requested()) {
                 auto* hdr = reinterpret_cast<tpacket_hdr*>(rx->get_ring() + (idx * rx->frame_size()));
 
                 if (hdr->tp_status & TP_STATUS_USER) {
-                    // 致命死循环修复：拦截内核数据包反射风暴 (PACKET_OUTGOING)
-                    // 彻底防止树莓派拦截自己刚刚 send 出去的包并再次转发，终结物理网卡死锁！
-                    auto* sll = reinterpret_cast<sockaddr_ll*>(reinterpret_cast<uint8_t*>(hdr) + TPACKET_ALIGN(sizeof(tpacket_hdr)));
-                    if (sll->sll_pkttype == PACKET_OUTGOING) {
-                        hdr->tp_status = TP_STATUS_KERNEL;
-                        idx = (idx + 1) % rx->frame_nr();
-                        shaper.process_queue(tx->get_fd());
-                        continue;
-                    }
-
                     std::span pkt{ reinterpret_cast<uint8_t*>(hdr) + hdr->tp_mac, hdr->tp_len };
                     auto prio = processor.process(pkt);
 
                     // --- 记录各级别流量状态 ---
-                    if (prio == Net::Priority::Critical) { local_pkts_crit++; local_bytes_crit += pkt.size(); }
-                    else if (prio == Net::Priority::High) { local_pkts_high++; local_bytes_high += pkt.size(); }
-                    else { local_pkts_norm++; local_bytes_norm += pkt.size(); }
+                    if (prio == Net::Priority::Critical) local_pkts_crit++;
+                    else if (prio == Net::Priority::High) local_pkts_high++;
+                    else local_pkts_norm++;
 
                     // ---三级调度分流逻辑 ---
                     if (prio == Net::Priority::Critical || prio == Net::Priority::High) {
-                        int retries = 3;
-                        while (true) {
-                            if (send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) {
-                                break; // 发送成功
-                            }
-
-                            int err = errno;
-                            if (err == EMSGSIZE || err == EINVAL) {
-                                // 【诊断探针 4：极速通道畸形包】
-                                static time_t last_log = 0; time_t now = time(nullptr);
-                                if (now != last_log) { std::println(stderr, "\n[Diag] C/H Drop: EMSGSIZE. Size={}", pkt.size()); last_log = now; }
-                                break;
-                            }
-                            if (err != ENOBUFS && err != EAGAIN) {
-                                // 【诊断探针 5：极速通道未知异常】
-                                static time_t last_log = 0; time_t now = time(nullptr);
-                                if (now != last_log) { std::println(stderr, "\n[Diag] C/H Drop: Unknown errno={} ({})", err, strerror(err)); last_log = now; }
-                                break;
-                            }
-                            if (--retries == 0) {
-                                if (prio == Net::Priority::Critical) tel.dropped_critical.fetch_add(1, std::memory_order_relaxed);
-                                else tel.dropped_high.fetch_add(1, std::memory_order_relaxed);
-                                // 【诊断探针 6：硬件网卡真正爆满】
-                                static time_t last_log = 0; time_t now = time(nullptr);
-                                if (now != last_log) { std::println(stderr, "\n[Diag] C/H Drop: ENOBUFS (Hardware Card Full!)"); last_log = now; }
-                                break;
-                            }
-                            __asm__ __volatile__("yield" ::: "memory");
+                        // 游戏包/DNS：直接走零拷贝通道
+                        if (send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT) < 0) {
+                            // 捕捉网卡底层的物理丢包
+                            if (prio == Net::Priority::Critical) tel.dropped_critical.fetch_add(1, std::memory_order_relaxed);
+                            else tel.dropped_high.fetch_add(1, std::memory_order_relaxed);
                         }
                     }
                     else {
@@ -188,33 +139,19 @@ namespace Scalpel {
                     local_pkts++;
                     local_bytes += pkt.size();
                     if (local_pkts % 32 == 0) {
-                        // 根据当前线程的转发方向，分别统计下载与上传总流量
-                        if (is_download) {
-                            tel.pkts_down.fetch_add(local_pkts, std::memory_order_relaxed);
-                            tel.bytes_down.fetch_add(local_bytes, std::memory_order_relaxed);
-                        }
-                        else {
-                            tel.pkts_up.fetch_add(local_pkts, std::memory_order_relaxed);
-                            tel.bytes_up.fetch_add(local_bytes, std::memory_order_relaxed);
-                        }
-
+                        tel.pkts_forwarded.fetch_add(local_pkts, std::memory_order_relaxed);
+                        tel.bytes_forwarded.fetch_add(local_bytes, std::memory_order_relaxed);
                         tel.pkts_critical.fetch_add(local_pkts_crit, std::memory_order_relaxed);
                         tel.pkts_high.fetch_add(local_pkts_high, std::memory_order_relaxed);
                         tel.pkts_normal.fetch_add(local_pkts_norm, std::memory_order_relaxed);
-                        tel.bytes_critical.fetch_add(local_bytes_crit, std::memory_order_relaxed);
-                        tel.bytes_high.fetch_add(local_bytes_high, std::memory_order_relaxed);
-                        tel.bytes_normal.fetch_add(local_bytes_norm, std::memory_order_relaxed);
-                        //heartbeat.store(time(nullptr), std::memory_order_relaxed); // 将心跳更新从发包逻辑中剥离，移至大循环底部
-
+                        heartbeat.store(time(nullptr), std::memory_order_relaxed);
                         local_pkts = 0;
                         local_bytes = 0;
                         local_pkts_crit = 0;
                         local_pkts_high = 0;
                         local_pkts_norm = 0;
-                        local_bytes_crit = 0;
-                        local_bytes_high = 0;
-                        local_bytes_norm = 0;
                     }
+
                     hdr->tp_status = TP_STATUS_KERNEL;
                     idx = (idx + 1) % rx->frame_nr();
                 }
@@ -224,42 +161,28 @@ namespace Scalpel {
 
                 // ---不断抽空下载包队列 ---
                 shaper.process_queue(tx->get_fd());
-
-                // 纯底层空闲心跳机制。无论当前核心有没有收到数据包，
-                // 每执行 131,072 次循环（约几毫秒）都会强制更新一次心跳。彻底消灭 STALLED 误报！
-                if (++idle_loops % 131072 == 0) {
-                    heartbeat.store(time(nullptr), std::memory_order_relaxed);
-                }
             }
         }
 
         void watchdog_loop(std::stop_token st) {
             auto& tel = Telemetry::instance();
             // ---记录上一秒状态 ---
-            uint64_t last_pkts_down = 0;
-            uint64_t last_bytes_down = 0;
-            uint64_t last_pkts_up = 0;
-            uint64_t last_bytes_up = 0;
-            uint64_t last_bytes_crit = 0;
-            uint64_t last_bytes_high = 0;
-            uint64_t last_bytes_norm = 0;
+            uint64_t last_pkts = 0;
+            uint64_t last_bytes = 0;
             uint64_t last_crit = 0;
             uint64_t last_high = 0;
             uint64_t last_norm = 0;
             auto last_time = std::chrono::steady_clock::now();
 
             while (!st.stop_requested()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 if (tel.is_probing) {
                     led.set_yellow();
                 }
-
                 // ---计算实时速率 ---
                 auto now = std::chrono::steady_clock::now();
-                uint64_t cur_pkts_down = tel.pkts_down.load(std::memory_order_relaxed);
-                uint64_t cur_bytes_down = tel.bytes_down.load(std::memory_order_relaxed);
-                uint64_t cur_pkts_up = tel.pkts_up.load(std::memory_order_relaxed);
-                uint64_t cur_bytes_up = tel.bytes_up.load(std::memory_order_relaxed);
+                uint64_t cur_pkts = tel.pkts_forwarded.load(std::memory_order_relaxed);
+                uint64_t cur_bytes = tel.bytes_forwarded.load(std::memory_order_relaxed);
                 uint64_t cur_crit = tel.pkts_critical.load(std::memory_order_relaxed);
                 uint64_t cur_high = tel.pkts_high.load(std::memory_order_relaxed);
                 uint64_t cur_norm = tel.pkts_normal.load(std::memory_order_relaxed);
@@ -269,7 +192,7 @@ namespace Scalpel {
                 uint64_t drops_crit = tel.dropped_critical.load(std::memory_order_relaxed);
                 uint64_t drops_high = tel.dropped_high.load(std::memory_order_relaxed);
                 uint64_t drops_norm = tel.dropped_normal.load(std::memory_order_relaxed);
-
+                
                 double seconds = std::chrono::duration<double>(now - last_time).count();
 
                 uint64_t pps_crit = static_cast<uint64_t>((cur_crit - last_crit) / seconds);
@@ -280,18 +203,13 @@ namespace Scalpel {
                 double mbps_high = ((cur_b_high - last_bytes_high) * 8.0 / 1e6) / seconds;
                 double mbps_norm = ((cur_b_norm - last_bytes_norm) * 8.0 / 1e6) / seconds;
 
-                double mbps_down = ((cur_bytes_down - last_bytes_down) * 8.0 / 1e6) / seconds;
-                double mbps_up = ((cur_bytes_up - last_bytes_up) * 8.0 / 1e6) / seconds;
-
-                // 使用 \r 覆盖当前行，直观展示下载(DL)与上传(UL)网速，同时保留各优先级的调度与丢包监控
-                std::print("\r Mbps[DL:{:5.1f} UL:{:5.1f}] | PPS[C:{:<4} H:{:<4} N:{:<5}] | Drp[C:{} H:{} N:{:<3}]  ",
-                    mbps_down, mbps_up, pps_crit, pps_high, pps_norm, drops_crit, drops_high, drops_norm);
+                // 使用 \r 覆盖当前行，实现动态刷新，全方位展示各个级别的 Mbps、PPS 和 Drop
+                std::print("\r Mbps[C:{:4.1f} H:{:4.1f} N:{:5.1f}] | PPS[C:{:<4} H:{:<4} N:{:<5}] | Drp[C:{} H:{} N:{:<3}]  ",
+                    mbps_crit, mbps_high, mbps_norm, pps_crit, pps_high, pps_norm, drops_crit, drops_high, drops_norm);
                 std::cout.flush();
 
-                last_pkts_down = cur_pkts_down;
-                last_bytes_down = cur_bytes_down;
-                last_pkts_up = cur_pkts_up;
-                last_bytes_up = cur_bytes_up;
+                last_pkts = cur_pkts;
+                last_bytes = cur_bytes;
                 last_crit = cur_crit;
                 last_high = cur_high;
                 last_norm = cur_norm;
@@ -302,14 +220,16 @@ namespace Scalpel {
 
                 if (!tel.is_probing) {
                     auto heartbeat_now = time(nullptr);
-                    if (heartbeat_now - tel.last_heartbeat_core2 > 100 || heartbeat_now - tel.last_heartbeat_core3 > 100) {
+                    if (heartbeat_now - tel.last_heartbeat_core2 > 5 || heartbeat_now - tel.last_heartbeat_core3 > 5) {
                         led.set_red();
-                        std::println(stderr, "\r Watchdog: Forwarding STALLED!");
+                        // 加入 \n 防止覆盖同行正在打印的速率状态
+                        std::println(stderr, "\nWatchdog: Forwarding STALLED!");
                     }
                     else {
                         led.set_green();
                     }
                 }
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
             }
         }
     };
