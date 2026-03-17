@@ -1,6 +1,3 @@
-// 必须显式定义 _GNU_SOURCE 才能解锁 Linux 的线程亲和性 API
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
 #include <fstream>
 #include <print>
 #include <format>
