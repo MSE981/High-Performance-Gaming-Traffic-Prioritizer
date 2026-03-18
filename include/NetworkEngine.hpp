@@ -12,12 +12,17 @@
 #include <net/ethernet.h>
 #include <net/if.h>
 #include <arpa/inet.h>
+#include <functional>
+#include <poll.h>   
 
 namespace Scalpel::Engine {
     class RawSocketManager {
         int fd = -1;
         uint8_t* ring = nullptr;
         size_t ring_size = 0;
+
+        uint32_t rx_idx = 0; // 核心封装：将环形缓冲区索引隐藏在底层，拒绝应用层轮询
+        std::function<void(std::span<const uint8_t>)> onPacketReceived; // 核心封装：声明事件回调函数
 
         // TPACKET_V1/V2 默认配置
 		static constexpr uint32_t BLOCK_SIZE = 4096 * 16; // 4K * 816 = 32768 bytes
