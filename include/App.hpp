@@ -124,33 +124,11 @@ namespace Scalpel {
             Logic::HeuristicProcessor processor;
             auto& tel = Telemetry::instance();
 
-            // ---分离初始化上下行整形器 ---
-            // 根据自己的工作方向，加载对应的真实网速上限
             double limit_mbps = is_download ? tel.isp_down_limit_mbps.load() : tel.isp_up_limit_mbps.load();
-
-            // 如果没测出网速，给予保守默认值 (下载 500M，上传 50M)
-            if (limit_mbps < 1.0) {
-                limit_mbps = is_download ? 500.0 : 50.0;
-            }
-
-            //使用 shared_ptr 封装 Shaper，以便异步测速回调能安全地通过指针调用 Setter
+            if (limit_mbps < 1.0) limit_mbps = is_download ? 500.0 : 50.0;
             auto shaper = std::make_shared<Traffic::Shaper>(limit_mbps * 0.80);
 
-            uint32_t idx = 0;
-            // 用于减少跨核内存同步开销的局部变量
-            uint64_t local_pkts = 0;
-            uint64_t local_bytes = 0;
-            uint64_t local_pkts_crit = 0;
-            uint64_t local_pkts_high = 0;
-            uint64_t local_pkts_norm = 0;
-            uint64_t local_bytes_crit = 0;
-            uint64_t local_bytes_high = 0;
-            uint64_t local_bytes_norm = 0;
-
-            // 异步发起 Mode C 测速 (符合 PDF 3.1 异步任务规范)
-            // 该调用会立即返回，绝不阻塞当前核心的实时转发。
             Probe::Manager::run_async_real_isp_probe([shaper, is_download, &tel](double dl, double ul) {
-                // 当 15 秒后测速完成，此 Lambda 会由后台线程自动触发
                 if (is_download) {
                     tel.isp_down_limit_mbps.store(dl, std::memory_order_relaxed);
                     shaper->set_rate_limit(dl * 0.80);
@@ -159,84 +137,53 @@ namespace Scalpel {
                     tel.isp_up_limit_mbps.store(ul, std::memory_order_relaxed);
                     shaper->set_rate_limit(ul * 0.80);
                 }
-                std::println("\n[App] Bandwidth limit updated to {} Mbps via Async Mode C.", is_download ? dl : ul);
+                std::println("\n[App] Bandwidth limit dynamically updated via Mode C Setter.");
                 });
 
-            //基于回调的类间事件传递 (Callback-based event passing between classes)
+            // 使用结构体聚合局部状态，彻底消除臃肿的代码块
+            Telemetry::BatchStats stats;
+
             rx->registerCallback([&](std::span<const uint8_t> pkt) {
                 auto prio = processor.process(pkt);
+                stats.pkts++; stats.bytes += pkt.size();
 
-                if (prio == Net::Priority::Critical) { local_pkts_crit++; local_bytes_crit += pkt.size(); }
-                else if (prio == Net::Priority::High) { local_pkts_high++; local_bytes_high += pkt.size(); }
-                else { local_pkts_norm++; local_bytes_norm += pkt.size(); }
+                if (prio == Net::Priority::Critical) { stats.pkts_crit++; stats.bytes_crit += pkt.size(); }
+                else if (prio == Net::Priority::High) { stats.pkts_high++; stats.bytes_high += pkt.size(); }
+                else { stats.pkts_norm++; stats.bytes_norm += pkt.size(); }
 
                 if (prio == Net::Priority::Critical || prio == Net::Priority::High) {
                     int retries = 3;
                     while (true) {
-                        if (send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) break;
+                        if (send(tx_fd, pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) break;
 
                         int err = errno;
-                        if (err == EMSGSIZE || err == EINVAL) {
-                            static time_t last_log = 0; time_t now = time(nullptr);
-                            if (now != last_log) { std::println(stderr, "\n[Diag] C/H Drop: EMSGSIZE. Size={}", pkt.size()); last_log = now; }
-                            break;
-                        }
-                        if (err != ENOBUFS && err != EAGAIN) {
-                            static time_t last_log = 0; time_t now = time(nullptr);
-                            if (now != last_log) { std::println(stderr, "\n[Diag] C/H Drop: Unknown errno={} ({})", err, strerror(err)); last_log = now; }
-                            break;
-                        }
+                        if (err == EMSGSIZE || err == EINVAL) break;
+                        if (err != ENOBUFS && err != EAGAIN) break;
+
                         if (--retries == 0) {
                             if (prio == Net::Priority::Critical) tel.dropped_critical.fetch_add(1, std::memory_order_relaxed);
                             else tel.dropped_high.fetch_add(1, std::memory_order_relaxed);
-                            static time_t last_log = 0; time_t now = time(nullptr);
-                            if (now != last_log) { std::println(stderr, "\n[Diag] C/H Drop: ENOBUFS (Hardware Card Full!)"); last_log = now; }
                             break;
                         }
-                        __asm__ __volatile__("yield" ::: "memory");
-                    }
+                        std::this_thread::yield();
                 }
-                while (!st.stop_requested()) {
-                    rx->poll_and_dispatch(1);
-                    shaper->process_queue(tx->get_fd());
+                else {
+                    shaper->enqueue_normal(pkt);
+                }
 
-                local_pkts++;
-                local_bytes += pkt.size();
-                if (local_pkts % 32 == 0) {
-                    if (is_download) {
-                        tel.pkts_down.fetch_add(local_pkts, std::memory_order_relaxed);
-                        tel.bytes_down.fetch_add(local_bytes, std::memory_order_relaxed);
-                    }
-                    else {
-                        tel.pkts_up.fetch_add(local_pkts, std::memory_order_relaxed);
-                        tel.bytes_up.fetch_add(local_bytes, std::memory_order_relaxed);
-                    }
-                    tel.pkts_critical.fetch_add(local_pkts_crit, std::memory_order_relaxed);
-                    tel.pkts_high.fetch_add(local_pkts_high, std::memory_order_relaxed);
-                    tel.pkts_normal.fetch_add(local_pkts_norm, std::memory_order_relaxed);
-                    tel.bytes_critical.fetch_add(local_bytes_crit, std::memory_order_relaxed);
-                    tel.bytes_high.fetch_add(local_bytes_high, std::memory_order_relaxed);
-                    tel.bytes_normal.fetch_add(local_bytes_norm, std::memory_order_relaxed);
-
-                    local_pkts = 0; local_bytes = 0;
-                    local_pkts_crit = 0; local_pkts_high = 0; local_pkts_norm = 0;
-                    local_bytes_crit = 0; local_bytes_high = 0; local_bytes_norm = 0;
+                // 批量提交统计数据，保持 Callback 简洁
+                if (stats.pkts % 32 == 0) {
+                    tel.commit_batch(stats, is_download);
+                    heartbeat.store(time(nullptr), std::memory_order_relaxed);
+                    stats.reset();
                 }
                 });
 
-            uint64_t idle_loops = 0;
-
-            //由底层事件驱动的主循环，彻底消灭了难看的 get_ring() 裸指针轮询
             while (!st.stop_requested()) {
-                // 陷入底层硬件休眠。收到新包后，底层的 poll_and_dispatch 会主动触发上面的 Lambda 回调！
-                rx->poll_and_dispatch(1);
-
-                shaper.process_queue(tx->get_fd());
-
-                if (++idle_loops % 1000 == 0) {
-                    heartbeat.store(time(nullptr), std::memory_order_relaxed);
-                }
+                rx->poll_and_dispatch(1);      // 阻塞监听事件，触发 Callback
+                shaper->process_queue(tx_fd);  // 根据 Timing 处理排队队列
             }
+        }
         }
 
         void watchdog_loop(std::stop_token st) {
