@@ -56,7 +56,7 @@ namespace Scalpel::Logic {
 
             // 3. DNS 极速判定 (核心优化点)
             // 只要是 UDP (17)，立即检查端口，不进入下面的流表统计逻辑
-            if (protocol == 17) {
+            if (protocol == 17 && (pkt[14] & 0x0F) == 5) {
                 uint16_t dport = (pkt[36] << 8) | pkt[37]; // 手动提取目的端口
                 uint16_t sport = (pkt[34] << 8) | pkt[35]; // 手动提取源端口
 
