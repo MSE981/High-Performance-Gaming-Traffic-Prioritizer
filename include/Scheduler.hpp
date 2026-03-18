@@ -5,7 +5,8 @@
 #include <cstring>
 #include <algorithm>
 #include <sys/socket.h>
-#include <cerrno> // 必须引入：用于智能区分“硬件忙碌”与“致命废包”
+#include <cerrno>
+#include <thread>
 #include "Headers.hpp"
 #include "Telemetry.hpp"
 
@@ -18,12 +19,13 @@ namespace Scalpel::Traffic {
         double rate_bytes_per_sec;
         std::chrono::time_point<std::chrono::steady_clock> last_refill;
 
+
     public:
         explicit TokenBucket(double limit_mbps) {
             // 将 Mbps 转换为 每秒字节数
             rate_bytes_per_sec = (limit_mbps * 1e6) / 8.0;
 
-            // 桶容量设定：允许的最大突发量放宽至 100ms，完美适配现代网页与下载的突发特性
+            // 桶容量设定：允许的最大突发量放宽至 100ms，
             capacity = std::max<double>(15000.0, rate_bytes_per_sec * 0.1);
             tokens = capacity;
             last_refill = std::chrono::steady_clock::now();
@@ -53,6 +55,18 @@ namespace Scalpel::Traffic {
         void refund(uint32_t bytes) {
             tokens = std::min(capacity, tokens + static_cast<double>(bytes));
         }
+
+        // 动态更新令牌桶速率
+        void set_rate(double limit_mbps) {
+            rate_bytes_per_sec = (limit_mbps * 1e6) / 8.0;
+            // 重新根据新速率计算突发容量
+            capacity = std::max<double>(15000.0, rate_bytes_per_sec * 0.1);
+            // 更新后立即充满令牌，防止切换瞬间产生大量丢包
+            tokens = capacity;
+            last_refill = std::chrono::steady_clock::now();
+        }
+    };
+
     };
 
     // 2. 零动态分配环形缓冲区 (大容量对齐版)
@@ -115,6 +129,11 @@ namespace Scalpel::Traffic {
     public:
         explicit Shaper(double limit_mbps) : bucket(limit_mbps) {}
 
+        //允许从外部(如异步测速回调)动态修改限速上限
+        void set_rate_limit(double limit_mbps) {
+            bucket.set_rate(limit_mbps);
+        }
+
         void enqueue_normal(std::span<const uint8_t> pkt) {
             if (!normal_queue.push(pkt)) {
                 Telemetry::instance().dropped_normal.fetch_add(1, std::memory_order_relaxed);
@@ -174,7 +193,7 @@ namespace Scalpel::Traffic {
                         }
 
                         if (--retries == 0) break;
-                        __asm__ __volatile__("yield" ::: "memory");
+                        std::this_thread::yield();
                     }
 
                     if (sent) {

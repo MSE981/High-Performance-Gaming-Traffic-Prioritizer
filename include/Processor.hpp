@@ -3,7 +3,8 @@
 #include <unordered_map>
 #include <chrono>
 #include <cstdint>
-#include <netinet/in.h> // 用于解析时的 ntohs
+#include <netinet/in.h>
+#include <bit>
 #include "Headers.hpp"
 #include "Config.hpp"
 
@@ -11,12 +12,17 @@ namespace Scalpel::Logic {
     struct FlowKey {
         uint32_t saddr, daddr;
         uint16_t sport, dport;
-        bool operator==(const FlowKey&) const = default; // C++20 default compare
+        bool operator==(const FlowKey&) const = default;
     };
 
     struct FlowHash {
         std::size_t operator()(const FlowKey& k) const {
-            return k.saddr ^ k.daddr ^ k.sport ^ k.dport;
+            // 引入 std::rotl 进行位旋转打散。
+            // 解决双向流 (A->B 与 B->A) 的 100% 哈希冲突
+            return std::rotl(static_cast<std::size_t>(k.saddr), 16) ^
+                static_cast<std::size_t>(k.daddr) ^
+                std::rotl(static_cast<std::size_t>(k.sport), 8) ^
+                static_cast<std::size_t>(k.dport);
         }
     };
 
@@ -50,7 +56,7 @@ namespace Scalpel::Logic {
 
             // 3. DNS 极速判定 (核心优化点)
             // 只要是 UDP (17)，立即检查端口，不进入下面的流表统计逻辑
-            if (protocol == 17) {
+            if (protocol == 17 && (pkt[14] & 0x0F) == 5) {
                 uint16_t dport = (pkt[36] << 8) | pkt[37]; // 手动提取目的端口
                 uint16_t sport = (pkt[34] << 8) | pkt[35]; // 手动提取源端口
 
@@ -111,9 +117,6 @@ namespace Scalpel::Logic {
             }
 
             if (ip->protocol == 6) {
-                // 识别 SYN 包 (TCP 头部偏移在 IHL 之后)
-                if (pkt.size() < 74) return Priority::Critical;
-
                 // 利用新增的 TCPHeader 提取端口，拯救 Bing 搜索的高延迟
                 size_t offset = sizeof(EthernetHeader) + ihl;
                 if (pkt.size() >= offset + sizeof(TCPHeader)) {
@@ -121,7 +124,7 @@ namespace Scalpel::Logic {
                     uint16_t dport = ntohs(tcp->dest);
                     uint16_t sport = ntohs(tcp->source);
 
-                    // 修复：游戏端口无条件极速。但 443(HTTPS) 只有小于 512 字节的包才免排队。
+                    // 游戏端口无条件极速。但 443(HTTPS) 只有小于 512 字节的包才免排队。
                     // 否则看视频/下文件会撑爆网卡物理硬件队列导致海量 High 级别丢包。
                     if (Config::is_game_port(dport) || Config::is_game_port(sport)) {
                         return Priority::High;
