@@ -25,7 +25,8 @@
 
 namespace Scalpel {
     class App {
-        std::shared_ptr<Engine::RawSocketManager> eth0, eth1;
+        // 改用 unique_ptr。RX 对象在线程间互不共享，完全消除内存竞争。
+        std::unique_ptr<Engine::RawSocketManager> eth0, eth1;
         HW::RGBLed led;
 
     public:
@@ -41,8 +42,8 @@ namespace Scalpel {
                 std::println(stderr, "[Warning] IOCTL failed to disable GRO on {}. Ensure program has CAP_NET_ADMIN.", Config::IFACE_LAN);
             }
 
-            eth0 = std::make_shared<Engine::RawSocketManager>(Config::IFACE_WAN);
-            eth1 = std::make_shared<Engine::RawSocketManager>(Config::IFACE_LAN);
+            eth0 = std::make_unique<Engine::RawSocketManager>(Config::IFACE_WAN);
+            eth1 = std::make_unique<Engine::RawSocketManager>(Config::IFACE_LAN);
 
             if (auto r = eth0->init(); !r) return r;
             if (auto r = eth1->init(); !r) return r;
@@ -85,14 +86,18 @@ namespace Scalpel {
             }
 
             // 4. 启动转发核心 (Core 2 & 3)
-            std::jthread t1([this](std::stop_token st) {
-                // eth0(WAN外网) 收到包发给 eth1(LAN内网)：这是【下载】方向 (is_download = true)
-                worker(eth0, eth1, 2, true, Telemetry::instance().last_heartbeat_core2, st);
+            // 提前提取物理句柄，确保所有权转移后 TX 目标依然可用
+            int fd0 = eth0->get_fd();
+            int fd1 = eth1->get_fd();
+
+            // T1 线程：独占 eth0 的所有权（用于接收），仅持有 fd1 的副本（用于发送）
+            std::jthread t1([this, rx = std::move(eth0), tx_fd = fd1](std::stop_token st) mutable {
+                worker(std::move(rx), tx_fd, 2, true, Telemetry::instance().last_heartbeat_core2, st);
                 });
 
-            std::jthread t2([this](std::stop_token st) {
-                // eth1(LAN内网) 收到包发给 eth0(WAN外网)：这是【上传】方向 (is_download = false)
-                worker(eth1, eth0, 3, false, Telemetry::instance().last_heartbeat_core3, st);
+            // T2 线程：独占 eth1 的所有权（用于接收），仅持有 fd0 的副本（用于发送）
+            std::jthread t2([this, rx = std::move(eth1), tx_fd = fd0](std::stop_token st) mutable {
+                worker(std::move(rx), tx_fd, 3, false, Telemetry::instance().last_heartbeat_core3, st);
                 });
 
             // 主线程挂起
@@ -112,7 +117,7 @@ namespace Scalpel {
         std::promise<void> shutdown_promise;
         std::future<void> shutdown_future;
         // is_download 参数，用于让线程知道自己的转发方向
-        void worker(std::shared_ptr<Engine::RawSocketManager> rx, std::shared_ptr<Engine::RawSocketManager> tx, int core_id, bool is_download, auto& heartbeat, std::stop_token st) {
+        void worker(std::unique_ptr<Engine::RawSocketManager> rx, int tx_fd, int core_id, bool is_download, auto& heartbeat, std::stop_token st) {
             Scalpel::System::set_thread_affinity(core_id);
             Scalpel::System::set_realtime_priority();
 
