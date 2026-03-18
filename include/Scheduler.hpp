@@ -18,6 +18,7 @@ namespace Scalpel::Traffic {
         double rate_bytes_per_sec;
         std::chrono::time_point<std::chrono::steady_clock> last_refill;
 
+
     public:
         explicit TokenBucket(double limit_mbps) {
             // 将 Mbps 转换为 每秒字节数
@@ -53,6 +54,18 @@ namespace Scalpel::Traffic {
         void refund(uint32_t bytes) {
             tokens = std::min(capacity, tokens + static_cast<double>(bytes));
         }
+
+        // 动态更新令牌桶速率
+        void set_rate(double limit_mbps) {
+            rate_bytes_per_sec = (limit_mbps * 1e6) / 8.0;
+            // 重新根据新速率计算突发容量
+            capacity = std::max<double>(15000.0, rate_bytes_per_sec * 0.1);
+            // 更新后立即充满令牌，防止切换瞬间产生大量丢包
+            tokens = capacity;
+            last_refill = std::chrono::steady_clock::now();
+        }
+    };
+
     };
 
     // 2. 零动态分配环形缓冲区 (大容量对齐版)
@@ -114,6 +127,11 @@ namespace Scalpel::Traffic {
 
     public:
         explicit Shaper(double limit_mbps) : bucket(limit_mbps) {}
+
+        //允许从外部(如异步测速回调)动态修改限速上限
+        void set_rate_limit(double limit_mbps) {
+            bucket.set_rate(limit_mbps);
+        }
 
         void enqueue_normal(std::span<const uint8_t> pkt) {
             if (!normal_queue.push(pkt)) {
