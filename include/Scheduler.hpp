@@ -24,7 +24,7 @@ namespace Scalpel::Traffic {
             // 将 Mbps 转换为 每秒字节数
             rate_bytes_per_sec = (limit_mbps * 1e6) / 8.0;
 
-            // 桶容量设定：允许的最大突发量放宽至 100ms，完美适配现代网页与下载的突发特性
+            // 桶容量设定：允许的最大突发量放宽至 100ms，
             capacity = std::max<double>(15000.0, rate_bytes_per_sec * 0.1);
             tokens = capacity;
             last_refill = std::chrono::steady_clock::now();

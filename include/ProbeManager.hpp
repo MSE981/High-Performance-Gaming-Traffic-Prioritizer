@@ -83,7 +83,7 @@ namespace Scalpel::Probe {
         }
 
 
-        // 模式 C：异步调用 Ookla Speedtest (完美符合 PDF 3.1 节异步任务与回调规范)
+        // 模式 C：异步调用 Ookla Speedtest
         // 传入一个回调函数，测速完成后自动触发
         static void run_async_real_isp_probe(std::function<void(double, double)> on_complete) {
             std::println("[Probe C] Spawning asynchronous speedtest thread. Realtime engine will NOT block.");
