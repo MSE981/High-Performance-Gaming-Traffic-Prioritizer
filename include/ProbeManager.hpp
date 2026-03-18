@@ -81,64 +81,53 @@ namespace Scalpel::Probe {
             std::println("[Probe B] ISP Result: {:.2f} Mbps ({} PPS)", tel.isp_limit_mbps.load(), pps);
             tel.is_probing = false;
         }
-        // 模式 C：真实 ISP 限制探测 (调用 Ookla Speedtest 官方极简测速)
-        static void run_real_isp_probe(int /*fd*/, const std::string& /*gateway_mac*/, const std::string& /*local_ip*/, const std::string & /*target_ip*/ = "") {
-            auto& tel = Telemetry::instance();
-            tel.is_probing = true;
-            std::println("[Probe C] Running Ookla Speedtest (speedtest-cli)... This may take 15-20 seconds.");
 
-            std::array<char, 128> buffer{};
-            std::string result;
 
-            // 使用 popen 调用系统的 speedtest-cli 命令，--simple 参数输出纯文本，2>/dev/null 屏蔽错误警告
-            std::unique_ptr<FILE, decltype(&pclose)> pipe(popen("speedtest-cli --simple 2>/dev/null", "r"), pclose);
-            if (!pipe) {
-                std::println(stderr, "[Error] Failed to start speedtest-cli. Please run 'sudo apt install speedtest-cli' first.");
-                tel.is_probing = false;
-                return;
-            }
+        // 模式 C：异步调用 Ookla Speedtest (完美符合 PDF 3.1 节异步任务与回调规范)
+        // 传入一个回调函数，测速完成后自动触发
+        static void run_async_real_isp_probe(std::function<void(double, double)> on_complete) {
+            std::println("[Probe C] Spawning asynchronous speedtest thread. Realtime engine will NOT block.");
 
-            // 读取命令行输出
-            while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-                result += buffer.data();
-            }
+            // 启动独立后台线程执行耗时任务，完全脱离实时主干道
+            std::thread([cb = std::move(on_complete)]() {
+                std::array<char, 128> buffer{};
+                std::string result;
 
-            // Speedtest-cli --simple 的输出格式通常为：
-            // Ping: 12.34 ms
-            // Download: 21.50 Mbit/s
-            // Upload: 5.20 Mbit/s
-
-            double download_mbps = 0.0;
-            double upload_mbps = 0.0;
-
-            auto pos_down = result.find("Download:");
-            if (pos_down != std::string::npos) {
-                try {
-                    std::string sub = result.substr(pos_down + 9);
-                    download_mbps = std::stod(sub);
+                // 在纯后台线程中执行 popen，绝对不会影响网络抓包和转发的实时性
+                std::unique_ptr<FILE, decltype(&pclose)> pipe(popen("speedtest-cli --simple 2>/dev/null", "r"), pclose);
+                if (!pipe) {
+                    std::println(stderr, "[Probe C Error] Speedtest process failed to start.");
+                    return;
                 }
-                catch (...) {}
-            }
 
-            auto pos_up = result.find("Upload:");
-            if (pos_up != std::string::npos) {
-                try {
-                    std::string sub = result.substr(pos_up + 8);
-                    upload_mbps = std::stod(sub);
+                while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+                    result += buffer.data();
                 }
-                catch (...) {}
-            }
 
-            // 成功测出上下行宽带时，分别写入全局变量供限速器分离使用
-            if (download_mbps > 0.0 && upload_mbps > 0.0) {
-                tel.isp_down_limit_mbps = download_mbps;
-                tel.isp_up_limit_mbps = upload_mbps;
-                std::println("[Probe C] Speedtest Complete! Down: {:.2f} Mbps | Up: {:.2f} Mbps", download_mbps, upload_mbps);
-            }
-            else {
-                std::println(stderr, "[Error] Speedtest failed or returned 0. Please check network connection.");
-            }
-            tel.is_probing =    false;
+                double download_mbps = 0.0;
+                double upload_mbps = 0.0;
+
+                auto pos_down = result.find("Download:");
+                if (pos_down != std::string::npos) {
+                    try { download_mbps = std::stod(result.substr(pos_down + 9)); }
+                    catch (...) {}
+                }
+
+                auto pos_up = result.find("Upload:");
+                if (pos_up != std::string::npos) {
+                    try { upload_mbps = std::stod(result.substr(pos_up + 8)); }
+                    catch (...) {}
+                }
+
+                if (download_mbps > 0.0 && upload_mbps > 0.0) {
+                    std::println("\n[Probe C] Async Speedtest Success! Down: {:.2f} Mbps | Up: {:.2f} Mbps", download_mbps, upload_mbps);
+                    // 任务完成，触发回调函数通知主程序！
+                    if (cb) cb(download_mbps, upload_mbps);
+                }
+                else {
+                    std::println(stderr, "\n[Probe C Error] Speedtest returned invalid results.");
+                }
+                }).detach(); // 分离线程，让其在后台默默执行
         }
     };
 }
