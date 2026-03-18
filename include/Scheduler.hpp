@@ -5,7 +5,8 @@
 #include <cstring>
 #include <algorithm>
 #include <sys/socket.h>
-#include <cerrno> // 必须引入：用于智能区分“硬件忙碌”与“致命废包”
+#include <cerrno>
+#include <thread>
 #include "Headers.hpp"
 #include "Telemetry.hpp"
 
@@ -192,7 +193,7 @@ namespace Scalpel::Traffic {
                         }
 
                         if (--retries == 0) break;
-                        __asm__ __volatile__("yield" ::: "memory");
+                        std::this_thread::yield();
                     }
 
                     if (sent) {
