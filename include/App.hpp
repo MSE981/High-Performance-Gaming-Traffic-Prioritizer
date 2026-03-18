@@ -20,7 +20,7 @@
 #include <cstdlib>
 #include <span>
 #include <poll.h> 
-
+#include <future>
 
 
 namespace Scalpel {
@@ -30,7 +30,6 @@ namespace Scalpel {
 
     public:
         std::expected<void, std::string> init() {
-            // 完美回应导师评语 3：彻底废除 system("ethtool") shell 调用！
             // 使用纯 C++ 底层 ioctl(SIOCETHTOOL) 直接控制网卡寄存器，符合 Linux Realtime 标准。
             std::println("[System] Disabling hardware offloads via C API on {}...", Config::IFACE_WAN);
             if (!Utils::Network::disable_hardware_offloads(std::string(Config::IFACE_WAN))) {
@@ -97,10 +96,21 @@ namespace Scalpel {
                 });
 
             // 主线程挂起
-            while (true) std::this_thread::sleep_for(std::chrono::hours(24));
+            shutdown_future = shutdown_promise.get_future();
+            shutdown_future.wait(); // 主线程在此阻塞，直到外界调用 stop()
+
+            std::println("\n[System] Shutting down... Joining threads and releasing hardware resources.");
+            // 函数结束时，std::jthread t1, t2 和 monitor 会自动发送 stop_token 并安全 join()
+        }
+
+        // 供 main.cpp 的信号处理函数 (SIGINT) 调用，实现安全退出
+        void stop() {
+            shutdown_promise.set_value();
         }
 
     private:
+        std::promise<void> shutdown_promise;
+        std::future<void> shutdown_future;
         // is_download 参数，用于让线程知道自己的转发方向
         void worker(std::shared_ptr<Engine::RawSocketManager> rx, std::shared_ptr<Engine::RawSocketManager> tx, int core_id, bool is_download, auto& heartbeat, std::stop_token st) {
             Scalpel::System::set_thread_affinity(core_id);
