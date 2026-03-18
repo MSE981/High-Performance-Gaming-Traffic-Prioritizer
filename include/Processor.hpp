@@ -117,9 +117,6 @@ namespace Scalpel::Logic {
             }
 
             if (ip->protocol == 6) {
-                // 识别 SYN 包 (TCP 头部偏移在 IHL 之后)
-                if (pkt.size() < 74) return Priority::Critical;
-
                 // 利用新增的 TCPHeader 提取端口，拯救 Bing 搜索的高延迟
                 size_t offset = sizeof(EthernetHeader) + ihl;
                 if (pkt.size() >= offset + sizeof(TCPHeader)) {
@@ -127,7 +124,7 @@ namespace Scalpel::Logic {
                     uint16_t dport = ntohs(tcp->dest);
                     uint16_t sport = ntohs(tcp->source);
 
-                    // 修复：游戏端口无条件极速。但 443(HTTPS) 只有小于 512 字节的包才免排队。
+                    // 游戏端口无条件极速。但 443(HTTPS) 只有小于 512 字节的包才免排队。
                     // 否则看视频/下文件会撑爆网卡物理硬件队列导致海量 High 级别丢包。
                     if (Config::is_game_port(dport) || Config::is_game_port(sport)) {
                         return Priority::High;
