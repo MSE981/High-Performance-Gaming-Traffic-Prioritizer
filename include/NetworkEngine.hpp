@@ -94,9 +94,35 @@ namespace Scalpel::Engine {
         }
 
         int get_fd() const { return fd; }
-        uint8_t* get_ring() const { return ring; }
-        static constexpr uint32_t frame_size() { return FRAME_SIZE; }
-        static constexpr uint32_t frame_nr() { return FRAME_NR; }
+        // 我们不再暴露 get_ring()，而是提供回调注册接口 (完全符合 PDF 2.2.1 Functor 规范)
+        void registerCallback(std::function<void(std::span<const uint8_t>)> cb) {
+            onPacketReceived = std::move(cb);
+        }
+
+        // 核心封装：底层网卡引擎负责阻塞等待、解析包头、并触发回调事件！
+        void poll_and_dispatch(int timeout_ms = 1) {
+            auto* hdr = reinterpret_cast<tpacket_hdr*>(ring + (rx_idx * FRAME_SIZE));
+
+            if (hdr->tp_status & TP_STATUS_USER) {
+                // 拦截内核数据包反射风暴 (PACKET_OUTGOING) 也在底层一并消化
+                auto* sll = reinterpret_cast<sockaddr_ll*>(reinterpret_cast<uint8_t*>(hdr) + TPACKET_ALIGN(sizeof(tpacket_hdr)));
+                if (sll->sll_pkttype != PACKET_OUTGOING) {
+                    if (onPacketReceived) {
+                        std::span<const uint8_t> pkt{ reinterpret_cast<uint8_t*>(hdr) + hdr->tp_mac, hdr->tp_len };
+                        onPacketReceived(pkt); // 触发事件，将数据 Push 给应用层！
+                    }
+                }
+
+                hdr->tp_status = TP_STATUS_KERNEL;
+                rx_idx = (rx_idx + 1) % FRAME_NR;
+            }
+            else {
+                struct pollfd pfd {};
+                pfd.fd = fd;
+                pfd.events = POLLIN;
+                poll(&pfd, 1, timeout_ms); // 底层硬件挂起休眠，等待硬件中断唤醒
+            }
+        }
 
     private:
         std::string iface;
