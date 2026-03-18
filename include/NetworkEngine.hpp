@@ -18,6 +18,11 @@
 
 namespace Scalpel::Engine {
     class RawSocketManager {
+
+        // 显式禁止拷贝，防止内存安全问题
+        RawSocketManager(const RawSocketManager&) = delete;
+        RawSocketManager& operator=(const RawSocketManager&) = delete; 
+
         int fd = -1;
         uint8_t* ring = nullptr;
         size_t ring_size = 0;
