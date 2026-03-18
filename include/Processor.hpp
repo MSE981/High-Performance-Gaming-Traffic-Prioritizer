@@ -3,7 +3,8 @@
 #include <unordered_map>
 #include <chrono>
 #include <cstdint>
-#include <netinet/in.h> // 用于解析时的 ntohs
+#include <netinet/in.h>
+#include <bit>
 #include "Headers.hpp"
 #include "Config.hpp"
 
@@ -11,12 +12,17 @@ namespace Scalpel::Logic {
     struct FlowKey {
         uint32_t saddr, daddr;
         uint16_t sport, dport;
-        bool operator==(const FlowKey&) const = default; // C++20 default compare
+        bool operator==(const FlowKey&) const = default;
     };
 
     struct FlowHash {
         std::size_t operator()(const FlowKey& k) const {
-            return k.saddr ^ k.daddr ^ k.sport ^ k.dport;
+            // 引入 std::rotl 进行位旋转打散。
+            // 解决双向流 (A->B 与 B->A) 的 100% 哈希冲突
+            return std::rotl(static_cast<std::size_t>(k.saddr), 16) ^
+                static_cast<std::size_t>(k.daddr) ^
+                std::rotl(static_cast<std::size_t>(k.sport), 8) ^
+                static_cast<std::size_t>(k.dport);
         }
     };
 
