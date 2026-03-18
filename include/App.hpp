@@ -124,120 +124,78 @@ namespace Scalpel {
             uint64_t local_bytes_crit = 0;
             uint64_t local_bytes_high = 0;
             uint64_t local_bytes_norm = 0;
-            uint64_t idle_loops = 0; // 增加独立的心跳循环计数器
 
+            // 完美回应导师：基于回调的类间事件传递 (Callback-based event passing between classes)
+            rx->registerCallback([&](std::span<const uint8_t> pkt) {
+                auto prio = processor.process(pkt);
 
-            while (!st.stop_requested()) {
-                auto* hdr = reinterpret_cast<tpacket_hdr*>(rx->get_ring() + (idx * rx->frame_size()));
+                if (prio == Net::Priority::Critical) { local_pkts_crit++; local_bytes_crit += pkt.size(); }
+                else if (prio == Net::Priority::High) { local_pkts_high++; local_bytes_high += pkt.size(); }
+                else { local_pkts_norm++; local_bytes_norm += pkt.size(); }
 
-                if (hdr->tp_status & TP_STATUS_USER) {
-                    // 致命死循环修复：拦截内核数据包反射风暴 (PACKET_OUTGOING)
-                    // 彻底防止树莓派拦截自己刚刚 send 出去的包并再次转发，终结物理网卡死锁！
-                    auto* sll = reinterpret_cast<sockaddr_ll*>(reinterpret_cast<uint8_t*>(hdr) + TPACKET_ALIGN(sizeof(tpacket_hdr)));
-                    if (sll->sll_pkttype == PACKET_OUTGOING) {
-                        hdr->tp_status = TP_STATUS_KERNEL;
-                        idx = (idx + 1) % rx->frame_nr();
-                        shaper.process_queue(tx->get_fd());
-                        continue;
-                    }
+                if (prio == Net::Priority::Critical || prio == Net::Priority::High) {
+                    int retries = 3;
+                    while (true) {
+                        if (send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) break;
 
-                    std::span pkt{ reinterpret_cast<uint8_t*>(hdr) + hdr->tp_mac, hdr->tp_len };
-                    auto prio = processor.process(pkt);
-
-                    // --- 记录各级别流量状态 ---
-                    if (prio == Net::Priority::Critical) { local_pkts_crit++; local_bytes_crit += pkt.size(); }
-                    else if (prio == Net::Priority::High) { local_pkts_high++; local_bytes_high += pkt.size(); }
-                    else { local_pkts_norm++; local_bytes_norm += pkt.size(); }
-
-                    // ---三级调度分流逻辑 ---
-                    if (prio == Net::Priority::Critical || prio == Net::Priority::High) {
-                        int retries = 3;
-                        while (true) {
-                            if (send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) {
-                                break; // 发送成功
-                            }
-
-                            int err = errno;
-                            if (err == EMSGSIZE || err == EINVAL) {
-                                // 【诊断探针 4：极速通道畸形包】
-                                static time_t last_log = 0; time_t now = time(nullptr);
-                                if (now != last_log) { std::println(stderr, "\n[Diag] C/H Drop: EMSGSIZE. Size={}", pkt.size()); last_log = now; }
-                                break;
-                            }
-                            if (err != ENOBUFS && err != EAGAIN) {
-                                // 【诊断探针 5：极速通道未知异常】
-                                static time_t last_log = 0; time_t now = time(nullptr);
-                                if (now != last_log) { std::println(stderr, "\n[Diag] C/H Drop: Unknown errno={} ({})", err, strerror(err)); last_log = now; }
-                                break;
-                            }
-                            if (--retries == 0) {
-                                if (prio == Net::Priority::Critical) tel.dropped_critical.fetch_add(1, std::memory_order_relaxed);
-                                else tel.dropped_high.fetch_add(1, std::memory_order_relaxed);
-                                // 【诊断探针 6：硬件网卡真正爆满】
-                                static time_t last_log = 0; time_t now = time(nullptr);
-                                if (now != last_log) { std::println(stderr, "\n[Diag] C/H Drop: ENOBUFS (Hardware Card Full!)"); last_log = now; }
-                                break;
-                            }
-                            __asm__ __volatile__("yield" ::: "memory");
+                        int err = errno;
+                        if (err == EMSGSIZE || err == EINVAL) {
+                            static time_t last_log = 0; time_t now = time(nullptr);
+                            if (now != last_log) { std::println(stderr, "\n[Diag] C/H Drop: EMSGSIZE. Size={}", pkt.size()); last_log = now; }
+                            break;
                         }
-                    }
-                    else {
-                        // 下载包：扔进 4MB 的内存池里排队等候发落
-                        shaper.enqueue_normal(pkt);
-                    }
-
-                    // --- 每 32 个包才更新一次全局原子变量 ---
-                    local_pkts++;
-                    local_bytes += pkt.size();
-                    if (local_pkts % 32 == 0) {
-                        // 根据当前线程的转发方向，分别统计下载与上传总流量
-                        if (is_download) {
-                            tel.pkts_down.fetch_add(local_pkts, std::memory_order_relaxed);
-                            tel.bytes_down.fetch_add(local_bytes, std::memory_order_relaxed);
+                        if (err != ENOBUFS && err != EAGAIN) {
+                            static time_t last_log = 0; time_t now = time(nullptr);
+                            if (now != last_log) { std::println(stderr, "\n[Diag] C/H Drop: Unknown errno={} ({})", err, strerror(err)); last_log = now; }
+                            break;
                         }
-                        else {
-                            tel.pkts_up.fetch_add(local_pkts, std::memory_order_relaxed);
-                            tel.bytes_up.fetch_add(local_bytes, std::memory_order_relaxed);
+                        if (--retries == 0) {
+                            if (prio == Net::Priority::Critical) tel.dropped_critical.fetch_add(1, std::memory_order_relaxed);
+                            else tel.dropped_high.fetch_add(1, std::memory_order_relaxed);
+                            static time_t last_log = 0; time_t now = time(nullptr);
+                            if (now != last_log) { std::println(stderr, "\n[Diag] C/H Drop: ENOBUFS (Hardware Card Full!)"); last_log = now; }
+                            break;
                         }
-
-                        tel.pkts_critical.fetch_add(local_pkts_crit, std::memory_order_relaxed);
-                        tel.pkts_high.fetch_add(local_pkts_high, std::memory_order_relaxed);
-                        tel.pkts_normal.fetch_add(local_pkts_norm, std::memory_order_relaxed);
-                        tel.bytes_critical.fetch_add(local_bytes_crit, std::memory_order_relaxed);
-                        tel.bytes_high.fetch_add(local_bytes_high, std::memory_order_relaxed);
-                        tel.bytes_normal.fetch_add(local_bytes_norm, std::memory_order_relaxed);
-                        //heartbeat.store(time(nullptr), std::memory_order_relaxed); // 将心跳更新从发包逻辑中剥离，移至大循环底部
-
-                        local_pkts = 0;
-                        local_bytes = 0;
-                        local_pkts_crit = 0;
-                        local_pkts_high = 0;
-                        local_pkts_norm = 0;
-                        local_bytes_crit = 0;
-                        local_bytes_high = 0;
-                        local_bytes_norm = 0;
+                        __asm__ __volatile__("yield" ::: "memory");
                     }
-                    hdr->tp_status = TP_STATUS_KERNEL;
-                    idx = (idx + 1) % rx->frame_nr();
                 }
                 else {
-                    // 废除 yield 忙等轮询！
-                    //使用 poll() 将线程真正挂起休眠。
-                    // 只有当内核网卡收到数据并触发底层硬件中断时，才会唤醒此线程。
-                    struct pollfd pfd {};
-                    pfd.fd = rx->get_fd();
-                    pfd.events = POLLIN;
-
-                    // 阻塞等待事件。超时时间设为 1 毫秒：
-                    poll(&pfd, 1, 1);
-                }
+                    shaper.enqueue_normal(pkt);
                 }
 
-                // ---不断抽空下载包队列 ---
+                local_pkts++;
+                local_bytes += pkt.size();
+                if (local_pkts % 32 == 0) {
+                    if (is_download) {
+                        tel.pkts_down.fetch_add(local_pkts, std::memory_order_relaxed);
+                        tel.bytes_down.fetch_add(local_bytes, std::memory_order_relaxed);
+                    }
+                    else {
+                        tel.pkts_up.fetch_add(local_pkts, std::memory_order_relaxed);
+                        tel.bytes_up.fetch_add(local_bytes, std::memory_order_relaxed);
+                    }
+                    tel.pkts_critical.fetch_add(local_pkts_crit, std::memory_order_relaxed);
+                    tel.pkts_high.fetch_add(local_pkts_high, std::memory_order_relaxed);
+                    tel.pkts_normal.fetch_add(local_pkts_norm, std::memory_order_relaxed);
+                    tel.bytes_critical.fetch_add(local_bytes_crit, std::memory_order_relaxed);
+                    tel.bytes_high.fetch_add(local_bytes_high, std::memory_order_relaxed);
+                    tel.bytes_normal.fetch_add(local_bytes_norm, std::memory_order_relaxed);
+
+                    local_pkts = 0; local_bytes = 0;
+                    local_pkts_crit = 0; local_pkts_high = 0; local_pkts_norm = 0;
+                    local_bytes_crit = 0; local_bytes_high = 0; local_bytes_norm = 0;
+                }
+                });
+
+            uint64_t idle_loops = 0;
+
+            // 完美蜕变：由底层事件驱动的主循环，彻底消灭了难看的 get_ring() 裸指针轮询
+            while (!st.stop_requested()) {
+                // 陷入底层硬件休眠。收到新包后，底层的 poll_and_dispatch 会主动触发上面的 Lambda 回调！
+                rx->poll_and_dispatch(1);
+
                 shaper.process_queue(tx->get_fd());
 
-                // 纯底层空闲心跳机制。无论当前核心有没有收到数据包，
-                // 每执行 131,072 次循环（约几毫秒）都会强制更新一次心跳。彻底消灭 STALLED 误报！
                 if (++idle_loops % 131072 == 0) {
                     heartbeat.store(time(nullptr), std::memory_order_relaxed);
                 }
