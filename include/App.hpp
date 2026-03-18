@@ -118,8 +118,8 @@ namespace Scalpel {
                 limit_mbps = is_download ? 500.0 : 50.0;
             }
 
-            // 把普通流量的上限锁死在当前方向物理带宽的 80%
-            Traffic::Shaper shaper(limit_mbps * 0.80);
+            //使用 shared_ptr 封装 Shaper，以便异步测速回调能安全地通过指针调用 Setter
+            auto shaper = std::make_shared<Traffic::Shaper>(limit_mbps * 0.80);
 
             uint32_t idx = 0;
             // 用于减少跨核内存同步开销的局部变量
@@ -132,7 +132,22 @@ namespace Scalpel {
             uint64_t local_bytes_high = 0;
             uint64_t local_bytes_norm = 0;
 
-            // 完美回应导师：基于回调的类间事件传递 (Callback-based event passing between classes)
+            // 异步发起 Mode C 测速 (符合 PDF 3.1 异步任务规范)
+            // 该调用会立即返回，绝不阻塞当前核心的实时转发。
+            Probe::Manager::run_async_real_isp_probe([shaper, is_download, &tel](double dl, double ul) {
+                // 当 15 秒后测速完成，此 Lambda 会由后台线程自动触发
+                if (is_download) {
+                    tel.isp_down_limit_mbps.store(dl, std::memory_order_relaxed);
+                    shaper->set_rate_limit(dl * 0.80);
+                }
+                else {
+                    tel.isp_up_limit_mbps.store(ul, std::memory_order_relaxed);
+                    shaper->set_rate_limit(ul * 0.80);
+                }
+                std::println("\n[App] Bandwidth limit updated to {} Mbps via Async Mode C.", is_download ? dl : ul);
+                });
+
+            //基于回调的类间事件传递 (Callback-based event passing between classes)
             rx->registerCallback([&](std::span<const uint8_t> pkt) {
                 auto prio = processor.process(pkt);
 
@@ -166,9 +181,9 @@ namespace Scalpel {
                         __asm__ __volatile__("yield" ::: "memory");
                     }
                 }
-                else {
-                    shaper.enqueue_normal(pkt);
-                }
+                while (!st.stop_requested()) {
+                    rx->poll_and_dispatch(1);
+                    shaper->process_queue(tx->get_fd());
 
                 local_pkts++;
                 local_bytes += pkt.size();
@@ -196,7 +211,7 @@ namespace Scalpel {
 
             uint64_t idle_loops = 0;
 
-            // 完美蜕变：由底层事件驱动的主循环，彻底消灭了难看的 get_ring() 裸指针轮询
+            //由底层事件驱动的主循环，彻底消灭了难看的 get_ring() 裸指针轮询
             while (!st.stop_requested()) {
                 // 陷入底层硬件休眠。收到新包后，底层的 poll_and_dispatch 会主动触发上面的 Lambda 回调！
                 rx->poll_and_dispatch(1);
