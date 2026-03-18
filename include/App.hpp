@@ -19,6 +19,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <span>
+#include <poll.h> 
+
 
 
 namespace Scalpel {
@@ -219,7 +221,16 @@ namespace Scalpel {
                     idx = (idx + 1) % rx->frame_nr();
                 }
                 else {
-                    __asm__ __volatile__("yield" ::: "memory");
+                    // 废除 yield 忙等轮询！
+                    //使用 poll() 将线程真正挂起休眠。
+                    // 只有当内核网卡收到数据并触发底层硬件中断时，才会唤醒此线程。
+                    struct pollfd pfd {};
+                    pfd.fd = rx->get_fd();
+                    pfd.events = POLLIN;
+
+                    // 阻塞等待事件。超时时间设为 1 毫秒：
+                    poll(&pfd, 1, 1);
+                }
                 }
 
                 // ---不断抽空下载包队列 ---
