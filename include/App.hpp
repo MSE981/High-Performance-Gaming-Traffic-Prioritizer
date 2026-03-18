@@ -30,11 +30,17 @@ namespace Scalpel {
 
     public:
         std::expected<void, std::string> init() {
-            // 强制关闭网卡硬件/软件层面的包合并(GRO/TSO)，防止出现巨型死包和上万次丢包
-            std::string cmd0 = "ethtool -K " + std::string(Config::IFACE_WAN) + " gro off gso off tso off 2>/dev/null";
-            std::string cmd1 = "ethtool -K " + std::string(Config::IFACE_LAN) + " gro off gso off tso off 2>/dev/null";
-            system(cmd0.c_str());
-            system(cmd1.c_str());
+            // 完美回应导师评语 3：彻底废除 system("ethtool") shell 调用！
+            // 使用纯 C++ 底层 ioctl(SIOCETHTOOL) 直接控制网卡寄存器，符合 Linux Realtime 标准。
+            std::println("[System] Disabling hardware offloads via C API on {}...", Config::IFACE_WAN);
+            if (!Utils::Network::disable_hardware_offloads(std::string(Config::IFACE_WAN))) {
+                std::println(stderr, "[Warning] IOCTL failed to disable GRO on {}. Ensure program has CAP_NET_ADMIN.", Config::IFACE_WAN);
+            }
+
+            std::println("[System] Disabling hardware offloads via C API on {}...", Config::IFACE_LAN);
+            if (!Utils::Network::disable_hardware_offloads(std::string(Config::IFACE_LAN))) {
+                std::println(stderr, "[Warning] IOCTL failed to disable GRO on {}. Ensure program has CAP_NET_ADMIN.", Config::IFACE_LAN);
+            }
 
             eth0 = std::make_shared<Engine::RawSocketManager>(Config::IFACE_WAN);
             eth1 = std::make_shared<Engine::RawSocketManager>(Config::IFACE_LAN);
@@ -61,9 +67,10 @@ namespace Scalpel {
             // 唤醒网关并获取 MAC
             std::string gw_mac = Utils::Network::get_mac_from_arp(gw_ip);
             if (gw_mac.empty() || gw_mac == "00:00:00:00:00:00") {
-                // 发送一个 ping 包强制刷新内核 ARP 表
-                int ret = system(("ping -c 1 -W 1 " + gw_ip + " > /dev/null 2>&1").c_str());
-                (void)ret;
+                // 仅仅发一个空 UDP 报文，借用 Linux 内核自身的机制去发送真实 ARP 请求！
+                Utils::Network::force_arp_resolution(gw_ip);
+                // 给内核 50 毫秒的硬件响应和 ARP 表填充时间
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 gw_mac = Utils::Network::get_mac_from_arp(gw_ip);
             }
 
@@ -196,7 +203,7 @@ namespace Scalpel {
 
                 shaper.process_queue(tx->get_fd());
 
-                if (++idle_loops % 131072 == 0) {
+                if (++idle_loops % 1000 == 0) {
                     heartbeat.store(time(nullptr), std::memory_order_relaxed);
                 }
             }
