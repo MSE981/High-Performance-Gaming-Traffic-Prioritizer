@@ -10,6 +10,7 @@ add_executable(GamingTrafficPrioritizer src/main.cpp)
 target_link_libraries(GamingTrafficPrioritizer PRIVATE 
     ${PCAP_LIB}
     Threads::Threads
+    gpiodcxx  
 )
 
 set(CMAKE_CXX_STANDARD 23)
