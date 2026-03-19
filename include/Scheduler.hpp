@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <chrono>
 #include <vector>
 #include <span>
@@ -7,6 +8,7 @@
 #include <sys/socket.h>
 #include <cerrno>
 #include <thread>
+#include <print>
 #include "Headers.hpp"
 #include "Telemetry.hpp"
 
@@ -67,13 +69,10 @@ namespace Scalpel::Traffic {
         }
     };
 
-    };
 
     // 2. 零动态分配环形缓冲区 (大容量对齐版)
     class ZeroAllocRingBuffer {
-        // 核心黑科技：alignas(4096) 
         // 强制编译器将每个槽位对齐到 4KB (树莓派系统页大小)。
-        // 彻底消除 TLB Miss，大幅提升 CPU 寻址效率。
         struct alignas(4096) PacketSlot {
             uint16_t size = 0;
             uint8_t payload[2048]; // 修复：必须声明足够装下标准 1514 字节 MTU 的定长数组，防止内存越界
@@ -84,7 +83,7 @@ namespace Scalpel::Traffic {
         size_t head = 0;
         size_t tail = 0;
         size_t count = 0;
-        const size_t capacity_limit = 8192; // 修复：扩大 8 倍容量，彻底接住 Steam 等工具的突发流量
+        const size_t capacity_limit = 8192;
 
     public:
         ZeroAllocRingBuffer() : pool(8192) {}
@@ -121,10 +120,42 @@ namespace Scalpel::Traffic {
         bool empty() const { return count == 0; }
     };
 
+    // 封装底层硬件发送结果，完全隔离底层的 errno 脏数据
+    enum class TxResult : size_t { Success = 0, Congested = 1, Fatal = 2 };
+
+    inline TxResult try_hardware_send(int fd, std::span<const uint8_t> pkt) {
+        for (int retries = 3; retries > 0; --retries, std::this_thread::yield()) {
+            if (send(fd, pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) return TxResult::Success;
+
+            // 只要不是网卡满载 (ENOBUFS/EAGAIN)，其他全部视为致命畸形包
+            if (errno != ENOBUFS && errno != EAGAIN) return TxResult::Fatal;
+        }
+        return TxResult::Congested;
+    }
+
     // 3. 流量整形器
     class Shaper {
         ZeroAllocRingBuffer normal_queue;
         TokenBucket bucket;
+        uint64_t trace_counter = 0; // 移至成员变量
+
+        // 定义 Functors 查表数组
+        using ResultHandler = void (*)(Shaper*, size_t);
+        static constexpr std::array<ResultHandler, 3> result_handlers = {
+            // 0: Success (发送成功)[](Shaper* s, size_t) {
+                s->normal_queue.pop();
+                if (++s->trace_counter % 5000 == 0) {
+                    std::println("[Proof-of-Work] Successfully shaped and forwarded 5000 normal packets.");
+                }
+        },
+            // 1: Congested (网卡拥塞)[](Shaper* s, size_t bytes) {
+            s->bucket.refund(bytes);
+    },
+        // 2: Fatal (致命死包)[](Shaper* s, size_t bytes) {
+        s->bucket.refund(bytes);
+    s->normal_queue.pop(); // 斩断队头死锁
+            }
+        };
 
     public:
         explicit Shaper(double limit_mbps) : bucket(limit_mbps) {}
