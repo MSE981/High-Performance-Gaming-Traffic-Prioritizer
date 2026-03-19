@@ -12,23 +12,12 @@
 #include <net/ethernet.h>
 #include <net/if.h>
 #include <arpa/inet.h>
-#include <functional>
-#include <poll.h>   
-#include <print>  
 
 namespace Scalpel::Engine {
     class RawSocketManager {
-
-        // 显式禁止拷贝，防止内存安全问题
-        RawSocketManager(const RawSocketManager&) = delete;
-        RawSocketManager& operator=(const RawSocketManager&) = delete; 
-
         int fd = -1;
         uint8_t* ring = nullptr;
         size_t ring_size = 0;
-
-        uint32_t rx_idx = 0; // 核心封装：将环形缓冲区索引隐藏在底层，拒绝应用层轮询
-        std::function<void(std::span<const uint8_t>)> onPacketReceived; // 核心封装：声明事件回调函数
 
         // TPACKET_V1/V2 默认配置
 		static constexpr uint32_t BLOCK_SIZE = 4096 * 16; // 4K * 816 = 32768 bytes
@@ -41,7 +30,7 @@ namespace Scalpel::Engine {
         explicit RawSocketManager(std::string_view iface_name) : iface(iface_name) {}
 
         ~RawSocketManager() {
-            // mmap 失败时返回 MAP_FAILED 而不是 nullptr
+            // 修复：mmap 失败时返回 MAP_FAILED 而不是 nullptr
             if (ring && ring != MAP_FAILED) munmap(ring, ring_size);
             if (fd >= 0) close(fd);
         }
@@ -100,36 +89,9 @@ namespace Scalpel::Engine {
         }
 
         int get_fd() const { return fd; }
-        // 不再暴露 get_ring()，而是提供回调注册接口
-        void registerCallback(std::function<void(std::span<const uint8_t>)> cb) {
-            onPacketReceived = std::move(cb);
-        }
-
-        // 核心封装：底层网卡引擎负责阻塞等待、解析包头、并触发回调事件
-        // 通过 Blocking I/O 提供精确的时序与唤醒
-        void poll_and_dispatch(int timeout_ms = 1) {
-            struct pollfd pfd {};
-            pfd.fd = fd;
-            pfd.events = POLLIN;
-
-            // 1. 核心挂起点：线程在此休眠，直到网卡硬件触发中断事件
-            poll(&pfd, 1, timeout_ms);
-
-            // 2. 事件被触发后：进入批量抽空模式 (Batch Drain)，连续触发回调
-            while (true) {
-                auto* hdr = reinterpret_cast<tpacket_hdr*>(ring + (rx_idx * FRAME_SIZE));
-                if (!(hdr->tp_status & TP_STATUS_USER)) break;
-
-                auto* sll = reinterpret_cast<sockaddr_ll*>(reinterpret_cast<uint8_t*>(hdr) + TPACKET_ALIGN(sizeof(tpacket_hdr)));
-                if (sll->sll_pkttype != PACKET_OUTGOING && onPacketReceived) {
-                    std::span<const uint8_t> pkt{ reinterpret_cast<uint8_t*>(hdr) + hdr->tp_mac, hdr->tp_len };
-                    onPacketReceived(pkt);
-                }
-
-                hdr->tp_status = TP_STATUS_KERNEL;
-                rx_idx = (rx_idx + 1) % FRAME_NR;
-            }
-        }
+        uint8_t* get_ring() const { return ring; }
+        static constexpr uint32_t frame_size() { return FRAME_SIZE; }
+        static constexpr uint32_t frame_nr() { return FRAME_NR; }
 
     private:
         std::string iface;

@@ -10,12 +10,11 @@ add_executable(GamingTrafficPrioritizer src/main.cpp)
 target_link_libraries(GamingTrafficPrioritizer PRIVATE 
     ${PCAP_LIB}
     Threads::Threads
-    gpiodcxx  
 )
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_COMPILER "g++-14")
 set(CMAKE_C_COMPILER "gcc-14")
 
