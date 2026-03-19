@@ -169,16 +169,15 @@ namespace Scalpel::Traffic {
             if (!normal_queue.push(pkt)) {
                 Telemetry::instance().dropped_normal.fetch_add(1, std::memory_order_relaxed);
 
-                // 【诊断探针 1：队列满还是包太大？】(每秒最多打印1次防刷屏)
                 static time_t last_log = 0;
                 time_t now = time(nullptr);
                 if (now != last_log) {
-                    if (pkt.size() > 2048) {
-                        std::println(stderr, "\n[Diag] Drop N: Packet too large ({} bytes). GRO is NOT turned off properly!", pkt.size());
-                    }
-                    else {
-                        std::println(stderr, "\n[Diag] Drop N: 8192 Queue is FULL! Shaper is throttling/blocking.");
-                    }
+                    // 数据驱动优化：利用 C++ 的 bool 隐式转换 (false=0, true=1)
+                    static constexpr std::array<const char*, 2> diag_msgs = {
+                        "\n[Diag] Drop N: 8192 Queue is FULL! Shaper is throttling/blocking.",
+                        "\n[Diag] Drop N: Packet too large (>2048 bytes). GRO is NOT turned off properly!"
+                    };
+                    std::println(stderr, "{}", diag_msgs[pkt.size() > 2048]);
                     last_log = now;
                 }
             }
@@ -188,60 +187,18 @@ namespace Scalpel::Traffic {
             while (!normal_queue.empty()) {
                 auto pkt_span = normal_queue.front();
 
-                if (bucket.try_consume(pkt_span.size())) {
-                    int retries = 3;
-                    bool sent = false;
-                    bool fatal_error = false;
+                // 若令牌耗尽，直接跳出等待下一个时间片
+                if (!bucket.try_consume(pkt_span.size())) break;
 
-                    while (true) {
-                        if (send(tx_fd, pkt_span.data(), pkt_span.size(), MSG_DONTWAIT) >= 0) {
-                            sent = true;
-                            break;
-                        }
+                // 核心解耦：将物理发送请求丢给硬件隔离器，获取严格的枚举状态
+                TxResult res = try_hardware_send(tx_fd, pkt_span);
 
-                        int err = errno; // 捕获瞬间的系统错误码
-                        if (err == EMSGSIZE || err == EINVAL) {
-                            fatal_error = true;
-                            // 【诊断探针 2：发现致命畸形包】
-                            static time_t last_log = 0; time_t now = time(nullptr);
-                            if (now != last_log) {
-                                std::println(stderr, "\n[Diag] Fatal N: EMSGSIZE/EINVAL. Packet size: {}", pkt_span.size());
-                                last_log = now;
-                            }
-                            break;
-                        }
+                // Functor 查表分发！
+                // 将原先多达 30 行的 if-else 迷宫，压缩为 1 行 O(1) 数组下标直接调用！
+                result_handlers[static_cast<size_t>(res)](this, pkt_span.size());
 
-                        // 拦截所有未知的错误，统统视为死包防止死锁！
-                        if (err != ENOBUFS && err != EAGAIN) {
-                            fatal_error = true;
-                            // 【诊断探针 3：抓捕未知异常死锁】
-                            static time_t last_log = 0; time_t now = time(nullptr);
-                            if (now != last_log) {
-                                std::println(stderr, "\n[Diag] Unknown Send Error N: errno={} ({})", err, strerror(err));
-                                last_log = now;
-                            }
-                            break;
-                        }
-
-                        if (--retries == 0) break;
-                        std::this_thread::yield();
-                    }
-
-                    if (sent) {
-                        normal_queue.pop();
-                    }
-                    else if (fatal_error) {
-                        bucket.refund(pkt_span.size());
-                        normal_queue.pop();
-                    }
-                    else {
-                        bucket.refund(pkt_span.size());
-                        break;
-                    }
-                }
-                else {
-                    break;
-                }
+                // 若遇到网卡物理拥塞，终止本轮发包，让网卡喘息
+                if (res == TxResult::Congested) break;
             }
         }
     };
