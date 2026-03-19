@@ -89,18 +89,21 @@ qt6-base-dev: For the local GUI dashboard.
 
 ### 1. Install Dependencies ( Raspberry Pi OS ):
 
-
 sudo apt update
+
 sudo apt install build-essential cmake gcc-14 g++-14 ethtool speedtest-cli libgpiod-dev libpcap-dev
 
 ### 2. Compile the Project:
 
 
 mkdir build && cd build
+
 cmake ..
+
 make -j4
 
 ### 3. Run the Engine:
+
 Because the program needs to control physical network cards and manipulate hardware registers, it must be run with administrator privileges:
 
 
