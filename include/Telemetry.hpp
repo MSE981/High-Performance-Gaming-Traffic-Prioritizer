@@ -3,11 +3,11 @@
 #include <cstdint>
 
 namespace Scalpel {
-    // 数据驱动设计，利用数组下标对应 0(Critical), 1(High), 2(Normal)
     struct BatchStats {
         uint64_t pkts = 0, bytes = 0;
-        uint64_t prio_pkts[3] = { 0, 0, 0 };
-        uint64_t prio_bytes[3] = { 0, 0, 0 };
+        uint64_t pkts_crit = 0, bytes_crit = 0;
+        uint64_t pkts_high = 0, bytes_high = 0;
+        uint64_t pkts_norm = 0, bytes_norm = 0;
         void reset() { *this = BatchStats{}; }
     };
 
