@@ -74,12 +74,12 @@ namespace Scalpel {
         std::expected<void, std::string> init() {
             // 使用纯 C++ 底层 ioctl(SIOCETHTOOL) 直接控制网卡寄存器，符合 Linux Realtime 标准。
             std::println("[System] Disabling hardware offloads via C API on {}...", Config::IFACE_WAN);
-            if (!Utils::Network::disable_hardware_offloads(std::string(Config::IFACE_WAN))) {
+            if (!Utils::Network::disable_hardware_offloads(Config::IFACE_WAN)) {
                 std::println(stderr, "[Warning] IOCTL failed to disable GRO on {}. Ensure program has CAP_NET_ADMIN.", Config::IFACE_WAN);
             }
 
             std::println("[System] Disabling hardware offloads via C API on {}...", Config::IFACE_LAN);
-            if (!Utils::Network::disable_hardware_offloads(std::string(Config::IFACE_LAN))) {
+            if (!Utils::Network::disable_hardware_offloads(Config::IFACE_LAN)) {
                 std::println(stderr, "[Warning] IOCTL failed to disable GRO on {}. Ensure program has CAP_NET_ADMIN.", Config::IFACE_LAN);
             }
 
