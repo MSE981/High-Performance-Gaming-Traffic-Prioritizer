@@ -77,8 +77,8 @@ namespace Scalpel::Probe {
             }
             
             double pps = sent / 5.0;
-            tel.isp_limit_mbps = (sent * 64.0 * 8.0) / (5.0 * 1e6);
-            std::println("[Probe B] ISP Result: {:.2f} Mbps ({} PPS)", tel.isp_limit_mbps.load(), pps);
+            double hw_mbps = (sent * 64.0 * 8.0) / (5.0 * 1e6);
+            std::println("[Probe B] Local Hardware Tx Limit: {:.2f} Mbps ({} PPS)", hw_mbps, pps);
             tel.is_probing = false;
         }
 

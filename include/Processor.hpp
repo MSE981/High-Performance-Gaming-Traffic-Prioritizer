@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <netinet/in.h>
 #include <bit>
+#include <array>
 #include "Headers.hpp"
 #include "Config.hpp"
 
@@ -140,3 +141,4 @@ namespace Scalpel::Logic {
                 });
         }
     };
+}
