@@ -214,11 +214,16 @@ namespace Scalpel {
                 }
                 });
 
+            // 遵循 Blocking I/O 事件驱动模型！
             while (!st.stop_requested()) {
-                rx->poll_and_dispatch(1);      // 阻塞监听事件，触发 Callback
-                shaper->process_queue(tx_fd);  // 根据 Timing 处理排队队列
+                rx->poll_and_dispatch(1);      // 1. 阻塞休眠，直到网卡硬件中断唤醒并触发 Callback
+                shaper->process_queue(tx_fd);  // 2. 定时抽空限速队列
+
+                // 核心时序修复：防止网络空闲（无流量）时看门狗误报卡死
+                if (++idle_loops % 1000 == 0) {
+                    heartbeat.store(time(nullptr), std::memory_order_relaxed);
+                }
             }
-        }
         }
 
         void watchdog_loop(std::stop_token st) {
