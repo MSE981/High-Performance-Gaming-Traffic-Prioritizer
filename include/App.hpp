@@ -203,7 +203,7 @@ namespace Scalpel {
                 stats.pkts++; stats.bytes += pkt.size();
                 stats.prio_pkts[p_idx]++; stats.prio_bytes[p_idx] += pkt.size();
 
-                // 多态查表直接分发，彻底粉碎 Massive Loop 视觉污染！
+                // 多态查表直接分发
                 routing_table[p_idx]->handle(pkt, p_idx);
 
                 // 批量提交统计数据，保持 Callback 简洁
