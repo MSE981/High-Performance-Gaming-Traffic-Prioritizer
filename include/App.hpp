@@ -65,7 +65,7 @@ namespace Scalpel {
     };
 
     class App {
-        // 核心优化：改用 unique_ptr。RX 对象在线程间互不共享，完全消除内存竞争。
+        // RX 对象在线程间互不共享，完全消除内存竞争。
         std::unique_ptr<Engine::RawSocketManager> eth0, eth1;
         HW::RGBLed led;
 
@@ -144,7 +144,7 @@ namespace Scalpel {
             Logic::HeuristicProcessor processor;
 
             double limit_mbps = is_download ? Telemetry::instance().isp_down_limit_mbps.load() : Telemetry::instance().isp_up_limit_mbps.load();
-            if (limit_mbps < 1.0) limit_mbps = is_download ? 500.0 : 50.0;
+            if (limit_mbps < 1.0) limit_mbps = is_download ? 1000.0 : 1000.0;
             auto shaper = std::make_shared<Traffic::Shaper>(limit_mbps * 0.80);
 
             Probe::Manager::run_async_real_isp_probe([shaper, is_download](double dl, double ul) {
@@ -180,7 +180,7 @@ namespace Scalpel {
                 stats.prio_pkts[p_idx]++;
                 stats.prio_bytes[p_idx] += pkt.size();
 
-                // O(1) 多态查表直接分发，彻底粉碎 Massive Loop！
+                // O(1) 多态查表直接分发
                 routing_table[p_idx]->handle(pkt, p_idx);
 
                 if (stats.pkts % 32 == 0) {
