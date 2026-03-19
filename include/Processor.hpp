@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <netinet/in.h>
 #include <bit>
+#include <array>
 #include "Headers.hpp"
 #include "Config.hpp"
 
@@ -38,104 +39,98 @@ namespace Scalpel::Logic {
         std::unordered_map<FlowKey, FlowStats, FlowHash> flows;
         uint32_t process_counter = 0;
 
+        // 定义基于协议的查表处理器 (Functor Table)
+        using ProtocolHandler = Net::Priority(*)(HeuristicProcessor*, std::span<const uint8_t>, const Net::IPv4Header*, size_t);
+        std::array<ProtocolHandler, 256> protocol_handlers;
+
+        // UDP 解析逻辑封装
+        static Net::Priority handle_udp(HeuristicProcessor* self, std::span<const uint8_t> pkt, const Net::IPv4Header* ip, size_t ihl) {
+            size_t offset = sizeof(Net::EthernetHeader) + ihl;
+            if (pkt.size() < offset + sizeof(Net::UDPHeader)) return Net::Priority::Normal;
+
+            auto udp = reinterpret_cast<const Net::UDPHeader*>(pkt.data() + offset);
+            uint16_t dport = ntohs(udp->dest);
+            uint16_t sport = ntohs(udp->source);
+
+            if (dport == 53 || sport == 53) return Net::Priority::Critical;
+            if ((dport == 443 || sport == 443) && pkt.size() < 512) return Net::Priority::High;
+
+            FlowKey key{ ip->saddr, ip->daddr, sport, dport };
+            auto& stats = self->flows[key];
+            stats.total_pkts++;
+            stats.last_seen = std::chrono::steady_clock::now();
+
+            if (pkt.size() > Config::LARGE_PACKET_THRESHOLD) stats.large_pkts++;
+
+            if (!stats.is_disguised && stats.total_pkts < 50) {
+                if (stats.large_pkts > Config::PUNISH_TRIGGER_COUNT) stats.is_disguised = true;
+            }
+
+            // 只有影响了 UDP 状态机时，才增加清理计数器，节省无关协议的 CPU 损耗
+            if (++self->process_counter > Config::CLEANUP_INTERVAL) {
+                self->cleanup();
+                self->process_counter = 0;
+            }
+
+            if (stats.is_disguised) return Net::Priority::Normal;
+            if (Config::is_game_port(dport) || Config::is_game_port(sport)) return Net::Priority::High;
+            if (pkt.size() < 256) return Net::Priority::High;
+
+            return Net::Priority::Normal;
+        }
+
+        // TCP 解析逻辑封装
+        static Net::Priority handle_tcp(HeuristicProcessor*, std::span<const uint8_t> pkt, const Net::IPv4Header* ip, size_t ihl) {
+            // 识别 SYN / ACK 建连确认包
+            if (pkt.size() < 74) return Net::Priority::Critical;
+
+            size_t offset = sizeof(Net::EthernetHeader) + ihl;
+            if (pkt.size() >= offset + sizeof(Net::TCPHeader)) {
+                auto tcp = reinterpret_cast<const Net::TCPHeader*>(pkt.data() + offset);
+                uint16_t dport = ntohs(tcp->dest);
+                uint16_t sport = ntohs(tcp->source);
+
+                if (Config::is_game_port(dport) || Config::is_game_port(sport)) return Net::Priority::High;
+                if ((dport == 443 || sport == 443) && pkt.size() < 512) return Net::Priority::High;
+            }
+            return Net::Priority::Normal;
+        }
+
+        static Net::Priority handle_default(HeuristicProcessor*, std::span<const uint8_t>, const Net::IPv4Header*, size_t) {
+            return Net::Priority::Normal;
+        }
+
     public:
+        HeuristicProcessor() {
+            // 初始化协议路由表
+            protocol_handlers.fill(handle_default);
+            protocol_handlers[17] = handle_udp; // UDP 处理器
+            protocol_handlers[6] = handle_tcp; // TCP 处理器
+        }
+
         Net::Priority process(std::span<const uint8_t> pkt) {
             using namespace Scalpel::Net;
 
             if (pkt.size() < sizeof(EthernetHeader)) return Priority::Normal;
             auto eth = reinterpret_cast<const EthernetHeader*>(pkt.data());
+            if (ntohs(eth->proto) != 0x0800) return Priority::Normal;
 
-            // ===== 替换后 =====
-            if (ntohs(eth->proto) != 0x0800) return Priority::Normal; // Only IPv4
-
-            // 安全检查：确保包长足够提取 IP 协议号和 UDP 端口防止内存越界 (14+20+4 = 38)
             if (pkt.size() < 38) return Priority::Normal;
-
-            // 2. 定位到 IP 协议位 (14字节偏移 + 9字节偏移 = 23字节处)
             uint8_t protocol = pkt[23];
 
-            // 3. DNS 极速判定 (核心优化点)
-            // 只要是 UDP (17)，立即检查端口，不进入下面的流表统计逻辑
+            // DNS 极速绕过通道保留
             if (protocol == 17 && (pkt[14] & 0x0F) == 5) {
-                uint16_t dport = (pkt[36] << 8) | pkt[37]; // 手动提取目的端口
-                uint16_t sport = (pkt[34] << 8) | pkt[35]; // 手动提取源端口
-
-                if (dport == 53 || sport == 53) {
-                    return Priority::Critical; // 发现 DNS 立即返回，不更新 FlowTable
-                }
+                uint16_t dport = (pkt[36] << 8) | pkt[37];
+                uint16_t sport = (pkt[34] << 8) | pkt[35];
+                if (dport == 53 || sport == 53) return Priority::Critical;
             }
 
-
-
-            // Check bounds for IP
             if (pkt.size() < sizeof(EthernetHeader) + sizeof(IPv4Header)) return Priority::Normal;
             auto ip = reinterpret_cast<const IPv4Header*>(pkt.data() + sizeof(EthernetHeader));
             size_t ihl = (ip->ver_ihl & 0x0F) * 4;
 
-            // 1. TCP ACK Optimization 
-            if (ip->protocol == 6 && pkt.size() < 74) return Priority::Critical;
-
-            // 2. UDP Heuristic Analysis 
-            if (ip->protocol == 17) {
-                size_t offset = sizeof(EthernetHeader) + ihl;
-                if (pkt.size() < offset + sizeof(UDPHeader)) return Priority::Normal;
-
-                auto udp = reinterpret_cast<const UDPHeader*>(pkt.data() + offset);
-                uint16_t dport = ntohs(udp->dest);
-                uint16_t sport = ntohs(udp->source);
-
-                if (dport == 53 || sport == 53) return Priority::Critical; // DNS
-                // --- QUIC (443) 属于加速对象，但不计入惩罚 ---
-                if ((dport == 443 || sport == 443) && pkt.size() < 512) {
-                    return Priority::High;
-                }
-
-                // Flow Analysis
-                FlowKey key{ ip->saddr, ip->daddr, sport, dport };
-                auto& stats = flows[key];
-                stats.total_pkts++;
-                stats.last_seen = std::chrono::steady_clock::now();
-
-                if (pkt.size() > Config::LARGE_PACKET_THRESHOLD) stats.large_pkts++;
-
-                // Punishment Logic
-                if (!stats.is_disguised && stats.total_pkts < 50) {
-                    if (stats.large_pkts > Config::PUNISH_TRIGGER_COUNT) {
-                        stats.is_disguised = true;
-                    }
-                }
-
-                if (stats.is_disguised) return Priority::Normal;
-                if (Config::is_game_port(dport) || Config::is_game_port(sport)) return Priority::High;
-                if (pkt.size() < 256) return Priority::High; // Unknown small packet
-            }
-
-            // Periodic Cleanup
-            if (++process_counter > Config::CLEANUP_INTERVAL) {
-                cleanup();
-                process_counter = 0;
-            }
-
-            if (ip->protocol == 6) {
-                // 利用新增的 TCPHeader 提取端口，拯救 Bing 搜索的高延迟
-                size_t offset = sizeof(EthernetHeader) + ihl;
-                if (pkt.size() >= offset + sizeof(TCPHeader)) {
-                    auto tcp = reinterpret_cast<const TCPHeader*>(pkt.data() + offset);
-                    uint16_t dport = ntohs(tcp->dest);
-                    uint16_t sport = ntohs(tcp->source);
-
-                    // 游戏端口无条件极速。但 443(HTTPS) 只有小于 512 字节的包才免排队。
-                    // 否则看视频/下文件会撑爆网卡物理硬件队列导致海量 High 级别丢包。
-                    if (Config::is_game_port(dport) || Config::is_game_port(sport)) {
-                        return Priority::High;
-                    }
-                    if ((dport == 443 || sport == 443) && pkt.size() < 512) {
-                        return Priority::High;
-                    }
-                }
-            }
-
-            return Priority::Normal;
+            //  函数指针查表分发，
+            return protocol_handlers[protocol](this, pkt, ip, ihl);
         }
 
     private:

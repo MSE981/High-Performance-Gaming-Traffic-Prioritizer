@@ -77,8 +77,8 @@ namespace Scalpel::Probe {
             }
             
             double pps = sent / 5.0;
-            tel.isp_limit_mbps = (sent * 64.0 * 8.0) / (5.0 * 1e6);
-            std::println("[Probe B] ISP Result: {:.2f} Mbps ({} PPS)", tel.isp_limit_mbps.load(), pps);
+            double hw_mbps = (sent * 64.0 * 8.0) / (5.0 * 1e6);
+            std::println("[Probe B] Local Hardware Tx Limit: {:.2f} Mbps ({} PPS)", hw_mbps, pps);
             tel.is_probing = false;
         }
 
@@ -88,7 +88,7 @@ namespace Scalpel::Probe {
         static void run_async_real_isp_probe(std::function<void(double, double)> on_complete) {
             std::println("[Probe C] Spawning asynchronous speedtest thread. Realtime engine will NOT block.");
 
-            // 启动独立后台线程执行耗时任务，完全脱离实时主干道
+            // 启动独立后台线程执行耗时任务，脱离实时主干道
             std::thread([cb = std::move(on_complete)]() {
                 std::array<char, 128> buffer{};
                 std::string result;
