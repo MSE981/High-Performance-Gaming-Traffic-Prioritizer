@@ -24,6 +24,47 @@
 
 
 namespace Scalpel {
+
+    // 利用抽象接口类消除 if-else 路由分支
+    struct ITrafficHandler {
+        virtual void handle(std::span<const uint8_t> pkt, size_t prio_idx) = 0;
+        virtual ~ITrafficHandler() = default;
+    };
+
+    // 极速通道处理器 (负责 Critical = 0 和 High = 1)
+    struct FastPathHandler final : public ITrafficHandler {
+        int tx_fd;
+        explicit FastPathHandler(int fd) : tx_fd(fd) {}
+
+        void handle(std::span<const uint8_t> pkt, size_t prio_idx) override {
+            int retries = 3;
+            while (true) {
+                if (send(tx_fd, pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) break;
+
+                int err = errno;
+                if (err == EMSGSIZE || err == EINVAL || (err != ENOBUFS && err != EAGAIN)) break;
+
+                if (--retries == 0) {
+                    if (prio_idx == 0) Telemetry::instance().dropped_critical.fetch_add(1, std::memory_order_relaxed);
+                    else Telemetry::instance().dropped_high.fetch_add(1, std::memory_order_relaxed);
+                    break;
+                }
+                std::this_thread::yield();
+            }
+        }
+    };
+
+    // 限速排队处理器 (负责 Normal = 2)
+    struct ShaperHandler final : public ITrafficHandler {
+        std::shared_ptr<Traffic::Shaper> shaper;
+        explicit ShaperHandler(std::shared_ptr<Traffic::Shaper> s) : shaper(std::move(s)) {}
+
+        void handle(std::span<const uint8_t> pkt, size_t /*prio_idx*/) override {
+            shaper->enqueue_normal(pkt);
+        }
+    };
+
+
     class App {
         // 改用 unique_ptr。RX 对象在线程间互不共享，完全消除内存竞争。
         std::unique_ptr<Engine::RawSocketManager> eth0, eth1;
@@ -140,36 +181,30 @@ namespace Scalpel {
                 std::println("\n[App] Bandwidth limit dynamically updated via Mode C Setter.");
                 });
 
-            // 使用结构体聚合局部状态，彻底消除臃肿的代码块
+            // 使用结构体聚合局部状态，消除臃肿的代码块
             Telemetry::BatchStats stats;
 
-            rx->registerCallback([&](std::span<const uint8_t> pkt) {
+            // 路由策略表初始化
+            auto fast_handler = std::make_shared<FastPathHandler>(tx_fd);
+            auto shaper_handler = std::make_shared<ShaperHandler>(shaper);
+            
+            // 数组映射：0=Critical, 1=High, 2=Normal
+            std::array<std::shared_ptr<ITrafficHandler>, 3> routing_table = {
+                fast_handler,   
+                fast_handler,   
+                shaper_handler  
+            };
+
+            rx->registerCallback([&, routing_table](std::span<const uint8_t> pkt) {
                 auto prio = processor.process(pkt);
+                const auto p_idx = static_cast<size_t>(prio);
+
+                // 数组偏移替代 if-else 统计
                 stats.pkts++; stats.bytes += pkt.size();
+                stats.prio_pkts[p_idx]++; stats.prio_bytes[p_idx] += pkt.size();
 
-                if (prio == Net::Priority::Critical) { stats.pkts_crit++; stats.bytes_crit += pkt.size(); }
-                else if (prio == Net::Priority::High) { stats.pkts_high++; stats.bytes_high += pkt.size(); }
-                else { stats.pkts_norm++; stats.bytes_norm += pkt.size(); }
-
-                if (prio == Net::Priority::Critical || prio == Net::Priority::High) {
-                    int retries = 3;
-                    while (true) {
-                        if (send(tx_fd, pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) break;
-
-                        int err = errno;
-                        if (err == EMSGSIZE || err == EINVAL) break;
-                        if (err != ENOBUFS && err != EAGAIN) break;
-
-                        if (--retries == 0) {
-                            if (prio == Net::Priority::Critical) tel.dropped_critical.fetch_add(1, std::memory_order_relaxed);
-                            else tel.dropped_high.fetch_add(1, std::memory_order_relaxed);
-                            break;
-                        }
-                        std::this_thread::yield();
-                }
-                else {
-                    shaper->enqueue_normal(pkt);
-                }
+                // 多态查表直接分发，彻底粉碎 Massive Loop 视觉污染！
+                routing_table[p_idx]->handle(pkt, p_idx);
 
                 // 批量提交统计数据，保持 Callback 简洁
                 if (stats.pkts % 32 == 0) {
