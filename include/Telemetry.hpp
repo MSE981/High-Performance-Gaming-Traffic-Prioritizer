@@ -26,6 +26,9 @@ namespace Scalpel {
         std::atomic<double> isp_pps{ 0.0 };
         std::atomic<bool> is_probing{ false };
 
+        // 核心热切换开关 (0/false = 限速模式, 1/true = 透明网桥模式)
+        std::atomic<bool> bridge_mode{ false };
+
         // 线程隔离心跳与丢包 (消除伪共享)
         alignas(64) std::atomic<uint64_t> last_heartbeat_core2{ 0 };
         alignas(64) std::atomic<uint64_t> last_heartbeat_core3{ 0 };
