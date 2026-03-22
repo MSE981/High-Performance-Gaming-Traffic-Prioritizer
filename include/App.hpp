@@ -266,16 +266,29 @@ namespace Scalpel {
             Scalpel::System::set_thread_affinity(1);
             auto& tel = Telemetry::instance();
             
-            uint64_t last_pkts[4] = {0, 0, 0, 0};
+            int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
+            if (tfd == -1) return;
+
+            struct itimerspec its{};
+            its.it_value.tv_sec = 1;      // 1秒后启动
+            its.it_value.tv_nsec = 0;
+            its.it_interval.tv_sec = 1;   // 每隔1秒触发一次
+            its.it_interval.tv_nsec = 0;
+
+            if (timerfd_settime(tfd, 0, &its, NULL) == -1) {
+                close(tfd);
+                return;
+            }
+
+            uint64_t expirations;
             uint64_t last_bytes[4] = {0, 0, 0, 0};
 
             while (!st.stop_requested()) {
-                std::this_thread::sleep_for(std::chrono::seconds(1));
+                // 真正的内核级阻塞，不受系统负载抖动影响
+                if (read(tfd, &expirations, sizeof(expirations)) <= 0) continue;
                 
-                // Map-Reduce 聚合：遍历各核心槽位，进行汇总计算
-                uint64_t total_pkts_down = tel.core_metrics[2].pkts.load(std::memory_order_relaxed);
+                // Map-Reduce 聚合逻辑
                 uint64_t total_bytes_down = tel.core_metrics[2].bytes.load(std::memory_order_relaxed);
-                uint64_t total_pkts_up = tel.core_metrics[3].pkts.load(std::memory_order_relaxed);
                 uint64_t total_bytes_up = tel.core_metrics[3].bytes.load(std::memory_order_relaxed);
 
                 double dl_mbps = (total_bytes_down - last_bytes[2]) * 8.0 / 1e6;
@@ -287,11 +300,13 @@ namespace Scalpel {
                 last_bytes[2] = total_bytes_down;
                 last_bytes[3] = total_bytes_up;
 
-                // 心跳检测
+                // 基于核心心跳的故障检测
                 if (time(nullptr) - tel.core_metrics[2].last_heartbeat > 100) led.set_red();
                 else led.set_green();
             }
+            close(tfd);
         }
     };
 }
+
 
