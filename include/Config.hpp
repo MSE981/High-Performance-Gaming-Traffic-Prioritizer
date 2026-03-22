@@ -1,4 +1,4 @@
-#pragma once
+ï»¿#pragma once
 #include <string>
 #include <cstdint>
 #include <fstream>
@@ -7,20 +7,20 @@
 #include <ranges> 
 
 namespace Scalpel::Config {
-    // ½Ó¿ÚÅäÖÃ (¸ÄÎª inline ÔÊĞíÔËĞĞÊ±ÓÉ Web ºó¶Ë¸²¸Ç)
+    // æ¥å£é…ç½® (æ”¹ä¸º inline å…è®¸è¿è¡Œæ—¶ç”± Web åç«¯è¦†ç›–)
     inline std::string IFACE_WAN = "eth0";
-    inline std::string IFACE_LAN = "eth1"; // USBÍø¿¨
+    inline std::string IFACE_LAN = "eth1"; // USBç½‘å¡
 
-    // Æô·¢Ê½ãĞÖµ
+    // å¯å‘å¼é˜ˆå€¼
     inline uint32_t LARGE_PACKET_THRESHOLD = 1000;
     inline uint32_t PUNISH_TRIGGER_COUNT = 30;
     inline uint32_t CLEANUP_INTERVAL = 10000;
 
-    // ¶Ë¿Ú°×Ãûµ¥´æ´¢½á¹¹
+    // ç«¯å£ç™½åå•å­˜å‚¨ç»“æ„
     struct PortRange { uint16_t start; uint16_t end; };
     inline std::vector<PortRange> GAME_PORTS = { {3074, 3074}, {27015, 27015}, {12000, 12999} };
 
-    // ÓÎÏ·¶Ë¿Ú°×Ãûµ¥ (ÔËĞĞÊ±±éÀúĞ£Ñé)
+    // æ¸¸æˆç«¯å£ç™½åå• (è¿è¡Œæ—¶éå†æ ¡éªŒ)
     inline bool is_game_port(uint16_t port) {
         for (const auto& range : GAME_PORTS) {
             if (port >= range.start && port <= range.end) return true;
@@ -28,7 +28,7 @@ namespace Scalpel::Config {
         return false;
     }
 
-    // ¶¯Ì¬¼ÓÔØÅäÖÃ
+    // åŠ¨æ€åŠ è½½é…ç½®
     inline void load_config(const std::string& path = "config.txt") {
         std::ifstream file(path);
         if (!file.is_open()) {
