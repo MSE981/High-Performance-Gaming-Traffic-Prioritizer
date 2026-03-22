@@ -65,10 +65,8 @@ namespace Scalpel::Traffic {
         }
     };
 
-    /**
-     * @brief 零动态分配环形缓冲区 (针对特定 Capacity 优化)
-     * @details 使用 std::array 替代 vector，PacketSlot 采用缓存行对齐防止伪共享。
-     */
+    // 零动态分配环形缓冲区 (针对特定 Capacity 优化)
+    // 使用 std::array 替代 vector，PacketSlot 采用缓存行对齐防止伪共享。
     template<size_t Capacity = 8192>
     class ZeroAllocRingBuffer {
         struct alignas(64) PacketSlot {
@@ -128,10 +126,8 @@ namespace Scalpel::Traffic {
         return TxResult::Congested;
     }
 
-    /**
-     * @brief 流量整形器
-     * @details 处理普通流量的入队、限速控制与硬件分发。
-     */
+    // 流量整形器
+    // 处理普通流量的入队、限速控制与硬件分发。
     class Shaper {
         ZeroAllocRingBuffer<8192> normal_queue;
         TokenBucket bucket;
@@ -195,3 +191,4 @@ namespace Scalpel::Traffic {
         }
     };
 }
+
