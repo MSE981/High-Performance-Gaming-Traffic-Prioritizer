@@ -14,6 +14,8 @@
 #include <net/ethernet.h>
 #include <arpa/inet.h>
 #include <string>
+#include <sys/timerfd.h>
+#include <unistd.h>
 
 namespace Scalpel::Probe {
     class Manager {       
@@ -37,14 +39,13 @@ namespace Scalpel::Probe {
             // 构造假 IPv4 头防止解析崩溃
             dummy_data[12] = 0x08; dummy_data[13] = 0x00; // Eth Proto
             dummy_data[14] = 0x45; // IP Ver/IHL
-            
-            auto start = std::chrono::high_resolution_clock::now();
+            auto start = std::chrono::steady_clock::now();
             uint64_t count = 0;
 
-            while (std::chrono::high_resolution_clock::now() - start < std::chrono::seconds(5)) {
+            // 纯粹的底层算法压测，移除 yield 以全速压榨 CPU 天花板
+            while (std::chrono::steady_clock::now() - start < std::chrono::seconds(5)) {
                 temp_proc.process(std::span{dummy_data});
                 count++;
-                __asm__ __volatile__("yield" ::: "memory");
             }
 
             double pps = count / 5.0;
@@ -53,29 +54,43 @@ namespace Scalpel::Probe {
             tel.is_probing = false;
         }
 
-        // 模式 B：ISP PPS 探测 (简单发包，需连接 eth0)
+        // 模式 B：ISP PPS 探测 (基于 timerfd 的确定性精确节流)
         static void run_isp_probe(int socket_fd) {
             auto& tel = Telemetry::instance();
             tel.is_probing = true;
             std::println("[Probe B] Probing ISP limits...");
             uint8_t pkt[64] = { 0 };
             std::memset(pkt, 0xEE, 64);
-            auto start = std::chrono::high_resolution_clock::now();
-            uint64_t sent = 0;
-            auto interval = std::chrono::nanoseconds(1000000000 / 1800000); // Target 1.8M PPS
+            
+            // 创建硬件单调定时器
+            int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
+            if (tfd == -1) return;
 
-            while (std::chrono::high_resolution_clock::now() - start < std::chrono::seconds(5)) {
-                auto loop_start = std::chrono::high_resolution_clock::now();
-                send(socket_fd, pkt, 64, MSG_DONTWAIT);
-                //只有网卡物理层真正接收了该包才计数
-                if (send(socket_fd, pkt, 64, MSG_DONTWAIT) >= 0) {
-                    sent++;
-                }
-                while (std::chrono::high_resolution_clock::now() - loop_start < interval) {
-                     __asm__ __volatile__("yield" ::: "memory");
+            struct itimerspec its{};
+            its.it_value.tv_sec = 0;
+            its.it_value.tv_nsec = 555; // 目标 1.8M PPS (约每 555 纳秒一包)
+            its.it_interval.tv_sec = 0;
+            its.it_interval.tv_nsec = 555;
+            timerfd_settime(tfd, 0, &its, NULL);
+
+            auto start = std::chrono::steady_clock::now();
+            uint64_t sent = 0;
+            uint64_t expirations = 0;
+
+            while (std::chrono::steady_clock::now() - start < std::chrono::seconds(5)) {
+                // 陷入内核阻塞沉睡，醒来时返回期间错过的滴答数
+                if (read(tfd, &expirations, sizeof(expirations)) > 0) {
+                    // 确定性批处理：错过多少滴答就补发多少包，彻底消灭忙等空转
+                    for (uint64_t i = 0; i < expirations; ++i) {
+                        if (send(socket_fd, pkt, 64, MSG_DONTWAIT) >= 0) {
+                            sent++;
+                        }
+                    }
                 }
             }
             
+            close(tfd);
+
             double pps = sent / 5.0;
             double hw_mbps = (sent * 64.0 * 8.0) / (5.0 * 1e6);
             std::println("[Probe B] Local Hardware Tx Limit: {:.2f} Mbps ({} PPS)", hw_mbps, pps);
