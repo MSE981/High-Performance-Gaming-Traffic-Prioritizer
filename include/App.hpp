@@ -65,7 +65,7 @@ namespace Scalpel {
     };
 
     class App {
-        // RX 对象在线程间互不共享，完全消除内存竞争。
+        // RX 对象在线程间互不共享，避免内存竞争。
         std::unique_ptr<Engine::RawSocketManager> eth0, eth1;
         HW::RGBLed led;
 
@@ -112,15 +112,40 @@ namespace Scalpel {
             Probe::Manager::run_isp_probe(eth0->get_fd());
 
 
+            // 4. 启动转发核心 (Core 2 & 3)
             int fd0 = eth0->get_fd();
             int fd1 = eth1->get_fd();
 
-            std::jthread t1([this, rx = std::move(eth0), tx_fd = fd1](std::stop_token st) mutable {
-                worker(std::move(rx), tx_fd, 2, true, Telemetry::instance().last_heartbeat_core2, st);
+            auto& tel = Telemetry::instance();
+
+            // 核心修复：在主线程预先创建上下行独立的整形器 (Shaper)
+            double dl_limit = tel.isp_down_limit_mbps.load();
+            if (dl_limit < 1.0) dl_limit = 500.0;
+            double ul_limit = tel.isp_up_limit_mbps.load();
+            if (ul_limit < 1.0) ul_limit = 50.0;
+
+            auto shaper_dl = std::make_shared<Traffic::Shaper>(dl_limit * 0.80);
+            auto shaper_ul = std::make_shared<Traffic::Shaper>(ul_limit * 0.80);
+
+            // 核心修复：只在主线程发起【一次】异步测速！彻底杜绝双重测速造成的带宽竞争与数据失准。
+            Probe::Manager::run_async_real_isp_probe([shaper_dl, shaper_ul](double dl, double ul) {
+                Telemetry::instance().isp_down_limit_mbps.store(dl, std::memory_order_relaxed);
+                Telemetry::instance().isp_up_limit_mbps.store(ul, std::memory_order_relaxed);
+
+                // 完美响应 PDF 第 7 章：通过 Setter 同时动态更新两个 Shaper 的限速
+                shaper_dl->set_rate_limit(dl * 0.80);
+                shaper_ul->set_rate_limit(ul * 0.80);
+                std::println("\n[App] Bandwidth limit dynamically updated via Mode C Setter.");
                 });
 
-            std::jthread t2([this, rx = std::move(eth1), tx_fd = fd0](std::stop_token st) mutable {
-                worker(std::move(rx), tx_fd, 3, false, Telemetry::instance().last_heartbeat_core3, st);
+            // T1 线程 (下载方向)：传入专属的 shaper_dl
+            std::jthread t1([this, rx = std::move(eth0), tx_fd = fd1, shpr = shaper_dl](std::stop_token st) mutable {
+                worker(std::move(rx), tx_fd, 2, true, shpr, Telemetry::instance().last_heartbeat_core2, st);
+                });
+
+            // T2 线程 (上传方向)：传入专属的 shaper_ul
+            std::jthread t2([this, rx = std::move(eth1), tx_fd = fd0, shpr = shaper_ul](std::stop_token st) mutable {
+                worker(std::move(rx), tx_fd, 3, false, shpr, Telemetry::instance().last_heartbeat_core3, st);
                 });
 
             shutdown_future = shutdown_promise.get_future();
