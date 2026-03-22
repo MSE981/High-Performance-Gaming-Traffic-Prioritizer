@@ -273,12 +273,13 @@ namespace Scalpel {
             Scalpel::System::set_realtime_priority();
 
             PacketConsumer consumer(tx_fd, down, shpr, hb);
-            rx->registerCallback([&consumer](std::span<const uint8_t> pkt) {
-                consumer.on_packet_event(pkt);
-            });
 
             while (!st.stop_requested()) {
-                rx->poll_and_dispatch(1);
+                // 零开销内联：直接将消费者逻辑作为模板参数传入，编译器将在底层抽空循环中 100% 内联。
+                rx->poll_and_dispatch([&consumer](std::span<const uint8_t> pkt) {
+                    consumer.on_packet_event(pkt);
+                }, 1);
+
                 if (!Telemetry::instance().bridge_mode.load(std::memory_order_relaxed)) {
                     shpr->process_queue(tx_fd);
                 }
@@ -296,5 +297,6 @@ namespace Scalpel {
         }
     };
 }
+
 
 

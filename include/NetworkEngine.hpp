@@ -12,14 +12,13 @@
 #include <net/ethernet.h>
 #include <net/if.h>
 #include <arpa/inet.h>
-#include <functional>
 #include <poll.h>   
 #include <print>  
 
 namespace Scalpel::Engine {
     class RawSocketManager {
 
-        // 显式禁止拷贝，防止内存安全问题
+        // 禁止拷贝
         RawSocketManager(const RawSocketManager&) = delete;
         RawSocketManager& operator=(const RawSocketManager&) = delete; 
 
@@ -27,11 +26,10 @@ namespace Scalpel::Engine {
         uint8_t* ring = nullptr;
         size_t ring_size = 0;
 
-        uint32_t rx_idx = 0; // 核心封装：将环形缓冲区索引隐藏在底层，拒绝应用层轮询
-        std::function<void(std::span<const uint8_t>)> onPacketReceived; // 核心封装：声明事件回调函数
+        uint32_t rx_idx = 0; // 环形缓冲区索引
 
         // TPACKET_V1/V2 默认配置
-		static constexpr uint32_t BLOCK_SIZE = 4096 * 16; // 4K * 816 = 32768 bytes
+        static constexpr uint32_t BLOCK_SIZE = 4096 * 16;
         static constexpr uint32_t FRAME_SIZE = 2048;
         static constexpr uint32_t BLOCK_NR = 1024;
         static constexpr uint32_t FRAME_NR = (BLOCK_SIZE * BLOCK_NR) / FRAME_SIZE;
@@ -40,7 +38,6 @@ namespace Scalpel::Engine {
         explicit RawSocketManager(std::string_view iface_name) : iface(iface_name) {}
 
         ~RawSocketManager() {
-            // mmap 失败时返回 MAP_FAILED 而不是 nullptr
             if (ring && ring != MAP_FAILED) munmap(ring, ring_size);
             if (fd >= 0) close(fd);
         }
@@ -55,22 +52,19 @@ namespace Scalpel::Engine {
             iface.copy(ifr.ifr_name, IFNAMSIZ - 1);
             if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) return std::unexpected("Interface lookup failed");
 
-            // --- 自动开启网卡混杂模式逻辑 ---
+            // --- 自动开启网卡混杂模式 ---
             struct ifreq ifr_p {};
             iface.copy(ifr_p.ifr_name, IFNAMSIZ - 1);
 
-            // 获取当前网卡标志位
             if (ioctl(fd, SIOCGIFFLAGS, &ifr_p) < 0) {
-                return std::unexpected("Failed to get interface flags for promisc mode");
+                return std::unexpected("Failed to get interface flags");
             }
 
-            // 加上混杂模式位并写回内核
             ifr_p.ifr_flags |= IFF_PROMISC;
             if (ioctl(fd, SIOCSIFFLAGS, &ifr_p) < 0) {
-                // 如果这里报错，通常是因为没加 CAP_NET_ADMIN 权限
-                return std::unexpected("Failed to set IFF_PROMISC. Check sudo/setcap permissions.");
+                return std::unexpected("Failed to set IFF_PROMISC. Check permissions.");
             }
-            std::println("[Engine] Promiscuous mode enabled on {}", iface);
+            std::println("[Engine] 接口 {} 已开启混杂模式", iface);
 
             // 3. 配置 PACKET_RX_RING
             tpacket_req req{
@@ -99,30 +93,29 @@ namespace Scalpel::Engine {
         }
 
         int get_fd() const { return fd; }
-        // 不再暴露 get_ring()，而是提供回调注册接口
-        void registerCallback(std::function<void(std::span<const uint8_t>)> cb) {
-            onPacketReceived = std::move(cb);
-        }
 
-        // 核心封装：底层网卡引擎负责阻塞等待、解析包头、并触发回调事件
-        // 通过 Blocking I/O 提供精确的时序与唤醒
-        void poll_and_dispatch(int timeout_ms = 1) {
+        // 核心包分发循环 (编译期多态优化)
+        // 模板参数实现处理逻辑的 100% 内联，消除虚函数开销。
+        template<typename Callback>
+        void poll_and_dispatch(Callback&& cb, int timeout_ms = 1) {
             struct pollfd pfd {};
             pfd.fd = fd;
             pfd.events = POLLIN;
 
-            // 1. 核心挂起点：线程在此休眠，直到网卡硬件触发中断事件
             poll(&pfd, 1, timeout_ms);
 
-            // 2. 事件被触发后：进入批量抽空模式 (Batch Drain)，连续触发回调
+            // 批量抽空环形缓冲区
             while (true) {
                 auto* hdr = reinterpret_cast<tpacket_hdr*>(ring + (rx_idx * FRAME_SIZE));
                 if (!(hdr->tp_status & TP_STATUS_USER)) break;
 
                 auto* sll = reinterpret_cast<sockaddr_ll*>(reinterpret_cast<uint8_t*>(hdr) + TPACKET_ALIGN(sizeof(tpacket_hdr)));
-                if (sll->sll_pkttype != PACKET_OUTGOING && onPacketReceived) {
+                
+                // 仅处理流入数据包，过滤流出干扰
+                if (sll->sll_pkttype != PACKET_OUTGOING) {
                     std::span<const uint8_t> pkt{ reinterpret_cast<uint8_t*>(hdr) + hdr->tp_mac, hdr->tp_len };
-                    onPacketReceived(pkt);
+                    // 核心调用：由于 cb 是模板参数，此处会被编译器 100% 内联
+                    cb(pkt);
                 }
 
                 hdr->tp_status = TP_STATUS_KERNEL;
