@@ -252,6 +252,9 @@ namespace Scalpel {
                 if (!Telemetry::instance().bridge_mode.load(std::memory_order_relaxed)) {
                     shpr->process_queue(tx_fd);
                 }
+                
+                // 无锁无调用的心跳滴答 (Tick-based Heartbeat)：底层汇编的单周期单指令，0 系统调用！
+                Telemetry::instance().core_metrics[core].last_heartbeat.fetch_add(1, std::memory_order_relaxed);
             }
         }
 
@@ -275,6 +278,7 @@ namespace Scalpel {
 
             uint64_t expirations;
             uint64_t last_bytes[4] = {0, 0, 0, 0};
+            uint64_t last_ticks[4] = {0, 0, 0, 0};
 
             while (!st.stop_requested()) {
                 // 真正的内核级阻塞，不受系统负载抖动影响
@@ -293,14 +297,17 @@ namespace Scalpel {
                 last_bytes[2] = total_bytes_down;
                 last_bytes[3] = total_bytes_up;
 
-                // 基于核心心跳的故障检测
-                if (time(nullptr) - tel.core_metrics[2].last_heartbeat > 100) led.set_red();
+                // 基于核心心跳滴答的故障检测 (高低频解耦哲学)
+                uint64_t current_tick = tel.core_metrics[2].last_heartbeat.load(std::memory_order_relaxed);
+                if (current_tick == last_ticks[2]) led.set_red(); // 1 秒内滴答值毫无变化，说明线程绝地卡死
                 else led.set_green();
+                last_ticks[2] = current_tick;
             }
             close(tfd);
         }
     };
 }
+
 
 
 
