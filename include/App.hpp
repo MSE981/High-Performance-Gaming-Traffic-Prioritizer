@@ -25,13 +25,14 @@
 
 namespace Scalpel {
 
-    // 利用抽象接口类消除 if-else 路由分支
+    // =========================================================================
+    // 1. 独立解耦的路由处理器 
+    // =========================================================================
     struct ITrafficHandler {
         virtual void handle(std::span<const uint8_t> pkt, size_t prio_idx) = 0;
         virtual ~ITrafficHandler() = default;
     };
 
-    // 极速通道处理器 (负责 Critical = 0 和 High = 1)
     struct FastPathHandler final : public ITrafficHandler {
         int tx_fd;
         explicit FastPathHandler(int fd) : tx_fd(fd) {}
@@ -54,7 +55,6 @@ namespace Scalpel {
         }
     };
 
-    // 限速排队处理器 (负责 Normal = 2)
     struct ShaperHandler final : public ITrafficHandler {
         std::shared_ptr<Traffic::Shaper> shaper;
         explicit ShaperHandler(std::shared_ptr<Traffic::Shaper> s) : shaper(std::move(s)) {}
@@ -64,10 +64,64 @@ namespace Scalpel {
         }
     };
 
+
+    // =========================================================================
+    // 2. 独立的事件消费者 
+    // =========================================================================
+    class PacketConsumer {
+        int tx_fd;
+        bool is_download;
+        std::atomic<uint64_t>& heartbeat;
+
+        Logic::HeuristicProcessor processor;
+        Telemetry::BatchStats stats;
+        std::array<std::array<std::shared_ptr<ITrafficHandler>, 3>, 2> active_routes;
+
+    public:
+        PacketConsumer(int tx_fd, bool is_down, std::shared_ptr<Traffic::Shaper> shaper, std::atomic<uint64_t>& hb)
+            : tx_fd(tx_fd), is_download(is_down), heartbeat(hb) {
+
+            auto fast_handler = std::make_shared<FastPathHandler>(tx_fd);
+            auto shaper_handler = std::make_shared<ShaperHandler>(shaper);
+
+            // 行 0: Shaping Mode (限速模式)
+            // 行 1: Bridge Mode (透明网桥模式)
+            active_routes = { {
+                { fast_handler, fast_handler, shaper_handler },
+                { fast_handler, fast_handler, fast_handler }
+            } };
+        }
+
+        //将冗长的 Lambda 闭包剥离为独立的类方法！
+        void on_packet_event(std::span<const uint8_t> pkt) {
+            auto prio = processor.process(pkt);
+            const auto p_idx = static_cast<size_t>(prio);
+
+            stats.pkts++;
+            stats.bytes += pkt.size();
+            stats.prio_pkts[p_idx]++;
+            stats.prio_bytes[p_idx] += pkt.size();
+
+            size_t mode_idx = Telemetry::instance().bridge_mode.load(std::memory_order_relaxed);
+            active_routes[mode_idx][p_idx]->handle(pkt, p_idx);
+
+            if (stats.pkts % 32 == 0) {
+                Telemetry::instance().commit_batch(stats, is_download);
+                heartbeat.store(time(nullptr), std::memory_order_relaxed);
+                stats.reset();
+            }
+        }
+    };
+
+
+    // =========================================================================
+    // 3. 主应用程序，只负责管理生命周期与 Reactor 事件循环
+    // =========================================================================
     class App {
-        // RX 对象在线程间互不共享，避免内存竞争。
         std::unique_ptr<Engine::RawSocketManager> eth0, eth1;
         HW::RGBLed led;
+        std::promise<void> shutdown_promise;
+        std::future<void> shutdown_future;
 
     public:
         std::expected<void, std::string> init() {
@@ -111,14 +165,11 @@ namespace Scalpel {
             Probe::Manager::run_internal_stress();
             Probe::Manager::run_isp_probe(eth0->get_fd());
 
-
-            //启动转发核心 (Core 2 & 3)
             int fd0 = eth0->get_fd();
             int fd1 = eth1->get_fd();
 
             auto& tel = Telemetry::instance();
 
-            //在主线程预先创建上下行独立的整形器 (Shaper)
             double dl_limit = tel.isp_down_limit_mbps.load();
             if (dl_limit < 1.0) dl_limit = 500.0;
             double ul_limit = tel.isp_up_limit_mbps.load();
@@ -127,25 +178,21 @@ namespace Scalpel {
             auto shaper_dl = std::make_shared<Traffic::Shaper>(dl_limit * 0.80);
             auto shaper_ul = std::make_shared<Traffic::Shaper>(ul_limit * 0.80);
 
-            // 只在主线程发起【一次】异步测速！彻底杜绝双重测速造成的带宽竞争与数据失准。
             Probe::Manager::run_async_real_isp_probe([shaper_dl, shaper_ul](double dl, double ul) {
                 Telemetry::instance().isp_down_limit_mbps.store(dl, std::memory_order_relaxed);
                 Telemetry::instance().isp_up_limit_mbps.store(ul, std::memory_order_relaxed);
 
-                // 通过 Setter 同时动态更新两个 Shaper 的限速
                 shaper_dl->set_rate_limit(dl * 0.80);
                 shaper_ul->set_rate_limit(ul * 0.80);
                 std::println("\n[App] Bandwidth limit dynamically updated via Mode C Setter.");
                 });
 
-            // T1 线程 (下载方向)：传入专属的 shaper_dl
             std::jthread t1([this, rx = std::move(eth0), tx_fd = fd1, shpr = shaper_dl](std::stop_token st) mutable {
-                worker(std::move(rx), tx_fd, 2, true, shpr, Telemetry::instance().last_heartbeat_core2, st);
+                worker_event_loop(std::move(rx), tx_fd, 2, true, shpr, Telemetry::instance().last_heartbeat_core2, st);
                 });
 
-            // T2 线程 (上传方向)：传入专属的 shaper_ul
             std::jthread t2([this, rx = std::move(eth1), tx_fd = fd0, shpr = shaper_ul](std::stop_token st) mutable {
-                worker(std::move(rx), tx_fd, 3, false, shpr, Telemetry::instance().last_heartbeat_core3, st);
+                worker_event_loop(std::move(rx), tx_fd, 3, false, shpr, Telemetry::instance().last_heartbeat_core3, st);
                 });
 
             shutdown_future = shutdown_promise.get_future();
@@ -159,56 +206,24 @@ namespace Scalpel {
         }
 
     private:
-        std::promise<void> shutdown_promise;
-        std::future<void> shutdown_future;
-
-        void worker(std::unique_ptr<Engine::RawSocketManager> rx, int tx_fd, int core_id, bool is_download, std::shared_ptr<Traffic::Shaper> shaper, auto& heartbeat, std::stop_token st) {
+        void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx, int tx_fd, int core_id, bool is_download, std::shared_ptr<Traffic::Shaper> shaper, auto& heartbeat, std::stop_token st) {
             Scalpel::System::set_thread_affinity(core_id);
             Scalpel::System::set_realtime_priority();
 
-            Logic::HeuristicProcessor processor;
+            // 1. 初始化消费者
+            PacketConsumer consumer(tx_fd, is_download, shaper, heartbeat);
 
-            // 使用结构体聚合局部状态
-            Telemetry::BatchStats stats;
-
-            // 路由策略表初始化
-            auto fast_handler = std::make_shared<FastPathHandler>(tx_fd);
-            auto shaper_handler = std::make_shared<ShaperHandler>(shaper);
-
-            // Shaping Mode (限速模式)   -> [Fast, Fast, Queue]
-            // Bridge Mode (透明网桥模式) -> [Fast, Fast, Fast]
-            std::array<std::array<std::shared_ptr<ITrafficHandler>, 3>, 2> active_routes = { {
-                { fast_handler, fast_handler, shaper_handler }, // Mode 0
-                { fast_handler, fast_handler, fast_handler }    // Mode 1
-            } };
-
-            // Callback-based event passing between classes
-            rx->registerCallback([&, active_routes](std::span<const uint8_t> pkt) {
-                auto prio = processor.process(pkt);
-                const auto p_idx = static_cast<size_t>(prio);
-
-                stats.pkts++;
-                stats.bytes += pkt.size();
-                stats.prio_pkts[p_idx]++;
-                stats.prio_bytes[p_idx] += pkt.size();
-
-                //bool 直接转为 0 或 1，作为二维数组的第一维索引
-                size_t mode_idx = Telemetry::instance().bridge_mode.load(std::memory_order_relaxed);
-                active_routes[mode_idx][p_idx]->handle(pkt, p_idx);
-
-                if (stats.pkts % 32 == 0) {
-                    Telemetry::instance().commit_batch(stats, is_download);
-                    heartbeat.store(time(nullptr), std::memory_order_relaxed);
-                    stats.reset();
-                }
+            // 2. 绑定事件回调
+            rx->registerCallback([&consumer](std::span<const uint8_t> pkt) {
+                consumer.on_packet_event(pkt);
                 });
 
             uint64_t idle_loops = 0;
 
-            // 由底层事件驱动的主循环
+            // 3. 底层事件驱动主循环
             while (!st.stop_requested()) {
-                rx->poll_and_dispatch(1);      // 阻塞监听事件，触发 Callback
-                shaper->process_queue(tx_fd);  // 定时抽空限速队列
+                rx->poll_and_dispatch(1);      // 阻塞监听事件，硬件中断将主动 Push 触发 Callback
+                shaper->process_queue(tx_fd);  // 定时器事件：抽空限速队列
 
                 if (++idle_loops % 1000 == 0) {
                     heartbeat.store(time(nullptr), std::memory_order_relaxed);
@@ -253,11 +268,9 @@ namespace Scalpel {
                 double mbps_down = ((cur_bytes_down - last_bytes_down) * 8.0 / 1e6) / seconds;
                 double mbps_up = ((cur_bytes_up - last_bytes_up) * 8.0 / 1e6) / seconds;
 
-                // 获取当前工作模式并转换为直观的字符串
                 bool is_bridge = tel.bridge_mode.load(std::memory_order_relaxed);
                 const char* mode_str = is_bridge ? "BRIDGE" : "SHAPER";
 
-                // 使用 \r 覆盖当前行，加入运行模式指示器，全方位展示引擎状态
                 std::print("\r Mode:[{:<6}] | Mbps[DL:{:5.1f} UL:{:5.1f}] | PPS[C:{:<4} H:{:<4} N:{:<5}] | Drp[C:{} H:{} N:{:<3}]  ",
                     mode_str, mbps_down, mbps_up, pps_crit, pps_high, pps_norm, drops_crit, drops_high, drops_norm);
                 std::cout.flush();
