@@ -2,7 +2,7 @@
 #include <string>
 #include <cstdint>
 #include <fstream>
-#include <vector>
+#include <array>
 #include <map>
 #include <print>  
 #include <ranges> 
@@ -20,7 +20,7 @@ namespace Scalpel::Config {
 
     // 游戏协议端口白名单 (默认值)
     struct PortRange { uint16_t start; uint16_t end; };
-    inline std::vector<PortRange> GAME_PORTS = { {3074, 3074}, {27015, 27015}, {12000, 12999} };
+    inline std::array<PortRange, 3> GAME_PORTS = {{ {3074, 3074}, {27015, 27015}, {12000, 12999} }};
 
     // 软路由功能：特定终端 IP 限速表
     inline std::map<uint32_t, double> IP_LIMIT_MAP;
@@ -82,3 +82,4 @@ namespace Scalpel::Config {
         std::println("[Config] 配置文件加载完成: {}", path);
     }
 }
+

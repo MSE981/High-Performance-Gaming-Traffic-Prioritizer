@@ -14,6 +14,7 @@
 #include <net/ethernet.h>
 #include <arpa/inet.h>
 #include <string>
+#include <thread>
 #include <sys/timerfd.h>
 #include <unistd.h>
 
@@ -103,8 +104,8 @@ namespace Scalpel::Probe {
         static void run_async_real_isp_probe(std::function<void(double, double)> on_complete) {
             std::println("[Probe C] Spawning asynchronous speedtest thread. Realtime engine will NOT block.");
 
-            // 启动独立后台线程执行耗时任务，脱离实时主干道
-            std::thread([cb = std::move(on_complete)]() {
+            // 启动独立后台线程执行耗时任务，脱离实时主干道 (C++20/23 规范，使用 jthread)
+            std::jthread([cb = std::move(on_complete)]() {
                 std::array<char, 128> buffer{};
                 std::string result;
 
@@ -146,3 +147,4 @@ namespace Scalpel::Probe {
         }
     };
 }
+
