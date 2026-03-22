@@ -37,14 +37,10 @@ namespace Scalpel {
     using RouteFunc = void (*)(const RouteContext& ctx, std::span<const uint8_t> pkt, size_t prio_idx, int core_id);
 
     static void fast_path_handler(const RouteContext& ctx, std::span<const uint8_t> pkt, size_t prio_idx, int core_id) {
-        int retries = 3;
-        while (retries--) {
-            if (send(ctx.tx_fd, pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) return;
-            if (errno != ENOBUFS && errno != EAGAIN) break;
-            std::this_thread::yield();
+        if (send(ctx.tx_fd, pkt.data(), pkt.size(), MSG_DONTWAIT) < 0) {
+            // 遵守 ISR "立即完成" 与绝对零阻塞原则：如果发送缓冲区满，则果断尾丢弃，绝不挂起或轮询重试
+            Telemetry::instance().core_metrics[core_id].dropped[prio_idx].fetch_add(1, std::memory_order_relaxed);
         }
-        // 写入端隔离：仅操作当前 core 的丢包计数器
-        Telemetry::instance().core_metrics[core_id].dropped[prio_idx].fetch_add(1, std::memory_order_relaxed);
     }
 
     static void shaper_handler(const RouteContext& ctx, std::span<const uint8_t> pkt, size_t /*prio_idx*/, int /*core_id*/) {
@@ -307,6 +303,7 @@ namespace Scalpel {
         }
     };
 }
+
 
 
 

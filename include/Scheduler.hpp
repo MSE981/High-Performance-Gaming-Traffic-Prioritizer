@@ -117,13 +117,11 @@ namespace Scalpel::Traffic {
     // 底层硬件发送结果定义
     enum class TxResult : size_t { Success = 0, Congested = 1, Fatal = 2 };
 
-    // 硬件发送重试抽象 (针对 Raw Socket 进行 ENOBUFS 优化)
+    // 硬件发送重试抽象 (零阻塞拦截)
     inline TxResult try_hardware_send(int fd, std::span<const uint8_t> pkt) {
-        for (int retries = 3; retries > 0; --retries, std::this_thread::yield()) {
-            if (send(fd, pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) return TxResult::Success;
-            if (errno != ENOBUFS && errno != EAGAIN) return TxResult::Fatal;
-        }
-        return TxResult::Congested;
+        if (send(fd, pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) return TxResult::Success;
+        if (errno == ENOBUFS || errno == EAGAIN) return TxResult::Congested;
+        return TxResult::Fatal;
     }
 
     // 流量整形器
@@ -191,4 +189,5 @@ namespace Scalpel::Traffic {
         }
     };
 }
+
 
