@@ -57,6 +57,52 @@ namespace Scalpel {
         }
     };
 
+    // =========================================================================
+    // 1.5 辅助工具：基于 PDF 推荐的 FNV-1a 静态哈希表 (针对嵌入式实时性能优化)
+    // =========================================================================
+    template<typename T, size_t Capacity = 256>
+    class StaticIpMap {
+        struct Entry {
+            uint32_t key = 0;
+            T value = nullptr;
+            bool occupied = false;
+        };
+        std::array<Entry, Capacity> table{};
+
+        static uint32_t fnv1a_hash(uint32_t val) {
+            uint32_t h = 2166136261U;
+            h ^= (val & 0xFF); h *= 16777619U;
+            h ^= ((val >> 8) & 0xFF); h *= 16777619U;
+            h ^= ((val >> 16) & 0xFF); h *= 16777619U;
+            h ^= ((val >> 24) & 0xFF); h *= 16777619U;
+            return h;
+        }
+
+    public:
+        void insert(uint32_t ip, T val) {
+            uint32_t h = fnv1a_hash(ip) % Capacity;
+            for (size_t i = 0; i < Capacity; ++i) {
+                size_t idx = (h + i) % Capacity;
+                if (!table[idx].occupied || table[idx].key == ip) {
+                    table[idx].key = ip;
+                    table[idx].value = val;
+                    table[idx].occupied = true;
+                    return;
+                }
+            }
+        }
+
+        T find(uint32_t ip) const {
+            uint32_t h = fnv1a_hash(ip) % Capacity;
+            for (size_t i = 0; i < Capacity; ++i) {
+                size_t idx = (h + i) % Capacity;
+                if (!table[idx].occupied) return nullptr;
+                if (table[idx].key == ip) return table[idx].value;
+            }
+            return nullptr;
+        }
+    };
+
 
     // =========================================================================
     // 2. 数据面：事件消费者模型 (PacketConsumer) - 处理核心逻辑
@@ -69,12 +115,10 @@ namespace Scalpel {
         Logic::HeuristicProcessor processor;
         Telemetry::BatchStats stats;
         
-        // 路由通路映射：[工作模式][优先级索引]
-        // 工作模式 0 = 加速 (Shaping), 1 = 通透 (Bridge)
         std::array<std::array<std::shared_ptr<ITrafficHandler>, 3>, 2> routes;
 
-        // 软路由：基于 IP 的独立限速处理器
-        std::map<uint32_t, std::shared_ptr<ITrafficHandler>> ip_shapers;
+        // 软路由：基于 FNV-1a 静态哈希表的独立限速器池 (零动态分配)
+        StaticIpMap<std::shared_ptr<ITrafficHandler>, 256> ip_shaper_map;
 
     public:
         PacketConsumer(int tx_fd, bool is_down, std::shared_ptr<Traffic::Shaper> global_shaper, std::atomic<uint64_t>& hb)
@@ -91,23 +135,23 @@ namespace Scalpel {
             // 预加载特定终端的限速处理器
             for (auto const& [ip, rate] : Config::IP_LIMIT_MAP) {
                 auto s = std::make_shared<Traffic::Shaper>(rate);
-                ip_shapers[ip] = std::make_shared<ShaperHandler>(s);
+                ip_shaper_map.insert(ip, std::make_shared<ShaperHandler>(s));
             }
         }
 
         void on_packet_event(std::span<const uint8_t> pkt) {
-            // 软路由：检查是否存在 IP 特定限速规则 (IPv4 Offset 26/30)
+            // 实时路径：基于静态哈希表的 IP 匹配
             if (pkt.size() > 34) {
                 uint32_t target_ip = is_download ? *reinterpret_cast<const uint32_t*>(&pkt[30]) 
                                                 : *reinterpret_cast<const uint32_t*>(&pkt[26]);
-                auto it = ip_shapers.find(target_ip);
-                if (it != ip_shapers.end()) {
-                    it->second->handle(pkt, 2); // 强制进入限速队列
+                auto handler = ip_shaper_map.find(target_ip);
+                if (handler) {
+                    handler->handle(pkt, 2);
                     return;
                 }
             }
 
-            // 游戏加速处理逻辑
+            // 游戏加速逻辑
             auto prio = processor.process(pkt);
             const size_t p_idx = static_cast<size_t>(prio);
 
@@ -139,7 +183,6 @@ namespace Scalpel {
 
     public:
         std::expected<void, std::string> init() {
-            // 1. 关闭网卡硬件分载，确保 Raw Socket 获得原始包 (Core 2/3)
             Utils::Network::disable_hardware_offloads(Config::IFACE_WAN);
             Utils::Network::disable_hardware_offloads(Config::IFACE_LAN);
 
@@ -154,34 +197,21 @@ namespace Scalpel {
 
         void run() {
             std::println("=== Scalpel High-Performance Software Router ===");
-            
-            // 同步配置文件中的运行模式
             Telemetry::instance().bridge_mode.store(!Config::ENABLE_ACCELERATION, std::memory_order_relaxed);
-
             Scalpel::System::lock_cpu_frequency();
 
-            // Core 0: 独占渲染面 (Graphics Plane) - 未来接入 DRM/KMS
-            std::jthread ui_thread([this](std::stop_token st) { 
-                ui_render_loop(st); 
-            });
+            std::jthread ui_thread([this](std::stop_token st) { ui_render_loop(st); });
+            std::jthread monitor([this](std::stop_token st) { watchdog_loop(st); });
 
-            // Core 1: 控制面 (Control Plane) & 监控
-            std::jthread monitor([this](std::stop_token st) { 
-                watchdog_loop(st); 
-            });
-
-            // 获取基础网络信息
             std::string gw_ip = Utils::Network::get_gateway_ip();
             Utils::Network::force_arp_resolution(gw_ip);
 
-            // 网络探测与压力预演
             Probe::Manager::run_internal_stress();
             Probe::Manager::run_isp_probe(eth0->get_fd());
 
             int fd0 = eth0->get_fd();
             int fd1 = eth1->get_fd();
 
-            // 数据面逻辑初始化
             auto& tel = Telemetry::instance();
             double dl = tel.isp_down_limit_mbps.load() > 1.0 ? tel.isp_down_limit_mbps.load() : 500.0;
             double ul = tel.isp_up_limit_mbps.load() > 1.0 ? tel.isp_up_limit_mbps.load() : 50.0;
@@ -189,12 +219,10 @@ namespace Scalpel {
             auto shaper_dl = std::make_shared<Traffic::Shaper>(dl * 0.85);
             auto shaper_ul = std::make_shared<Traffic::Shaper>(ul * 0.85);
 
-            // Core 2: 转发数据面 A (WAN -> LAN)
             std::jthread t1([this, rx = std::move(eth0), tx_fd = fd1, shpr = shaper_dl](std::stop_token st) mutable {
                 worker_event_loop(std::move(rx), tx_fd, 2, true, shpr, Telemetry::instance().last_heartbeat_core2, st);
             });
 
-            // Core 3: 转发数据面 B (LAN -> WAN)
             std::jthread t2([this, rx = std::move(eth1), tx_fd = fd0, shpr = shaper_ul](std::stop_token st) mutable {
                 worker_event_loop(std::move(rx), tx_fd, 3, false, shpr, Telemetry::instance().last_heartbeat_core3, st);
             });
@@ -207,17 +235,14 @@ namespace Scalpel {
         void stop() { shutdown_promise.set_value(); }
 
     private:
-        // Core 0 渲染循环占位符
         void ui_render_loop(std::stop_token st) {
             Scalpel::System::set_thread_affinity(0);
             while (!st.stop_requested()) {
-                // 16.6ms 物理步进计算
                 std::this_thread::sleep_for(std::chrono::microseconds(16666)); 
             }
         }
 
-        // 数据平面主循环 (Core 2/3)
-        void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx, int tx_fd, int core, bool down, std::shared_ptr<Traffic::Shaper> shpr, auto& hb, std::stop_token st) {
+        void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx, int tx_fd, int core, bool down, std::shared_ptr<Traffic::Shaper> shpr, std::atomic<uint64_t>& hb, std::stop_token st) {
             Scalpel::System::set_thread_affinity(core);
             Scalpel::System::set_realtime_priority();
 
@@ -228,23 +253,21 @@ namespace Scalpel {
 
             while (!st.stop_requested()) {
                 rx->poll_and_dispatch(1);
-                // 非桥接模式下处理限速队列
                 if (!Telemetry::instance().bridge_mode.load(std::memory_order_relaxed)) {
                     shpr->process_queue(tx_fd);
                 }
             }
         }
 
-        // 控制面监控循环 (Core 1)
         void watchdog_loop(std::stop_token st) {
             Scalpel::System::set_thread_affinity(1);
             auto& tel = Telemetry::instance();
             while (!st.stop_requested()) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
-                // 打印状态统计 (略...)
                 if (time(nullptr) - tel.last_heartbeat_core2 > 100) led.set_red();
                 else led.set_green();
             }
         }
     };
 }
+
