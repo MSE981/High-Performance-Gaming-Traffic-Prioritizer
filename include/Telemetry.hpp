@@ -1,16 +1,16 @@
-#pragma once
+ï»¿#pragma once
 #include <atomic>
 #include <cstdint>
 
 namespace Scalpel {
     struct Telemetry {
-        // Á÷Á¿Í³¼Æ (·ÖÀëÉÏÏÂĞĞ)
+        // æµé‡ç»Ÿè®¡ (åˆ†ç¦»ä¸Šä¸‹è¡Œ)
         std::atomic<uint64_t> pkts_down{ 0 };
         std::atomic<uint64_t> bytes_down{ 0 };
         std::atomic<uint64_t> pkts_up{ 0 };
         std::atomic<uint64_t> bytes_up{ 0 };
 
-        // ·Ö¼¶Í³¼Æ
+        // åˆ†çº§ç»Ÿè®¡
         std::atomic<uint64_t> pkts_critical{ 0 };
         std::atomic<uint64_t> pkts_high{ 0 };
         std::atomic<uint64_t> pkts_normal{ 0 };
@@ -18,7 +18,7 @@ namespace Scalpel {
         std::atomic<uint64_t> bytes_high{ 0 };
         std::atomic<uint64_t> bytes_normal{ 0 };
 
-        // Õï¶ÏÊı¾İ
+        // è¯Šæ–­æ•°æ®
         std::atomic<double> internal_limit_mbps{ 0.0 };
         std::atomic<double> isp_down_limit_mbps{ 0.0 };
         std::atomic<double> isp_up_limit_mbps{ 0.0 };
@@ -26,10 +26,10 @@ namespace Scalpel {
         std::atomic<double> isp_pps{ 0.0 };
         std::atomic<bool> is_probing{ false };
 
-        // ºËĞÄÈÈÇĞ»»¿ª¹Ø (0/false = ÏŞËÙÄ£Ê½, 1/true = Í¸Ã÷ÍøÇÅÄ£Ê½)
+        // æ ¸å¿ƒçƒ­åˆ‡æ¢å¼€å…³ (0/false = é™é€Ÿæ¨¡å¼, 1/true = é€æ˜ç½‘æ¡¥æ¨¡å¼)
         std::atomic<bool> bridge_mode{ false };
 
-        // Ïß³Ì¸ôÀëĞÄÌøÓë¶ª°ü (Ïû³ıÎ±¹²Ïí)
+        // çº¿ç¨‹éš”ç¦»å¿ƒè·³ä¸ä¸¢åŒ… (æ¶ˆé™¤ä¼ªå…±äº«)
         alignas(64) std::atomic<uint64_t> last_heartbeat_core2{ 0 };
         alignas(64) std::atomic<uint64_t> last_heartbeat_core3{ 0 };
         alignas(64) std::atomic<uint64_t> dropped_critical{ 0 };
@@ -41,7 +41,7 @@ namespace Scalpel {
             return inst;
         }
 
-        // Êı¾İÇı¶¯µÄÅúÁ¿Í³¼Æ½á¹¹Ìå
+        // æ•°æ®é©±åŠ¨çš„æ‰¹é‡ç»Ÿè®¡ç»“æ„ä½“
         struct BatchStats {
             uint64_t pkts = 0, bytes = 0;
             uint64_t prio_pkts[3] = { 0, 0, 0 };
@@ -49,7 +49,7 @@ namespace Scalpel {
             void reset() { *this = BatchStats{}; }
         };
 
-        // O(1) ÅúÁ¿Ìá½»½Ó¿Ú
+        // O(1) æ‰¹é‡æäº¤æ¥å£
         void commit_batch(const BatchStats& s, bool is_download) {
             if (is_download) {
                 pkts_down.fetch_add(s.pkts, std::memory_order_relaxed);
