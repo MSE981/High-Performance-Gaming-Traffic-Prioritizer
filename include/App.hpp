@@ -161,17 +161,19 @@ namespace Scalpel {
 
             Telemetry::BatchStats stats;
 
+            // 路由策略表初始化
             auto fast_handler = std::make_shared<FastPathHandler>(tx_fd);
             auto shaper_handler = std::make_shared<ShaperHandler>(shaper);
 
-            std::array<std::shared_ptr<ITrafficHandler>, 3> routing_table = {
-                fast_handler,
-                fast_handler,
-                shaper_handler
-            };
+            // Shaping Mode (限速模式)   -> [Fast, Fast, Queue]
+            // Bridge Mode (透明网桥模式) -> [Fast, Fast, Fast]
+            std::array<std::array<std::shared_ptr<ITrafficHandler>, 3>, 2> active_routes = { {
+                { fast_handler, fast_handler, shaper_handler }, // Mode 0
+                { fast_handler, fast_handler, fast_handler }    // Mode 1
+            } };
 
-            // 基于回调的类间事件传递
-            rx->registerCallback([&, routing_table](std::span<const uint8_t> pkt) {
+            // Callback-based event passing between classes
+            rx->registerCallback([&, active_routes](std::span<const uint8_t> pkt) {
                 auto prio = processor.process(pkt);
                 const auto p_idx = static_cast<size_t>(prio);
 
@@ -180,8 +182,9 @@ namespace Scalpel {
                 stats.prio_pkts[p_idx]++;
                 stats.prio_bytes[p_idx] += pkt.size();
 
-                // O(1) 多态查表直接分发
-                routing_table[p_idx]->handle(pkt, p_idx);
+                //bool 直接转为 0 或 1，作为二维数组的第一维索引
+                size_t mode_idx = Telemetry::instance().bridge_mode.load(std::memory_order_relaxed);
+                active_routes[mode_idx][p_idx]->handle(pkt, p_idx);
 
                 if (stats.pkts % 32 == 0) {
                     Telemetry::instance().commit_batch(stats, is_download);
@@ -240,8 +243,13 @@ namespace Scalpel {
                 double mbps_down = ((cur_bytes_down - last_bytes_down) * 8.0 / 1e6) / seconds;
                 double mbps_up = ((cur_bytes_up - last_bytes_up) * 8.0 / 1e6) / seconds;
 
-                std::print("\r Mbps[DL:{:5.1f} UL:{:5.1f}] | PPS[C:{:<4} H:{:<4} N:{:<5}] | Drp[C:{} H:{} N:{:<3}]  ",
-                    mbps_down, mbps_up, pps_crit, pps_high, pps_norm, drops_crit, drops_high, drops_norm);
+                // 获取当前工作模式并转换为直观的字符串
+                bool is_bridge = tel.bridge_mode.load(std::memory_order_relaxed);
+                const char* mode_str = is_bridge ? "BRIDGE" : "SHAPER";
+
+                // 使用 \r 覆盖当前行，加入运行模式指示器，全方位展示引擎状态
+                std::print("\r Mode:[{:<6}] | Mbps[DL:{:5.1f} UL:{:5.1f}] | PPS[C:{:<4} H:{:<4} N:{:<5}] | Drp[C:{} H:{} N:{:<3}]  ",
+                    mode_str, mbps_down, mbps_up, pps_crit, pps_high, pps_norm, drops_crit, drops_high, drops_norm);
                 std::cout.flush();
 
                 last_pkts_down = cur_pkts_down; last_bytes_down = cur_bytes_down;
