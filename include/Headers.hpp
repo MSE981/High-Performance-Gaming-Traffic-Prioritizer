@@ -1,4 +1,4 @@
-#pragma once
+ï»¿#pragma once
 #include <cstdint>
 #include <netinet/in.h>
 
@@ -41,7 +41,7 @@ namespace Scalpel::Net {
         uint16_t dest;
         uint32_t seq;
         uint32_t ack_seq;
-        uint16_t flags; // °üº¬ Data Offset, Reserved ºÍ TCP Flags
+        uint16_t flags; // åŒ…å« Data Offset, Reserved å’Œ TCP Flags
         uint16_t window;
         uint16_t check;
         uint16_t urg_ptr;
