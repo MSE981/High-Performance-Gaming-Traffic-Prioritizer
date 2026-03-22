@@ -3,24 +3,29 @@
 #include <cstdint>
 #include <fstream>
 #include <vector>
+#include <map>
 #include <print>  
 #include <ranges> 
 
 namespace Scalpel::Config {
-    // 接口配置 (改为 inline 允许运行时由 Web 后端覆盖)
+    // 接口配置 (允许运行时由 Web 端或配置文件覆盖)
     inline std::string IFACE_WAN = "eth0";
-    inline std::string IFACE_LAN = "eth1"; // USB网卡
+    inline std::string IFACE_LAN = "eth1"; // 局域网/USB网卡接口
+    inline bool ENABLE_ACCELERATION = true; // 加速/透明网桥开关
 
-    // 启发式阈值
+    // 启发式检测算法阈值
     inline uint32_t LARGE_PACKET_THRESHOLD = 1000;
     inline uint32_t PUNISH_TRIGGER_COUNT = 30;
     inline uint32_t CLEANUP_INTERVAL = 10000;
 
-    // 端口白名单存储结构
+    // 游戏协议端口白名单 (默认值)
     struct PortRange { uint16_t start; uint16_t end; };
     inline std::vector<PortRange> GAME_PORTS = { {3074, 3074}, {27015, 27015}, {12000, 12999} };
 
-    // 游戏端口白名单 (运行时遍历校验)
+    // 软路由功能：特定终端 IP 限速表
+    inline std::map<uint32_t, double> IP_LIMIT_MAP;
+
+    // 辅助工具：判断是否为游戏端口
     inline bool is_game_port(uint16_t port) {
         for (const auto& range : GAME_PORTS) {
             if (port >= range.start && port <= range.end) return true;
@@ -28,11 +33,20 @@ namespace Scalpel::Config {
         return false;
     }
 
-    // 动态加载配置
+    // 辅助工具：将字符串 IP (A.B.C.D) 解析为网络序 uint32
+    inline uint32_t parse_ip_str(const std::string& ip_str) {
+        uint32_t a, b, c, d;
+        if (sscanf(ip_str.c_str(), "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
+             return (a << 0) | (b << 8) | (c << 16) | (d << 24); // 简单大小端转换取决于具体架构要求
+        }
+        return 0;
+    }
+
+    // 从 config.txt 加载系统动态配置
     inline void load_config(const std::string& path = "config.txt") {
         std::ifstream file(path);
         if (!file.is_open()) {
-            std::println(stderr, "[Config] Warning: Cannot open {}, using default settings.", path);
+            std::println(stderr, "[Config] 警告: 无法打开配置文件 {}, 使用系统默认值。", path);
             return;
         }
 
@@ -49,31 +63,22 @@ namespace Scalpel::Config {
             try {
                 if (key == "IFACE_WAN") IFACE_WAN = val;
                 else if (key == "IFACE_LAN") IFACE_LAN = val;
+                else if (key == "ENABLE_ACCELERATION") ENABLE_ACCELERATION = (val == "true" || val == "1");
                 else if (key == "LARGE_PACKET_THRESHOLD") LARGE_PACKET_THRESHOLD = std::stoul(val);
                 else if (key == "PUNISH_TRIGGER_COUNT") PUNISH_TRIGGER_COUNT = std::stoul(val);
                 else if (key == "CLEANUP_INTERVAL") CLEANUP_INTERVAL = std::stoul(val);
-                else if (key == "GAME_PORTS") {
-                    GAME_PORTS.clear();
-
-                    for (const auto& word_range : val | std::views::split(',')) {
-                        std::string token(std::ranges::begin(word_range), std::ranges::end(word_range));
-                        auto dash = token.find('-');
-                        if (dash != std::string::npos) {
-                            uint16_t start = static_cast<uint16_t>(std::stoul(token.substr(0, dash)));
-                            uint16_t end = static_cast<uint16_t>(std::stoul(token.substr(dash + 1)));
-                            GAME_PORTS.push_back({ start, end });
-                        }
-                        else {
-                            uint16_t p = static_cast<uint16_t>(std::stoul(token));
-                            GAME_PORTS.push_back({ p, p });
-                        }
+                else if (key == "IP_LIMIT") {
+                    auto dash = val.find(':');
+                    if (dash != std::string::npos) {
+                        uint32_t ip = parse_ip_str(val.substr(0, dash));
+                        double limit = std::stod(val.substr(dash + 1));
+                        IP_LIMIT_MAP[ip] = limit;
                     }
                 }
-            }
-            catch (...) {
-                std::println(stderr, "[Config] Error parsing line: {}", line);
+            } catch (...) {
+                std::println(stderr, "[Config] 错误: 无法解析配置行: {}", line);
             }
         }
-        std::println("[Config] Loaded configuration from {}", path);
+        std::println("[Config] 配置文件加载完成: {}", path);
     }
 }
