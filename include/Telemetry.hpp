@@ -58,7 +58,8 @@ namespace Scalpel {
                 m.prio_pkts[i].fetch_add(s.prio_pkts[i], std::memory_order_relaxed);
                 m.prio_bytes[i].fetch_add(s.prio_bytes[i], std::memory_order_relaxed);
             }
-            m.last_heartbeat.store(time(nullptr), std::memory_order_relaxed);
+            // 移除了此处的 time(nullptr) 系统调用，心跳滴答交由空闲循环自增
         }
     };
 }
+
