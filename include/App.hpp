@@ -23,6 +23,8 @@
 #include <future>
 #include <array>
 #include <map>
+#include <sys/timerfd.h>
+#include <unistd.h>
 
 namespace Scalpel {
 
@@ -237,9 +239,33 @@ namespace Scalpel {
     private:
         void ui_render_loop(std::stop_token st) {
             Scalpel::System::set_thread_affinity(0);
-            while (!st.stop_requested()) {
-                std::this_thread::sleep_for(std::chrono::microseconds(16666)); 
+
+            int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
+            if (tfd == -1) {
+                std::println(stderr, "[GUI] 错误: 无法创建 timerfd");
+                return;
             }
+
+            struct itimerspec its{};
+            its.it_value.tv_sec = 0;
+            its.it_value.tv_nsec = 16666666; // 16.6ms
+            its.it_interval.tv_sec = 0;
+            its.it_interval.tv_nsec = 16666666; 
+
+            if (timerfd_settime(tfd, 0, &its, NULL) == -1) {
+                std::println(stderr, "[GUI] 错误: 无法设置 timerfd");
+                close(tfd);
+                return;
+            }
+
+            uint64_t expirations;
+            while (!st.stop_requested()) {
+                // 阻塞直到定时器到期 (VSync 同步)
+                if (read(tfd, &expirations, sizeof(expirations)) > 0) {
+                    // 此处将调用物理仿真解算器实现 iOS 25 风格动效
+                }
+            }
+            close(tfd);
         }
 
         void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx, int tx_fd, int core, bool down, std::shared_ptr<Traffic::Shaper> shpr, std::atomic<uint64_t>& hb, std::stop_token st) {
@@ -270,4 +296,5 @@ namespace Scalpel {
         }
     };
 }
+
 
