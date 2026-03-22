@@ -28,34 +28,28 @@
 
 namespace Scalpel {
 
-    // 数据面：独立解耦的路由处理器
-    struct ITrafficHandler {
-        virtual void handle(std::span<const uint8_t> pkt, size_t prio_idx, int core_id) = 0;
-        virtual ~ITrafficHandler() = default;
-    };
-
-    struct FastPathHandler final : public ITrafficHandler {
+    // 数据面：基于函数指针的高效静态分发 (消除虚函数开销)
+    struct RouteContext {
         int tx_fd;
-        explicit FastPathHandler(int fd) : tx_fd(fd) {}
-        void handle(std::span<const uint8_t> pkt, size_t prio_idx, int core_id) override {
-            int retries = 3;
-            while (retries--) {
-                if (send(tx_fd, pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) return;
-                if (errno != ENOBUFS && errno != EAGAIN) break;
-                std::this_thread::yield();
-            }
-            // 写入端隔离：仅操作当前 core 的丢包计数器
-            Telemetry::instance().core_metrics[core_id].dropped[prio_idx].fetch_add(1, std::memory_order_relaxed);
-        }
+        std::shared_ptr<Traffic::Shaper> shaper;
     };
 
-    struct ShaperHandler final : public ITrafficHandler {
-        std::shared_ptr<Traffic::Shaper> shaper;
-        explicit ShaperHandler(std::shared_ptr<Traffic::Shaper> s) : shaper(std::move(s)) {}
-        void handle(std::span<const uint8_t> pkt, size_t, int) override {
-            shaper->enqueue_normal(pkt);
+    using RouteFunc = void (*)(const RouteContext& ctx, std::span<const uint8_t> pkt, size_t prio_idx, int core_id);
+
+    static void fast_path_handler(const RouteContext& ctx, std::span<const uint8_t> pkt, size_t prio_idx, int core_id) {
+        int retries = 3;
+        while (retries--) {
+            if (send(ctx.tx_fd, pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) return;
+            if (errno != ENOBUFS && errno != EAGAIN) break;
+            std::this_thread::yield();
         }
-    };
+        // 写入端隔离：仅操作当前 core 的丢包计数器
+        Telemetry::instance().core_metrics[core_id].dropped[prio_idx].fetch_add(1, std::memory_order_relaxed);
+    }
+
+    static void shaper_handler(const RouteContext& ctx, std::span<const uint8_t> pkt, size_t /*prio_idx*/, int /*core_id*/) {
+        if (ctx.shaper) ctx.shaper->enqueue_normal(pkt);
+    }
 
     // 辅助工具：基于 FNV-1a 静态哈希表 (针对嵌入式实时性能优化)
     template<typename T, size_t Capacity = 256>
@@ -108,24 +102,22 @@ namespace Scalpel {
         Telemetry::BatchStats stats;
         Logic::HeuristicProcessor processor;
         
-        std::array<std::array<std::shared_ptr<ITrafficHandler>, 3>, 2> routes;
-        StaticIpMap<std::shared_ptr<ITrafficHandler>, 256> ip_shaper_map;
+        RouteContext ctx;
+        std::array<std::array<RouteFunc, 3>, 2> routes;
+        StaticIpMap<std::shared_ptr<Traffic::Shaper>, 256> ip_shaper_map;
 
     public:
         PacketConsumer(int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper)
-            : tx_fd(tx_fd), core_id(cid) {
-
-            auto fast = std::make_shared<FastPathHandler>(tx_fd);
-            auto global_shpr = std::make_shared<ShaperHandler>(global_shaper);
+            : tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper} {
 
             routes = {{
-                { fast, fast, global_shpr }, // 加速模式
-                { fast, fast, fast }         // 透明网桥模式
+                { fast_path_handler, fast_path_handler, shaper_handler }, // 加速模式
+                { fast_path_handler, fast_path_handler, fast_path_handler } // 透明网桥模式
             }};
 
             for (auto const& [ip, rate] : Config::IP_LIMIT_MAP) {
                 auto s = std::make_shared<Traffic::Shaper>(rate);
-                ip_shaper_map.insert(ip, std::make_shared<ShaperHandler>(s));
+                ip_shaper_map.insert(ip, s);
             }
         }
 
@@ -135,9 +127,10 @@ namespace Scalpel {
                 // 判断方向并读取源/目 IP (简化处理)
                 uint32_t target_ip = (core_id == 2) ? *reinterpret_cast<const uint32_t*>(&pkt[30]) 
                                                    : *reinterpret_cast<const uint32_t*>(&pkt[26]);
-                auto handler = ip_shaper_map.find(target_ip);
-                if (handler) {
-                    handler->handle(pkt, 2, core_id);
+                auto target_shaper = ip_shaper_map.find(target_ip);
+                if (target_shaper) {
+                    RouteContext ip_ctx{tx_fd, target_shaper};
+                    shaper_handler(ip_ctx, pkt, 2, core_id);
                     return;
                 }
             }
@@ -152,7 +145,7 @@ namespace Scalpel {
             stats.prio_bytes[p_idx] += pkt.size();
 
             size_t mode_idx = Telemetry::instance().bridge_mode.load(std::memory_order_relaxed);
-            routes[mode_idx][p_idx]->handle(pkt, p_idx, core_id);
+            routes[mode_idx][p_idx](ctx, pkt, p_idx, core_id);
 
             // 批量提交至当前 core 的专有槽位
             if (stats.pkts % 32 == 0) {
@@ -308,5 +301,6 @@ namespace Scalpel {
         }
     };
 }
+
 
 
