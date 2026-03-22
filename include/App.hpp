@@ -112,13 +112,13 @@ namespace Scalpel {
             Probe::Manager::run_isp_probe(eth0->get_fd());
 
 
-            // 4. 启动转发核心 (Core 2 & 3)
+            //启动转发核心 (Core 2 & 3)
             int fd0 = eth0->get_fd();
             int fd1 = eth1->get_fd();
 
             auto& tel = Telemetry::instance();
 
-            // 核心修复：在主线程预先创建上下行独立的整形器 (Shaper)
+            //在主线程预先创建上下行独立的整形器 (Shaper)
             double dl_limit = tel.isp_down_limit_mbps.load();
             if (dl_limit < 1.0) dl_limit = 500.0;
             double ul_limit = tel.isp_up_limit_mbps.load();
@@ -127,12 +127,12 @@ namespace Scalpel {
             auto shaper_dl = std::make_shared<Traffic::Shaper>(dl_limit * 0.80);
             auto shaper_ul = std::make_shared<Traffic::Shaper>(ul_limit * 0.80);
 
-            // 核心修复：只在主线程发起【一次】异步测速！彻底杜绝双重测速造成的带宽竞争与数据失准。
+            // 只在主线程发起【一次】异步测速！彻底杜绝双重测速造成的带宽竞争与数据失准。
             Probe::Manager::run_async_real_isp_probe([shaper_dl, shaper_ul](double dl, double ul) {
                 Telemetry::instance().isp_down_limit_mbps.store(dl, std::memory_order_relaxed);
                 Telemetry::instance().isp_up_limit_mbps.store(ul, std::memory_order_relaxed);
 
-                // 完美响应 PDF 第 7 章：通过 Setter 同时动态更新两个 Shaper 的限速
+                // 通过 Setter 同时动态更新两个 Shaper 的限速
                 shaper_dl->set_rate_limit(dl * 0.80);
                 shaper_ul->set_rate_limit(ul * 0.80);
                 std::println("\n[App] Bandwidth limit dynamically updated via Mode C Setter.");
@@ -162,28 +162,13 @@ namespace Scalpel {
         std::promise<void> shutdown_promise;
         std::future<void> shutdown_future;
 
-        void worker(std::unique_ptr<Engine::RawSocketManager> rx, int tx_fd, int core_id, bool is_download, auto& heartbeat, std::stop_token st) {
+        void worker(std::unique_ptr<Engine::RawSocketManager> rx, int tx_fd, int core_id, bool is_download, std::shared_ptr<Traffic::Shaper> shaper, auto& heartbeat, std::stop_token st) {
             Scalpel::System::set_thread_affinity(core_id);
             Scalpel::System::set_realtime_priority();
 
             Logic::HeuristicProcessor processor;
 
-            double limit_mbps = is_download ? Telemetry::instance().isp_down_limit_mbps.load() : Telemetry::instance().isp_up_limit_mbps.load();
-            if (limit_mbps < 1.0) limit_mbps = is_download ? 1000.0 : 1000.0;
-            auto shaper = std::make_shared<Traffic::Shaper>(limit_mbps * 0.80);
-
-            Probe::Manager::run_async_real_isp_probe([shaper, is_download](double dl, double ul) {
-                if (is_download) {
-                    Telemetry::instance().isp_down_limit_mbps.store(dl, std::memory_order_relaxed);
-                    shaper->set_rate_limit(dl * 0.80);
-                }
-                else {
-                    Telemetry::instance().isp_up_limit_mbps.store(ul, std::memory_order_relaxed);
-                    shaper->set_rate_limit(ul * 0.80);
-                }
-                std::println("\n[App] Bandwidth limit dynamically updated via Mode C Setter.");
-                });
-
+            // 使用结构体聚合局部状态
             Telemetry::BatchStats stats;
 
             // 路由策略表初始化
