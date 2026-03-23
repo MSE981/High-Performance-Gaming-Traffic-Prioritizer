@@ -83,30 +83,25 @@ namespace Scalpel::Logic {
         void tick() { current_tick++; }
 
         // Core 3 (Upstream: LAN -> WAN) - 数据面命中与零拷贝覆写反弹
-        bool process_query(std::span<uint8_t> pkt, int bounce_fd) {
-            if (pkt.size() < sizeof(Net::EthernetHeader) + sizeof(Net::IPv4Header) + sizeof(Net::UDPHeader) + sizeof(DnsHeader) + 1) return false;
-            
-            auto eth = reinterpret_cast<Net::EthernetHeader*>(pkt.data());
-            if (ntohs(eth->proto) != 0x0800) return false;
+        bool process_query(Net::ParsedPacket& pkt, int bounce_fd) {
+            if (!pkt.is_valid_ipv4() || pkt.l4_protocol != 17) return false;
 
-            auto ip = reinterpret_cast<Net::IPv4Header*>(pkt.data() + sizeof(Net::EthernetHeader));
-            size_t ihl = (ip->ver_ihl & 0x0F) * 4;
-            if (ip->protocol != 17) return false;
+            auto udp = pkt.udp();
+            if (!udp || ntohs(udp->dest) != 53) return false;
 
-            auto udp = reinterpret_cast<Net::UDPHeader*>(pkt.data() + sizeof(Net::EthernetHeader) + ihl);
-            if (ntohs(udp->dest) != 53) return false;
+            size_t dns_offset = pkt.l4_offset + sizeof(Net::UDPHeader);
+            if (pkt.raw_span.size() < dns_offset + sizeof(DnsHeader) + 1) return false;
 
-            size_t dns_offset = sizeof(Net::EthernetHeader) + ihl + sizeof(Net::UDPHeader);
-            auto dns = reinterpret_cast<DnsHeader*>(pkt.data() + dns_offset);
+            auto dns = reinterpret_cast<DnsHeader*>(pkt.raw_span.data() + dns_offset);
             
             if ((ntohs(dns->flags) & 0x8000) != 0) return false; 
             if (ntohs(dns->qdcount) != 1) return false;
 
             size_t qname_offset = dns_offset + sizeof(DnsHeader);
-            if (qname_offset >= pkt.size()) return false;
+            if (qname_offset >= pkt.raw_span.size()) return false;
 
             // O(1) 原地哈希
-            uint32_t h = hash_qname(pkt.data() + qname_offset, pkt.size() - qname_offset);
+            uint32_t h = hash_qname(pkt.raw_span.data() + qname_offset, pkt.raw_span.size() - qname_offset);
             size_t idx = h % CACHE_SIZE;
 
             // 准则 3.0: 纯解引用的 Acquire 屏障实现无锁读取
@@ -118,7 +113,7 @@ namespace Scalpel::Logic {
 
             // --- Cache Hit: Zero-Copy Bounce (原地修改，零内存复制) ---
             uint32_t cached_ip = cache[idx].ipv4_address;
-            size_t old_len = pkt.size();
+            size_t old_len = pkt.raw_span.size();
             size_t new_len = old_len + 16;
             if (new_len > 1500) return false; // 防止 MTU 溢出
 
@@ -126,7 +121,7 @@ namespace Scalpel::Logic {
             dns->ancount = htons(1);
 
             // 强插 16 bytes A Record 到 packet 尾部（假定 RawSocket mmap ring 预留了足够 padding）
-            uint8_t* tail = pkt.data() + old_len;
+            uint8_t* tail = pkt.raw_span.data() + old_len;
             tail[0] = 0xC0; tail[1] = 0x0C; // Name Pointer 回指 Question
             tail[2] = 0x00; tail[3] = 0x01; // Type A
             tail[4] = 0x00; tail[5] = 0x01; // Class IN
@@ -134,48 +129,43 @@ namespace Scalpel::Logic {
             tail[10] = 0x00; tail[11] = 0x04; // IP 长度 = 4
             std::memcpy(&tail[12], &cached_ip, 4);
 
-            for (int i=0; i<6; ++i) { std::swap(eth->src[i], eth->dest[i]); }
+            for (int i=0; i<6; ++i) { std::swap(pkt.eth->src[i], pkt.eth->dest[i]); }
             
-            uint32_t s_ip = ip->saddr;
-            ip->saddr = ip->daddr;
-            ip->daddr = s_ip;
-            ip->tot_len = htons(new_len - sizeof(Net::EthernetHeader));
+            uint32_t s_ip = pkt.ipv4->saddr;
+            pkt.ipv4->saddr = pkt.ipv4->daddr;
+            pkt.ipv4->daddr = s_ip;
+            pkt.ipv4->tot_len = htons(new_len - sizeof(Net::EthernetHeader));
             
-            ip->check = 0;
+            pkt.ipv4->check = 0;
             uint32_t ip_sum = 0;
-            const uint16_t* ip_words = reinterpret_cast<const uint16_t*>(ip);
-            for(size_t i=0; i<ihl/2; ++i) ip_sum += ntohs(ip_words[i]);
+            const uint16_t* ip_words = reinterpret_cast<const uint16_t*>(pkt.ipv4);
+            for(size_t i=0; i<pkt.ihl/2; ++i) ip_sum += ntohs(ip_words[i]);
             ip_sum = (ip_sum >> 16) + (ip_sum & 0xFFFF);
             ip_sum += (ip_sum >> 16);
-            ip->check = htons(~ip_sum);
+            pkt.ipv4->check = htons(~ip_sum);
 
             uint16_t s_port = udp->source;
             udp->source = udp->dest;
             udp->dest = s_port;
-            udp->len = htons(new_len - sizeof(Net::EthernetHeader) - ihl);
+            udp->len = htons(new_len - sizeof(Net::EthernetHeader) - pkt.ihl);
             udp->check = 0; 
 
             // Fast Bounce! 原地以物理极速将其打回内网口 (`bounce_fd` = `rx_fd`)
-            send(bounce_fd, pkt.data(), new_len, MSG_DONTWAIT);
+            send(bounce_fd, pkt.raw_span.data(), new_len, MSG_DONTWAIT);
             return true; // 阻断数据面流水线
         }
 
         // Core 2 (Downstream: WAN -> LAN) - 数据面外网响应截留，推向 Control Plane 异步处理
-        void intercept_response(std::span<const uint8_t> pkt) {
-            if (pkt.size() > 512) return;
-            auto eth = reinterpret_cast<const Net::EthernetHeader*>(pkt.data());
-            if (ntohs(eth->proto) != 0x0800) return;
+        void intercept_response(const Net::ParsedPacket& pkt) {
+            if (pkt.raw_span.size() > 512 || !pkt.is_valid_ipv4()) return;
+            if (pkt.l4_protocol != 17) return;
 
-            auto ip = reinterpret_cast<const Net::IPv4Header*>(pkt.data() + sizeof(Net::EthernetHeader));
-            size_t ihl = (ip->ver_ihl & 0x0F) * 4;
-            if (ip->protocol != 17) return;
-
-            auto udp = reinterpret_cast<const Net::UDPHeader*>(pkt.data() + sizeof(Net::EthernetHeader) + ihl);
-            if (ntohs(udp->source) != 53) return; // 只监听外部发来的 DNS 数据
+            auto udp = pkt.udp();
+            if (!udp || ntohs(udp->source) != 53) return; // 只监听外部发来的 DNS 数据
 
             DnsMessage msg;
-            msg.len = pkt.size();
-            std::memcpy(msg.data.data(), pkt.data(), pkt.size());
+            msg.len = pkt.raw_span.size();
+            std::memcpy(msg.data.data(), pkt.raw_span.data(), pkt.raw_span.size());
             // 无休止向无锁队列中推送（由 C1 看门狗稍后吸收），若溢出丢弃不造成阻塞
             response_queue.push(msg); 
         }
@@ -222,4 +212,5 @@ namespace Scalpel::Logic {
         }
     };
 }
+
 

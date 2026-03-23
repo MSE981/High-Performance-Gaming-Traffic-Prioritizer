@@ -125,7 +125,7 @@ namespace Scalpel {
         std::array<std::array<RouteFunc, 3>, 2> routes;
 
         // 核心解耦：拦截器流水线机制 (Callback-based Pipeline)
-        using PipelineStep = bool (*)(PacketConsumer& self, std::span<uint8_t> pkt);
+        using PipelineStep = bool (*)(PacketConsumer& self, Net::ParsedPacket& pkt);
         std::array<PipelineStep, 5> pipeline;
 
         PacketConsumer(int rx_fd, int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos)
@@ -146,7 +146,7 @@ namespace Scalpel {
 
         // --- 回调流水线处理模块 (Pipeline Handlers) ---
         
-        static bool step_dhcp_interceptor(PacketConsumer& self, std::span<uint8_t> pkt) {
+        static bool step_dhcp_interceptor(PacketConsumer& self, Net::ParsedPacket& pkt) {
             // 一时钟周期的极端轻量判定，完全不阻塞默认包流
             if (!Config::global_state.enable_dhcp.load(std::memory_order_relaxed)) return false;
             
@@ -154,7 +154,7 @@ namespace Scalpel {
             return false;
         }
 
-        static bool step_dns_interceptor(PacketConsumer& self, std::span<uint8_t> pkt) {
+        static bool step_dns_interceptor(PacketConsumer& self, Net::ParsedPacket& pkt) {
             if (!Config::global_state.enable_dns_cache.load(std::memory_order_relaxed)) return false;
             
             if (self.core_id == 3) {
@@ -171,64 +171,64 @@ namespace Scalpel {
             return false; 
         }
 
-        static bool step_nat_downstream(PacketConsumer& self, std::span<uint8_t> pkt) {
+        static bool step_nat_downstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
             if (self.nat_engine) self.nat_engine->process_inbound(pkt);
             return false; // 继续流水线
         }
         
-        static bool step_nat_upstream(PacketConsumer& self, std::span<uint8_t> pkt) {
+        static bool step_nat_upstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
             if (self.nat_engine) self.nat_engine->process_outbound(pkt);
             return false;
         }
 
-        static bool step_ip_shaper_downstream(PacketConsumer& self, std::span<uint8_t> pkt) {
-            if (pkt.size() > 34 && self.qos_config) {
-                uint32_t target_ip = *reinterpret_cast<const uint32_t*>(&pkt[30]);
+        static bool step_ip_shaper_downstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (pkt.is_valid_ipv4() && self.qos_config) {
+                uint32_t target_ip = pkt.ipv4->daddr;
                 
                 size_t active_idx = self.qos_config->active_idx.load(std::memory_order_acquire);
                 auto target_shaper = self.qos_config->buffers[active_idx].find(target_ip);
 
                 if (target_shaper) {
                     RouteContext ip_ctx{self.tx_fd, target_shaper};
-                    shaper_handler(ip_ctx, pkt, 2, self.core_id);
+                    shaper_handler(ip_ctx, pkt.raw_span, 2, self.core_id);
                     return true; // 拦截成功，终止流水线
                 }
             }
             return false;
         }
 
-        static bool step_ip_shaper_upstream(PacketConsumer& self, std::span<uint8_t> pkt) {
-            if (pkt.size() > 34 && self.qos_config) {
-                uint32_t target_ip = *reinterpret_cast<const uint32_t*>(&pkt[26]);
+        static bool step_ip_shaper_upstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (pkt.is_valid_ipv4() && self.qos_config) {
+                uint32_t target_ip = pkt.ipv4->saddr;
                 
                 size_t active_idx = self.qos_config->active_idx.load(std::memory_order_acquire);
                 auto target_shaper = self.qos_config->buffers[active_idx].find(target_ip);
 
                 if (target_shaper) {
                     RouteContext ip_ctx{self.tx_fd, target_shaper};
-                    shaper_handler(ip_ctx, pkt, 2, self.core_id);
+                    shaper_handler(ip_ctx, pkt.raw_span, 2, self.core_id);
                     return true;
                 }
             }
             return false;
         }
 
-        static bool step_qos_routing(PacketConsumer& self, std::span<uint8_t> pkt) {
+        static bool step_qos_routing(PacketConsumer& self, Net::ParsedPacket& pkt) {
             auto prio = self.processor.process(pkt);
             const size_t p_idx = static_cast<size_t>(prio);
 
             self.stats.pkts++;
-            self.stats.bytes += pkt.size();
+            self.stats.bytes += pkt.raw_span.size();
             self.stats.prio_pkts[p_idx]++;
-            self.stats.prio_bytes[p_idx] += pkt.size();
+            self.stats.prio_bytes[p_idx] += pkt.raw_span.size();
 
             size_t mode_idx = Telemetry::instance().bridge_mode.load(std::memory_order_relaxed);
-            self.routes[mode_idx][p_idx](self.ctx, pkt, p_idx, self.core_id);
+            self.routes[mode_idx][p_idx](self.ctx, pkt.raw_span, p_idx, self.core_id);
             return true; // 数据包已进入路由发送，生命周期结束
         }
 
         // --- 主入口事作 ---
-        void on_packet_event(std::span<uint8_t> pkt) {
+        void on_packet_event(Net::ParsedPacket& pkt) {
             // Callback-based Pipeline: 以数组步进取代所有的运行态条件分支
             for (auto step : pipeline) {
                 if (step(*this, pkt)) break;
@@ -350,8 +350,9 @@ namespace Scalpel {
             PacketConsumer consumer(rx_fd, tx_fd, core, shpr, nat, dns, qos);
 
             while (!st.stop_requested()) {
-                rx_mgr->poll_and_dispatch([&consumer](std::span<uint8_t> pkt) {
-                    consumer.on_packet_event(pkt);
+                rx_mgr->poll_and_dispatch([&consumer](std::span<uint8_t> raw_span) {
+                    auto pkt_ctx = Net::ParsedPacket::parse(raw_span);
+                    consumer.on_packet_event(pkt_ctx);
                 }, 1);
 
                 // QoS 队列周期性派发与硬件解堵塞
@@ -424,6 +425,7 @@ namespace Scalpel {
         }
     };
 }
+
 
 
 

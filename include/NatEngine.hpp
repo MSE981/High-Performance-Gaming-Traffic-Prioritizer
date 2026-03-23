@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <span>
 #include <chrono>
 #include <array>
@@ -62,24 +62,25 @@ namespace Scalpel::Logic {
         // 低频调用的 Tick 驱动器 (接驳 Watchdog 解耦高频系统调用)
         void tick() { current_tick++; }
 
-        // 出网流量 (SNAT): 替换源 IP 与源端口
-        bool process_outbound(std::span<uint8_t> pkt) {
-            if (wan_ip == 0 || pkt.size() < sizeof(Net::EthernetHeader) + sizeof(Net::IPv4Header)) return false;
+        // Outbound (WAN_TX): LAN -> WAN 替换源 IP/端口 (SNAT)
+        bool process_outbound(Net::ParsedPacket& pkt) {
+            if (!pkt.is_valid_ipv4()) return false;
+            if (wan_ip == 0) return false;
             
-            auto ip = reinterpret_cast<Net::IPv4Header*>(pkt.data() + sizeof(Net::EthernetHeader));
-            size_t ihl = (ip->ver_ihl & 0x0F) * 4;
+            auto ip = pkt.ipv4;
             if (ip->protocol != 6 && ip->protocol != 17) return false;
 
             uint16_t* sport_ptr = nullptr;
             uint16_t* check_ptr = nullptr;
             uint16_t dport = 0;
 
-            size_t l4_offset = sizeof(Net::EthernetHeader) + ihl;
             if (ip->protocol == 17) { 
-                auto udp = reinterpret_cast<Net::UDPHeader*>(pkt.data() + l4_offset);
+                auto udp = pkt.udp();
+                if (!udp) return false;
                 sport_ptr = &udp->source; dport = udp->dest; check_ptr = &udp->check;
             } else { 
-                auto tcp = reinterpret_cast<Net::TCPHeader*>(pkt.data() + l4_offset);
+                auto tcp = pkt.tcp();
+                if (!tcp) return false;
                 sport_ptr = &tcp->source; dport = tcp->dest; check_ptr = &tcp->check;
             }
 
@@ -125,12 +126,10 @@ namespace Scalpel::Logic {
             return true;
         }
 
-        // 入网流量 (DNAT): 替换目的 IP 与目的端口
-        bool process_inbound(std::span<uint8_t> pkt) {
-            if (wan_ip == 0 || pkt.size() < sizeof(Net::EthernetHeader) + sizeof(Net::IPv4Header)) return false;
-
-            auto ip = reinterpret_cast<Net::IPv4Header*>(pkt.data() + sizeof(Net::EthernetHeader));
-            size_t ihl = (ip->ver_ihl & 0x0F) * 4;
+        // Inbound (WAN_RX): WAN -> LAN 替换目的 IP/端口 (DNAT)
+        bool process_inbound(Net::ParsedPacket& pkt) {
+            if (!pkt.is_valid_ipv4()) return false;
+            auto ip = pkt.ipv4;
 
             if (ip->protocol != 6 && ip->protocol != 17) return false;
             if (ip->daddr != wan_ip) return false; // 只有发给公网口的包才做转换
@@ -139,12 +138,13 @@ namespace Scalpel::Logic {
             uint16_t* check_ptr = nullptr;
             uint16_t sport = 0;
 
-            size_t l4_offset = sizeof(Net::EthernetHeader) + ihl;
             if (ip->protocol == 17) {
-                auto udp = reinterpret_cast<Net::UDPHeader*>(pkt.data() + l4_offset);
+                auto udp = pkt.udp();
+                if (!udp) return false;
                 dport_ptr = &udp->dest; sport = udp->source; check_ptr = &udp->check;
             } else {
-                auto tcp = reinterpret_cast<Net::TCPHeader*>(pkt.data() + l4_offset);
+                auto tcp = pkt.tcp();
+                if (!tcp) return false;
                 dport_ptr = &tcp->dest; sport = tcp->source; check_ptr = &tcp->check;
             }
 
@@ -174,3 +174,4 @@ namespace Scalpel::Logic {
         }
     };
 }
+
