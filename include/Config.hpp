@@ -8,6 +8,15 @@
 #include <ranges> 
 
 namespace Scalpel::Config {
+    // 动态运行时开关状态 (遵循 RCU/锁屏障概念，用于数据面 O(1) 获取特性状态)
+    struct DynamicState {
+        std::atomic<bool> enable_dhcp{false};
+        std::atomic<bool> enable_dns_cache{false};
+        std::atomic<bool> enable_upnp{false};
+        std::atomic<bool> enable_pppoe{false};
+    };
+    inline DynamicState global_state;
+
     // 接口配置 (允许运行时由 Web 端或配置文件覆盖)
     inline std::string IFACE_WAN = "eth0";
     inline std::string IFACE_LAN = "eth1"; // 局域网/USB网卡接口
@@ -82,4 +91,5 @@ namespace Scalpel::Config {
         std::println("[Config] 配置文件加载完成: {}", path);
     }
 }
+
 
