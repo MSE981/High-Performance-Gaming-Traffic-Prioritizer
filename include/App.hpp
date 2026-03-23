@@ -94,6 +94,7 @@ namespace Scalpel {
 
     // 数据面：事件消费者模型 (PacketConsumer) - 处理核心逻辑
     class PacketConsumer {
+    public:
         int tx_fd;
         int core_id; // 增加核心 ID 标识
         Telemetry::BatchStats stats;
@@ -104,7 +105,10 @@ namespace Scalpel {
         std::array<std::array<RouteFunc, 3>, 2> routes;
         StaticIpMap<std::shared_ptr<Traffic::Shaper>, 256> ip_shaper_map;
 
-    public:
+        // 核心解耦：拦截器流水线机制 (Callback-based Pipeline)
+        using PipelineStep = bool (*)(PacketConsumer& self, std::span<uint8_t> pkt);
+        std::array<PipelineStep, 3> pipeline;
+
         PacketConsumer(int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat)
             : tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat) {
 
@@ -117,42 +121,73 @@ namespace Scalpel {
                 auto s = std::make_shared<Traffic::Shaper>(rate);
                 ip_shaper_map.insert(ip, s);
             }
+
+            // 编译期决断组装流水线：彻底消灭运行时的 if-else 嵌套
+            if (core_id == 2) {
+                pipeline = { step_nat_downstream, step_ip_shaper_downstream, step_qos_routing };
+            } else {
+                pipeline = { step_nat_upstream, step_ip_shaper_upstream, step_qos_routing };
+            }
         }
 
-        void on_packet_event(std::span<uint8_t> pkt) {
-            // 纯应用态零拷贝 NAT (Fast-NAT)
-            if (core_id == 2 && nat_engine) { // Core 2: WAN -> LAN (Downstream)
-                // WAN -> LAN (DNAT) 入口还原
-                nat_engine->process_inbound(pkt);
-            } else if (core_id == 3 && nat_engine) { // Core 3: LAN -> WAN (Upstream)
-                // LAN -> WAN (SNAT) 出口伪装
-                nat_engine->process_outbound(pkt);
-            }
+        // --- 回调流水线处理模块 (Pipeline Handlers) ---
 
-            // 实时路径：基于静态哈希表的 IP 限速匹配
+        static bool step_nat_downstream(PacketConsumer& self, std::span<uint8_t> pkt) {
+            if (self.nat_engine) self.nat_engine->process_inbound(pkt);
+            return false; // 继续流水线
+        }
+        
+        static bool step_nat_upstream(PacketConsumer& self, std::span<uint8_t> pkt) {
+            if (self.nat_engine) self.nat_engine->process_outbound(pkt);
+            return false;
+        }
+
+        static bool step_ip_shaper_downstream(PacketConsumer& self, std::span<uint8_t> pkt) {
             if (pkt.size() > 34) {
-                // 判断方向并读取源/目 IP (简化处理)
-                uint32_t target_ip = (core_id == 2) ? *reinterpret_cast<const uint32_t*>(&pkt[30]) 
-                                                   : *reinterpret_cast<const uint32_t*>(&pkt[26]);
-                auto target_shaper = ip_shaper_map.find(target_ip);
+                uint32_t target_ip = *reinterpret_cast<const uint32_t*>(&pkt[30]);
+                auto target_shaper = self.ip_shaper_map.find(target_ip);
                 if (target_shaper) {
-                    RouteContext ip_ctx{tx_fd, target_shaper};
-                    shaper_handler(ip_ctx, pkt, 2, core_id);
-                    return;
+                    RouteContext ip_ctx{self.tx_fd, target_shaper};
+                    shaper_handler(ip_ctx, pkt, 2, self.core_id);
+                    return true; // 拦截成功，终止流水线
                 }
             }
+            return false;
+        }
 
-            // 游戏加速逻辑
-            auto prio = processor.process(pkt);
+        static bool step_ip_shaper_upstream(PacketConsumer& self, std::span<uint8_t> pkt) {
+            if (pkt.size() > 34) {
+                uint32_t target_ip = *reinterpret_cast<const uint32_t*>(&pkt[26]);
+                auto target_shaper = self.ip_shaper_map.find(target_ip);
+                if (target_shaper) {
+                    RouteContext ip_ctx{self.tx_fd, target_shaper};
+                    shaper_handler(ip_ctx, pkt, 2, self.core_id);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        static bool step_qos_routing(PacketConsumer& self, std::span<uint8_t> pkt) {
+            auto prio = self.processor.process(pkt);
             const size_t p_idx = static_cast<size_t>(prio);
 
-            stats.pkts++;
-            stats.bytes += pkt.size();
-            stats.prio_pkts[p_idx]++;
-            stats.prio_bytes[p_idx] += pkt.size();
+            self.stats.pkts++;
+            self.stats.bytes += pkt.size();
+            self.stats.prio_pkts[p_idx]++;
+            self.stats.prio_bytes[p_idx] += pkt.size();
 
             size_t mode_idx = Telemetry::instance().bridge_mode.load(std::memory_order_relaxed);
-            routes[mode_idx][p_idx](ctx, pkt, p_idx, core_id);
+            self.routes[mode_idx][p_idx](self.ctx, pkt, p_idx, self.core_id);
+            return true; // 数据包已进入路由发送，生命周期结束
+        }
+
+        // --- 主入口事作 ---
+        void on_packet_event(std::span<uint8_t> pkt) {
+            // Callback-based Pipeline: 以数组步进取代所有的运行态条件分支
+            for (auto step : pipeline) {
+                if (step(*this, pkt)) break;
+            }
 
             // 批量提交至当前 core 的专有槽位
             if (stats.pkts % 32 == 0) {
@@ -329,6 +364,7 @@ namespace Scalpel {
         }
     };
 }
+
 
 
 
