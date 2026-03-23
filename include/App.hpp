@@ -330,7 +330,7 @@ namespace Scalpel {
         void run() {
             std::println("=== Scalpel High-Performance Software Router ===");
             Telemetry::instance().bridge_mode.store(!Config::ENABLE_ACCELERATION, std::memory_order_relaxed);
-            Scalpel::System::lock_cpu_frequency();
+            Scalpel::System::Optimizer::lock_cpu_frequency();
 
             std::jthread ui_thread([this](std::stop_token st) { ui_render_loop(st); });
             watchdog = std::jthread([this](std::stop_token st) { watchdog_loop(st); });
@@ -368,7 +368,7 @@ namespace Scalpel {
 
     private:
         void ui_render_loop(std::stop_token st) {
-            Scalpel::System::set_thread_affinity(0);
+            Scalpel::System::Optimizer::set_current_thread_affinity(0);
             int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
             if (tfd == -1) return;
 
@@ -389,7 +389,7 @@ namespace Scalpel {
         }
 
         void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp) {
-            Scalpel::System::set_thread_affinity(core);
+            Scalpel::System::Optimizer::set_current_thread_affinity(core);
             Scalpel::System::set_realtime_priority();
             std::println("[App] Core {} Pipeline 挂载就绪.", core);
 
@@ -419,7 +419,7 @@ namespace Scalpel {
         }
 
         void watchdog_loop(std::stop_token st) {
-            Scalpel::System::set_thread_affinity(1);
+            Scalpel::System::Optimizer::set_current_thread_affinity(1);
             auto& tel = Telemetry::instance();
             
             int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
