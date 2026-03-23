@@ -12,6 +12,7 @@
 #include "NatEngine.hpp"
 #include "DnsEngine.hpp"
 #include "DhcpEngine.hpp"
+#include "UpnpEngine.hpp"
 #include "SystemOptimizer.hpp"
 #include "Telemetry.hpp"
 #include "ProbeManager.hpp"
@@ -124,14 +125,16 @@ namespace Scalpel {
         std::shared_ptr<Logic::DnsEngine> dns_engine;
         std::shared_ptr<QoSConfig> qos_config;
         std::shared_ptr<Logic::DhcpEngine> dhcp_engine;
+        uint32_t gateway_ip = 0;
+
         std::array<std::array<RouteFunc, 3>, 2> routes;
 
         // 核心解耦：拦截器流水线机制 (Callback-based Pipeline)
         using PipelineStep = bool (*)(PacketConsumer& self, Net::ParsedPacket& pkt);
-        std::array<PipelineStep, 5> pipeline;
+        std::array<PipelineStep, 6> pipeline;
 
-        PacketConsumer(int rx_fd, int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp)
-            : rx_fd(rx_fd), tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat), dns_engine(dns), qos_config(qos), dhcp_engine(dhcp) {
+        PacketConsumer(int rx_fd, int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp, uint32_t gw_ip)
+            : rx_fd(rx_fd), tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat), dns_engine(dns), qos_config(qos), dhcp_engine(dhcp), gateway_ip(gw_ip) {
 
             routes = {{
                 { fast_path_handler, fast_path_handler, shaper_handler }, // 加速模式
@@ -142,11 +145,32 @@ namespace Scalpel {
             if (core_id == 2) {
                 pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_nat_downstream, step_ip_shaper_downstream, step_qos_routing };
             } else {
-                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_nat_upstream, step_ip_shaper_upstream, step_qos_routing };
-            }
+                pipeline = {
+                step_dhcp_interceptor,
+                step_dns_interceptor,
+                step_local_delivery_blocker,
+                step_nat_downstream,
+                step_nat_upstream,
+                step_qos_routing
+            };
         }
 
         // --- 回调流水线处理模块 (Pipeline Handlers) ---
+        
+        static bool step_local_delivery_blocker(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (!pkt.is_valid_ipv4()) return false;
+            if (self.core_id == 3) { // Only checking LAN -> WAN (Upstream)
+                uint32_t daddr = pkt.ipv4->daddr;
+                if (daddr == self.gateway_ip || 
+                    daddr == 0xFAFFFFEF || // 239.255.255.250 SSDP 组播 (Little Endian)
+                    daddr == 0xFFFFFFFF) { // 广播
+                    // 返回 true 截断用户面转发流水线。
+                    // 效果：包未通过 `tx_fd` (WAN) 发送，自然落入 Linux 本地协议栈处理（如 SSDP, SSH, Nginx 等）
+                    return true; 
+                }
+            }
+            return false;
+        }
         
         static bool step_dhcp_interceptor(PacketConsumer& self, Net::ParsedPacket& pkt) {
             if (!Config::global_state.enable_dhcp.load(std::memory_order_relaxed)) return false;
@@ -258,6 +282,7 @@ namespace Scalpel {
         std::shared_ptr<Logic::NatEngine> nat_engine;
         std::shared_ptr<Logic::DnsEngine> dns_engine;
         std::shared_ptr<Logic::DhcpEngine> dhcp_engine;
+        std::shared_ptr<Logic::UpnpEngine> upnp_engine;
         std::shared_ptr<QoSConfig> qos_config;
         
         std::jthread worker_downstream;
@@ -270,18 +295,23 @@ namespace Scalpel {
         App() {
             global_shaper = std::make_shared<Traffic::Shaper>(100.0); // 默认全局限速 100Mbps
             
-            // Default gateway IP (can be updated via Config)
-            uint32_t gateway_ip = Config::parse_ip_str("192.168.1.100");
+            Config::global_state.enable_nat.store(true);
+            Config::global_state.enable_dns_cache.store(true);
+            Config::global_state.enable_dhcp.store(true);
+            Config::global_state.enable_upnp.store(true);
+            
+            // Default gateway IP 
+            std::string gw_ip_str = "192.168.1.100";
+            uint32_t gateway_ip = Config::parse_ip_str(gw_ip_str);
 
             nat_engine = std::make_shared<Logic::NatEngine>();
             dns_engine = std::make_shared<Logic::DnsEngine>();
-            dhcp_engine = std::make_shared<Logic::DhcpEngine>(gateway_ip);
+            dhcp_engine = std::make_shared<Logic::DhcpEngine>(gw_ip_str);
+            upnp_engine = std::make_shared<Logic::UpnpEngine>(nat_engine, gw_ip_str);
             qos_config = std::make_shared<QoSConfig>();
             
             // 初始化 QoS 无锁双缓冲表
             qos_config->update(Config::IP_LIMIT_MAP);
-
-            // 默认网关 IP (可通过 Config 更新)
             nat_engine->set_wan_ip(Config::parse_ip_str("192.168.1.100"));
         }
         std::expected<void, std::string> init() {
@@ -364,7 +394,7 @@ namespace Scalpel {
             std::println("[App] Core {} Pipeline 挂载就绪.", core);
 
             int rx_fd = rx_mgr->get_fd();
-            PacketConsumer consumer(rx_fd, tx_fd, core, shpr, nat, dns, qos, dhcp);
+            PacketConsumer consumer(rx_fd, tx_fd, core, shpr, nat, dns, qos, dhcp, Config::parse_ip_str("192.168.1.100"));
 
             while (!st.stop_requested()) {
                 rx_mgr->poll_and_dispatch([&consumer](std::span<uint8_t> raw_span) {

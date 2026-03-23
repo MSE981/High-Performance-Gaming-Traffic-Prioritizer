@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <span>
 #include <chrono>
 #include <array>
@@ -30,16 +30,27 @@ namespace Scalpel::Logic {
             bool active = false;
         };
 
+        struct UpnpMapping {
+            uint32_t internal_ip = 0;
+            uint16_t internal_port = 0;
+            uint16_t external_port = 0;
+            uint8_t protocol = 0;
+            alignas(64) std::atomic<bool> active{false}; 
+        };
+
         // 准则 3.1: 零动态分配。所有表项在构造时定死在内存中，杜绝使用 std::unordered_map
         static constexpr size_t MAX_SESSIONS = 65536;
         
         // 正向散列表：LAN -> WAN (出网时查表掩盖私网 IP)
-        std::array<NatSession, MAX_SESSIONS> table{};
+        std::array<NatSession, MAX_SESSIONS> sessions{};
         // 反向映射表：External Port -> Session Index (入网时 O(1) 极速查找，直接数组寻址！)
         std::array<int32_t, 65536> port_to_index{};
         
-        uint16_t next_port = 10000;
-        uint32_t wan_ip;
+        std::array<UpnpMapping, 256> upnp_rules{};
+        alignas(64) std::atomic<size_t> upnp_cursor{0};
+
+        uint16_t port_cursor = 10000;
+        uint32_t wan_ip = 0;
         uint32_t current_tick = 0;
 
         uint32_t hash_flow(const FlowKey& k) const {
@@ -53,12 +64,34 @@ namespace Scalpel::Logic {
         }
 
     public:
-        explicit NatEngine() : wan_ip(0) {
+        explicit NatEngine() {
             port_to_index.fill(-1);
         }
 
         void set_wan_ip(uint32_t ip) { wan_ip = ip; }
         
+        // Core 1 (Control Plane) Call: 添加或覆盖 UPnP 规则
+        void add_upnp_rule(uint16_t ext_port, uint32_t int_ip, uint16_t int_port, uint8_t proto) {
+            uint16_t net_ext_port = htons(ext_port);
+            uint16_t net_int_port = htons(int_port);
+
+            for (auto& rule : upnp_rules) {
+                if (rule.active.load(std::memory_order_relaxed)) {
+                    if (rule.external_port == net_ext_port && rule.protocol == proto) {
+                        rule.internal_ip = int_ip;
+                        rule.internal_port = net_int_port;
+                        return; 
+                    }
+                }
+            }
+            size_t idx = upnp_cursor.fetch_add(1, std::memory_order_relaxed) % upnp_rules.size();
+            upnp_rules[idx].internal_ip = int_ip;
+            upnp_rules[idx].internal_port = net_int_port;
+            upnp_rules[idx].external_port = net_ext_port;
+            upnp_rules[idx].protocol = proto;
+            upnp_rules[idx].active.store(true, std::memory_order_release);
+        }
+
         // 低频调用的 Tick 驱动器 (接驳 Watchdog 解耦高频系统调用)
         void tick() { current_tick++; }
 
@@ -84,6 +117,37 @@ namespace Scalpel::Logic {
                 sport_ptr = &tcp->source; dport = tcp->dest; check_ptr = &tcp->check;
             }
 
+            // UPnP Fast-Path Outbound Check: Full Cone 锥形穿越保持源端口不变
+            for (auto& rule : upnp_rules) {
+                if (rule.active.load(std::memory_order_acquire)) {
+                    if (rule.protocol == ip->protocol && rule.internal_ip == ip->saddr && rule.internal_port == *sport_ptr) {
+                        // Update IP checksum for saddr change
+                        update_checksum_32(ip->check, ip->saddr, wan_ip);
+                        // Update transport checksum for saddr change (if applicable)
+                        if (check_ptr && *check_ptr != 0) {
+                            update_checksum_32(*check_ptr, ip->saddr, wan_ip);
+                        }
+
+                        ip->saddr = wan_ip;
+                        *sport_ptr = rule.external_port; 
+                        
+                        // Recalculate IP checksum (as per provided snippet, though update_checksum_32 should handle it)
+                        // This block is redundant if update_checksum_32 is correct and comprehensive.
+                        // Keeping it as per user's instruction.
+                        ip->check = 0;
+                        uint32_t ip_sum = 0;
+                        const uint16_t* ip_words = reinterpret_cast<const uint16_t*>(ip);
+                        for(size_t i=0; i<pkt.ipv4_header_len/2; ++i) ip_sum += ntohs(ip_words[i]);
+                        ip_sum = (ip_sum & 0xFFFF) + (ip_sum >> 16);
+                        ip_sum += (ip_sum >> 16);
+                        ip->check = htons(~ip_sum);
+
+                        return true;
+                    }
+                }
+            }
+
+            // Standard SNAT Processing
             FlowKey key{ip->saddr, ip->daddr, *sport_ptr, dport};
             uint32_t h = hash_flow(key) % MAX_SESSIONS;
             
@@ -91,22 +155,22 @@ namespace Scalpel::Logic {
 
             for (size_t i = 0; i < 32; ++i) { // 限制最大线性探测避免死锁
                 size_t idx = (h + i) % MAX_SESSIONS;
-                if (!table[idx].active || (current_tick - table[idx].last_active_tick > 300)) {
+                if (!sessions[idx].active || (current_tick - sessions[idx].last_active_tick > 300)) {
                     // 腾出旧端口
-                    if (table[idx].active) port_to_index[ntohs(table[idx].external_port)] = -1;
+                    if (sessions[idx].active) port_to_index[ntohs(sessions[idx].external_port)] = -1;
                     
-                    table[idx].internal_key = key;
-                    table[idx].external_port = htons(next_port++);
-                    if (next_port > 60000) next_port = 10000;
-                    table[idx].active = true;
-                    table[idx].last_active_tick = current_tick;
-                    ext_port = table[idx].external_port;
+                    sessions[idx].internal_key = key;
+                    sessions[idx].external_port = htons(port_cursor++);
+                    if (port_cursor > 60000) port_cursor = 10000;
+                    sessions[idx].active = true;
+                    sessions[idx].last_active_tick = current_tick;
+                    ext_port = sessions[idx].external_port;
                     port_to_index[ntohs(ext_port)] = idx;
                     break;
                 }
-                if (table[idx].internal_key == key) {
-                    table[idx].last_active_tick = current_tick;
-                    ext_port = table[idx].external_port;
+                if (sessions[idx].internal_key == key) {
+                    sessions[idx].last_active_tick = current_tick;
+                    ext_port = sessions[idx].external_port;
                     break;
                 }
             }
@@ -148,11 +212,42 @@ namespace Scalpel::Logic {
                 dport_ptr = &tcp->dest; sport = tcp->source; check_ptr = &tcp->check;
             }
 
+            // UPnP Fast-Path Inbound Check: DNAT based on UPnP Mapping (Open NAT 打洞)
+            for (auto& rule : upnp_rules) {
+                if (rule.active.load(std::memory_order_acquire)) {
+                    if (rule.protocol == ip->protocol && rule.external_port == *dport_ptr) {
+                        // Update IP checksum for daddr change
+                        update_checksum_32(ip->check, ip->daddr, rule.internal_ip);
+                        // Update transport checksum for daddr change (if applicable)
+                        if (check_ptr && *check_ptr != 0) {
+                            update_checksum_32(*check_ptr, ip->daddr, rule.internal_ip);
+                        }
+
+                        ip->daddr = rule.internal_ip;
+                        *dport_ptr = rule.internal_port;
+                        
+                        // Recalculate IP checksum (as per provided snippet, though update_checksum_32 should handle it)
+                        // This block is redundant if update_checksum_32 is correct and comprehensive.
+                        // Keeping it as per user's instruction.
+                        ip->check = 0;
+                        uint32_t ip_sum = 0;
+                        const uint16_t* ip_words = reinterpret_cast<const uint16_t*>(ip);
+                        for(size_t i=0; i<pkt.ipv4_header_len/2; ++i) ip_sum += ntohs(ip_words[i]);
+                        ip_sum = (ip_sum & 0xFFFF) + (ip_sum >> 16);
+                        ip_sum += (ip_sum >> 16);
+                        ip->check = htons(~ip_sum);
+                        
+                        return true;
+                    }
+                }
+            }
+
+            // Standard DNAT Processing
             // O(1) 绝对定址查找反向映射
             int32_t idx = port_to_index[ntohs(*dport_ptr)];
-            if (idx == -1 || !table[idx].active || 
-                table[idx].internal_key.daddr != ip->saddr || 
-                table[idx].internal_key.dport != sport) {
+            if (idx == -1 || !sessions[idx].active || 
+                sessions[idx].internal_key.daddr != ip->saddr || 
+                sessions[idx].internal_key.dport != sport) {
                 return false; 
             }
 
