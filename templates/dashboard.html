@@ -10,6 +10,12 @@
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #121212; color: #e0e0e0; padding: 20px; margin: 0; }
         h1 { text-align: center; margin-bottom: 20px; color: #ffffff; letter-spacing: 1px; }
         
+        /* --- Navigation Bar Styles (Restored!) --- */
+        .navbar { background-color: #1e1e1e; overflow: hidden; border-radius: 8px; margin-bottom: 25px; border: 1px solid #333; box-shadow: 0 4px 6px rgba(0,0,0,0.5); display: flex; justify-content: center; }
+        .navbar a { display: block; color: #ccc; text-align: center; padding: 14px 20px; text-decoration: none; font-weight: bold; transition: 0.3s; }
+        .navbar a:hover { background-color: #333; color: white; }
+        .navbar a.active { background-color: #0066cc; color: white; }
+        
         /* Top Grid Layout */
         .top-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1400px; margin: 0 auto 20px auto; }
         
@@ -46,6 +52,15 @@
 
     <h1>🚀 Core System Management (BMC)</h1>
 
+    <div class="navbar">
+        <a href="/" class="active">📊 Dashboard</a>
+        <a href="/network">🌐 Network</a>
+        <a href="/qos">🚦 Traffic QoS</a>
+        <a href="/devices">📱 Devices</a>
+        <a href="/logs">📈 Logs</a>
+        <a href="/dev">🛠️ Developer</a>
+    </div>
+
     <div class="top-grid">
         <div class="panel">
             <h2>🖥️ Zone 1: System Health</h2>
@@ -60,7 +75,7 @@
             
             <div id="speed-gauge" style="width: 100%; height: 200px;"></div>
 
-            <form action="/api/config" method="POST">
+            <form action="/update_config" method="POST">
                 <label>QoS Traffic Mode:</label>
                 <select name="mode">
                     <option value="gaming">🎮 Gaming Priority (Strict Latency)</option>
@@ -96,7 +111,7 @@
     </div>
 
     <script>
-        // 1. Initialize the ECharts Gauge
+        // Initialize the ECharts Gauge
         var chart = echarts.init(document.getElementById('speed-gauge'));
         var option = {
             series: [{
@@ -110,41 +125,23 @@
         };
         chart.setOption(option);
 
-        // =================================================================
-        // CORE AJAX POLLING LOGIC (Complies with project guidelines)
-        // =================================================================
-        
-        // Setup a timer to fetch data every 1000ms (1 second)
+        // Fetch data every 1000ms
         setInterval(function() {
-            
-            // Request JSON data from the C++ FastCGI backend endpoint
-            // Teammate needs to ensure C++ serves JSON at "/api/status"
             $.getJSON('/api/status', function(data) {
-                
-                // Connection successful, update engine status color to green
                 $('#engine-status').text('● Active').css('color', '#00ff00');
-
-                // Update Zone 1: CPU, RAM, Uptime
                 if(data.cpu !== undefined) $('#cpu-val').text(data.cpu + '%');
                 if(data.memory !== undefined) $('#mem-val').text(data.memory + '%');
                 if(data.uptime !== undefined) $('#uptime-val').text(data.uptime);
-
-                // Update Zone 2: Gauge (Download speed)
                 if(data.download_speed !== undefined) {
                     chart.setOption({
                         series: [{ data: [{ value: data.download_speed, name: 'DL Speed' }] }]
                     });
                 }
-                
-                // Update Bottom Zone: Connections Table
                 if(data.connections && data.connections.length > 0) {
                     var tbody = $('#conn-body');
-                    tbody.empty(); // Clear old table rows
-                    
+                    tbody.empty(); 
                     data.connections.forEach(function(conn) {
-                        // Highlight gaming rules in red
                         var ruleClass = conn.rule.includes("Gaming") ? "color-gaming" : "";
-                        
                         var tr = `<tr>
                             <td class="color-ip">${conn.source}</td>
                             <td class="color-ip">${conn.dest}</td>
@@ -154,17 +151,13 @@
                             <td class="color-down">▼ ${conn.down} KB/s</td>
                             <td>${conn.time}</td>
                         </tr>`;
-                        tbody.append(tr); // Inject new row
+                        tbody.append(tr); 
                     });
                 }
-                
             }).fail(function() {
-                // Connection failed (C++ backend is offline or NGINX is not configured)
                 $('#engine-status').text('● Disconnected').css('color', '#ff0000');
-                console.log("[Error] Failed to connect to C++ FastCGI backend at /api/status");
             });
-
-        }, 1000); // 1000 ms = 1 second polling interval
+        }, 1000); 
     </script>
 </body>
 </html>
