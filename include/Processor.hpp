@@ -1,25 +1,23 @@
-#pragma once
+ï»¿#pragma once
 #include <span>
-#include <unordered_map>
 #include <chrono>
 #include <cstdint>
-#include <netinet/in.h> // ÓÃÓÚ½âÎöÊ±µÄ ntohs
+#include <netinet/in.h>
+#include <bit>
+#include <array>
 #include "Headers.hpp"
 #include "Config.hpp"
 
 namespace Scalpel::Logic {
+
+    // 5å…ƒç»„æµé‡æ ‡è¯†
     struct FlowKey {
         uint32_t saddr, daddr;
         uint16_t sport, dport;
-        bool operator==(const FlowKey&) const = default; // C++20 default compare
+        bool operator==(const FlowKey&) const = default;
     };
 
-    struct FlowHash {
-        std::size_t operator()(const FlowKey& k) const {
-            return k.saddr ^ k.daddr ^ k.sport ^ k.dport;
-        }
-    };
-
+    // æµé‡ç»Ÿè®¡ä¿¡æ¯
     struct FlowStats {
         uint32_t total_pkts = 0;
         uint32_t large_pkts = 0;
@@ -27,117 +25,134 @@ namespace Scalpel::Logic {
         std::chrono::steady_clock::time_point last_seen;
     };
 
-    // Æô·¢Ê½´¦ÀíÆ÷£ºÃ¿¸öÏß³ÌÓµÓĞ¶ÀÁ¢ÊµÀı£¬ÎŞĞèËø
-    class HeuristicProcessor {
-        std::unordered_map<FlowKey, FlowStats, FlowHash> flows;
-        uint32_t process_counter = 0;
+    // åŸºäº FNV-1a ç®—æ³•çš„é™æ€æµè¡¨ (é›¶åŠ¨æ€åˆ†é…)
+    template<size_t Capacity = 4096>
+    class StaticFlowMap {
+        struct Entry {
+            FlowKey key{};
+            FlowStats stats{};
+            bool occupied = false;
+        };
 
-    public:
-        Net::Priority process(std::span<const uint8_t> pkt) {
-            using namespace Scalpel::Net;
+        std::array<Entry, Capacity> table{};
 
-            if (pkt.size() < sizeof(EthernetHeader)) return Priority::Normal;
-            auto eth = reinterpret_cast<const EthernetHeader*>(pkt.data());
-
-            // ===== Ìæ»»ºó =====
-            if (ntohs(eth->proto) != 0x0800) return Priority::Normal; // Only IPv4
-
-            // °²È«¼ì²é£ºÈ·±£°ü³¤×ã¹»ÌáÈ¡ IP Ğ­ÒéºÅºÍ UDP ¶Ë¿Ú·ÀÖ¹ÄÚ´æÔ½½ç (14+20+4 = 38)
-            if (pkt.size() < 38) return Priority::Normal;
-
-            // 2. ¶¨Î»µ½ IP Ğ­ÒéÎ» (14×Ö½ÚÆ«ÒÆ + 9×Ö½ÚÆ«ÒÆ = 23×Ö½Ú´¦)
-            uint8_t protocol = pkt[23];
-
-            // 3. DNS ¼«ËÙÅĞ¶¨ (ºËĞÄÓÅ»¯µã)
-            // Ö»ÒªÊÇ UDP (17)£¬Á¢¼´¼ì²é¶Ë¿Ú£¬²»½øÈëÏÂÃæµÄÁ÷±íÍ³¼ÆÂß¼­
-            if (protocol == 17) {
-                uint16_t dport = (pkt[36] << 8) | pkt[37]; // ÊÖ¶¯ÌáÈ¡Ä¿µÄ¶Ë¿Ú
-                uint16_t sport = (pkt[34] << 8) | pkt[35]; // ÊÖ¶¯ÌáÈ¡Ô´¶Ë¿Ú
-
-                if (dport == 53 || sport == 53) {
-                    return Priority::Critical; // ·¢ÏÖ DNS Á¢¼´·µ»Ø£¬²»¸üĞÂ FlowTable
+        // FNV-1a å­—èŠ‚å“ˆå¸Œå®ç°
+        static uint32_t fnv1a_hash(const FlowKey& k) {
+            uint32_t h = 2166136261U;
+            auto process_bytes = [&](const auto& val) {
+                const uint8_t* p = reinterpret_cast<const uint8_t*>(&val);
+                for (size_t i = 0; i < sizeof(val); ++i) {
+                    h ^= p[i]; h *= 16777619U;
                 }
-            }
-
-
-
-            // Check bounds for IP
-            if (pkt.size() < sizeof(EthernetHeader) + sizeof(IPv4Header)) return Priority::Normal;
-            auto ip = reinterpret_cast<const IPv4Header*>(pkt.data() + sizeof(EthernetHeader));
-            size_t ihl = (ip->ver_ihl & 0x0F) * 4;
-
-            // 1. TCP ACK Optimization 
-            if (ip->protocol == 6 && pkt.size() < 74) return Priority::Critical;
-
-            // 2. UDP Heuristic Analysis 
-            if (ip->protocol == 17) {
-                size_t offset = sizeof(EthernetHeader) + ihl;
-                if (pkt.size() < offset + sizeof(UDPHeader)) return Priority::Normal;
-
-                auto udp = reinterpret_cast<const UDPHeader*>(pkt.data() + offset);
-                uint16_t dport = ntohs(udp->dest);
-                uint16_t sport = ntohs(udp->source);
-
-                if (dport == 53 || sport == 53) return Priority::Critical; // DNS
-                // --- ÓÅ»¯ 2£ºQUIC (443) ÊôÓÚ¼ÓËÙ¶ÔÏó£¬µ«²»¼ÆÈë³Í·£ ---
-                if (dport == 443 || sport == 443) {
-                    // ¸³Óè High ÓÅÏÈ¼¶£¬µ«²»Ö´ĞĞÏÂÃæÅĞ¶Ï´ó°ü²¢½µ¼¶µÄÂß¼­
-                    return Priority::High;
-                }
-
-                // Flow Analysis
-                FlowKey key{ ip->saddr, ip->daddr, sport, dport };
-                auto& stats = flows[key];
-                stats.total_pkts++;
-                stats.last_seen = std::chrono::steady_clock::now();
-
-                if (pkt.size() > Config::LARGE_PACKET_THRESHOLD) stats.large_pkts++;
-
-                // Punishment Logic
-                if (!stats.is_disguised && stats.total_pkts < 50) {
-                    if (stats.large_pkts > Config::PUNISH_TRIGGER_COUNT) {
-                        stats.is_disguised = true;
-                    }
-                }
-
-                if (stats.is_disguised) return Priority::Normal;
-                if (Config::is_game_port(dport) || Config::is_game_port(sport)) return Priority::High;
-                if (pkt.size() < 256) return Priority::High; // Unknown small packet
-            }
-
-            // Periodic Cleanup
-            if (++process_counter > Config::CLEANUP_INTERVAL) {
-                cleanup();
-                process_counter = 0;
-            }
-
-            if (ip->protocol == 6) {
-                // Ê¶±ğ SYN °ü (TCP Í·²¿Æ«ÒÆÔÚ IHL Ö®ºó)
-                if (pkt.size() < 74) return Priority::Critical;
-
-                // ĞŞ¸´£ºÀûÓÃĞÂÔöµÄ TCPHeader ÌáÈ¡¶Ë¿Ú£¬Õü¾È Bing ËÑË÷µÄ¸ßÑÓ³Ù
-                size_t offset = sizeof(EthernetHeader) + ihl;
-                if (pkt.size() >= offset + sizeof(TCPHeader)) {
-                    auto tcp = reinterpret_cast<const TCPHeader*>(pkt.data() + offset);
-                    uint16_t dport = ntohs(tcp->dest);
-                    uint16_t sport = ntohs(tcp->source);
-
-                    // ½« HTTPS(443) ÍøÒ³Á÷Á¿ºÍ TCP ÓÎÏ·Á÷Á¿Ö±½ÓÌáÈ¨Îª High£¬³¹µ×Ãâ³ıÅÅ¶ÓÏŞËÙ
-                    if (dport == 443 || sport == 443 || Config::is_game_port(dport) || Config::is_game_port(sport)) {
-                        return Priority::High;
-                    }
-                }
-            }
-
-            return Priority::Normal;
+            };
+            process_bytes(k.saddr); process_bytes(k.daddr);
+            process_bytes(k.sport); process_bytes(k.dport);
+            return h;
         }
 
-    private:
-        void cleanup() {
+    public:
+        // åœ¨çƒ­è·¯å¾„ä¸­æŸ¥æ‰¾æˆ–åˆ›å»ºæµå®ä½“
+        FlowStats* get_or_create(const FlowKey& key) {
+            uint32_t h = fnv1a_hash(key) % Capacity;
+            for (size_t i = 0; i < Capacity; ++i) {
+                size_t idx = (h + i) % Capacity;
+                if (!table[idx].occupied) {
+                    table[idx].key = key;
+                    table[idx].occupied = true;
+                    table[idx].stats = {};
+                    return &table[idx].stats;
+                }
+                if (table[idx].key == key) {
+                    return &table[idx].stats;
+                }
+            }
+            return nullptr;
+        }
+
+        // å®šæœŸæ¸…ç†è¿‡æœŸæµ
+        void cleanup(std::chrono::seconds timeout) {
             auto now = std::chrono::steady_clock::now();
-            std::erase_if(flows, [&](const auto& item) {
-                return (now - item.second.last_seen) > std::chrono::seconds(30);
-                });
+            for (auto& entry : table) {
+                if (entry.occupied && (now - entry.stats.last_seen > timeout)) {
+                    entry.occupied = false;
+                }
+            }
+        }
+    };
+
+    // å¯å‘å¼æµé‡è¯†åˆ«å¼•æ“
+    class HeuristicProcessor {
+        StaticFlowMap<4096> flows;
+        uint32_t process_counter = 0;
+
+        using ProtocolHandler = Net::Priority(*)(HeuristicProcessor*, const Net::ParsedPacket&);
+        std::array<ProtocolHandler, 256> protocol_handlers;
+
+        // UDP åè®®ç‰¹å®šè¯†åˆ«é€»è¾‘
+        static Net::Priority handle_udp(HeuristicProcessor* self, const Net::ParsedPacket& parsed) {
+            auto udp = parsed.udp();
+            if (!udp) return Net::Priority::Normal;
+            
+            uint16_t dport = ntohs(udp->dest);
+            uint16_t sport = ntohs(udp->source);
+
+            // DNS ä¼˜å…ˆæ”¾è¡Œ
+            if (dport == 53 || sport == 53) return Net::Priority::Critical;
+
+            FlowKey key{ parsed.ipv4->saddr, parsed.ipv4->daddr, sport, dport };
+            auto* stats = self->flows.get_or_create(key);
+            
+            if (stats) {
+                stats->total_pkts++;
+                stats->last_seen = std::chrono::steady_clock::now();
+                if (parsed.raw_span.size() > Config::LARGE_PACKET_THRESHOLD) stats->large_pkts++;
+                
+                // ä¼ªè£…æµé‡æ£€æµ‹ (å¦‚ UDP-Ping æ´ªæ°´)
+                if (!stats->is_disguised && stats->total_pkts < 50) {
+                    if (stats->large_pkts > Config::PUNISH_TRIGGER_COUNT) stats->is_disguised = true;
+                }
+                if (stats->is_disguised) return Net::Priority::Normal;
+            }
+
+            // å‘¨æœŸæ€§æ¸…ç†
+            if (++self->process_counter > Config::CLEANUP_INTERVAL) {
+                self->flows.cleanup(std::chrono::seconds(30));
+                self->process_counter = 0;
+            }
+
+            if (Config::is_game_port(dport) || Config::is_game_port(sport)) return Net::Priority::High;
+            return parsed.raw_span.size() < 256 ? Net::Priority::High : Net::Priority::Normal;
+        }
+
+        // TCP åè®®è¯†åˆ«
+        static Net::Priority handle_tcp(HeuristicProcessor*, const Net::ParsedPacket& parsed) {
+            if (parsed.raw_span.size() < 74) return Net::Priority::Critical; // ä¼˜å…ˆå°åŒ… (SYN/ACK)
+            auto tcp = parsed.tcp();
+            if (tcp) {
+                uint16_t dport = ntohs(tcp->dest);
+                uint16_t sport = ntohs(tcp->source);
+                if (Config::is_game_port(dport) || Config::is_game_port(sport)) return Net::Priority::High;
+            }
+            return Net::Priority::Normal;
+        }
+
+        static Net::Priority handle_default(HeuristicProcessor*, const Net::ParsedPacket&) {
+            return Net::Priority::Normal;
+        }
+
+    public:
+        HeuristicProcessor() {
+            protocol_handlers.fill(handle_default);
+            protocol_handlers[17] = handle_udp;
+            protocol_handlers[6] = handle_tcp;
+        }
+
+        // è¯†åˆ«ä¸»å…¥å£
+        Net::Priority process(const Net::ParsedPacket& parsed) {
+            if (!parsed.is_valid_ipv4()) return Net::Priority::Normal;
+            return protocol_handlers[parsed.l4_protocol](this, parsed);
         }
     };
 }
+
+

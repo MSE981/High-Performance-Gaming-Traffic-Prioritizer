@@ -1,43 +1,65 @@
-#pragma once
+ï»¿#pragma once
 #include <atomic>
 #include <cstdint>
+#include <array>
 
 namespace Scalpel {
-    // µ¥ÀıÄ£Ê½£ºÏß³Ì°²È«µÄÈ«¾ÖÍ³¼Æ
+
+    // æ ¸å¿ƒæŒ‡æ ‡æ§½ä½ (L1 Cache Line å¯¹é½)
+    // å¼ºåˆ¶å¯¹é½åˆ° 64 å­—èŠ‚ï¼Œç¡®ä¿å„ CPU æ ¸å¿ƒåœ¨æ›´æ–°å„è‡ªç»Ÿè®¡æ•°æ®æ—¶ä¸ä¼šè§¦å‘ Cache Line Bouncingã€‚
+    struct alignas(64) CoreMetrics {
+        std::atomic<uint64_t> pkts{ 0 };
+        std::atomic<uint64_t> bytes{ 0 };
+        std::atomic<uint64_t> prio_pkts[3]{ 0, 0, 0 };
+        std::atomic<uint64_t> prio_bytes[3]{ 0, 0, 0 };
+        std::atomic<uint64_t> dropped[3]{ 0, 0, 0 };
+        std::atomic<uint64_t> last_heartbeat{ 0 };
+    };
+
     struct Telemetry {
-        // Á÷Á¿Í³¼Æ (Relaxed ordering is sufficient)
-        std::atomic<uint64_t> pkts_forwarded{ 0 };
-        std::atomic<uint64_t> bytes_forwarded{ 0 };
+        // ä¸ºæ¯ä¸ª CPU æ ¸å¿ƒåˆ†é…ç‹¬ç«‹çš„ 64 å­—èŠ‚ç¼“å­˜å—
+        std::array<CoreMetrics, 4> core_metrics{};
 
-        // ·Ö¼¶ PPS Í³¼Æ
-        std::atomic<uint64_t> pkts_critical{ 0 };
-        std::atomic<uint64_t> pkts_high{ 0 };
-        std::atomic<uint64_t> pkts_normal{ 0 };
-
-        // ·Ö¼¶´ø¿íÍ³¼Æ (Bytes)
-        std::atomic<uint64_t> bytes_critical{ 0 };
-        std::atomic<uint64_t> bytes_high{ 0 };
-        std::atomic<uint64_t> bytes_normal{ 0 };
-
-        // Õï¶ÏÊı¾İ
+        // è¯Šæ–­ä¸æ§åˆ¶æ•°æ® (ä½é¢‘è¯»å†™ï¼Œæ— éœ€åˆ†æµ)
         std::atomic<double> internal_limit_mbps{ 0.0 };
-        std::atomic<double> isp_limit_mbps{ 0.0 };
+        std::atomic<double> isp_down_limit_mbps{ 0.0 };
+        std::atomic<double> isp_up_limit_mbps{ 0.0 };
         std::atomic<double> internal_pps{ 0.0 };
         std::atomic<double> isp_pps{ 0.0 };
         std::atomic<bool> is_probing{ false };
+        std::atomic<bool> bridge_mode{ false };
 
-        // Ïß³ÌĞÄÌø (ÓÃÓÚ Watchdog)
-        alignas(64) std::atomic<uint64_t> last_heartbeat_core2{ 0 };
-        alignas(64) std::atomic<uint64_t> last_heartbeat_core3{ 0 };
-
-        // Ö÷¶¯¶ª°ü¼ÆÊı (ÓÃÓÚ¼à¿Ø AQM Ğ§¹û)
-        // ·Ö¼¶¶ª°ü¼ÆÊı (º­¸Ç AQM Ö÷¶¯¶ªÆúÓëÍø¿¨ÎïÀí¶ªÆú)
-        alignas(64) std::atomic<uint64_t> dropped_critical{ 0 };
-        alignas(64) std::atomic<uint64_t> dropped_high{ 0 };
-        alignas(64) std::atomic<uint64_t> dropped_normal{ 0 };
         static Telemetry& instance() {
             static Telemetry inst;
             return inst;
         }
+
+        struct BatchStats {
+            uint64_t pkts = 0, bytes = 0;
+            uint64_t prio_pkts[3] = { 0, 0, 0 };
+            uint64_t prio_bytes[3] = { 0, 0, 0 };
+            void reset() { *this = BatchStats{}; }
+        };
+
+        /**
+         * @brief é›¶ç«äº‰æ‰¹é‡æäº¤
+         * @param s æ‰¹é‡ç»Ÿè®¡ç»“æœ
+         * @param core_id å½“å‰ CPU æ ¸å¿ƒ ID
+         * @details å†™å…¥ç«¯å®Œå…¨éš”ç¦»ï¼šæ ¸å¿ƒ 2 ä»…å†™å…¥æ§½ä½ 2ï¼Œæ ¸å¿ƒ 3 ä»…å†™å…¥æ§½ä½ 3ã€‚
+         */
+        void commit_batch(const BatchStats& s, int core_id) {
+            if (core_id < 0 || core_id >= 4) return;
+            auto& m = core_metrics[core_id];
+            
+            m.pkts.fetch_add(s.pkts, std::memory_order_relaxed);
+            m.bytes.fetch_add(s.bytes, std::memory_order_relaxed);
+            
+            for (int i = 0; i < 3; ++i) {
+                m.prio_pkts[i].fetch_add(s.prio_pkts[i], std::memory_order_relaxed);
+                m.prio_bytes[i].fetch_add(s.prio_bytes[i], std::memory_order_relaxed);
+            }
+            // ç§»é™¤äº†æ­¤å¤„çš„ time(nullptr) ç³»ç»Ÿè°ƒç”¨ï¼Œå¿ƒè·³æ»´ç­”äº¤ç”±ç©ºé—²å¾ªç¯è‡ªå¢
+        }
     };
 }
+
