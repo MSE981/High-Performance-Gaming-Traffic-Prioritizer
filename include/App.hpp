@@ -107,7 +107,7 @@ namespace Scalpel {
 
         // 核心解耦：拦截器流水线机制 (Callback-based Pipeline)
         using PipelineStep = bool (*)(PacketConsumer& self, std::span<uint8_t> pkt);
-        std::array<PipelineStep, 3> pipeline;
+        std::array<PipelineStep, 5> pipeline;
 
         PacketConsumer(int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat)
             : tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat) {
@@ -124,13 +124,29 @@ namespace Scalpel {
 
             // 编译期决断组装流水线：彻底消灭运行时的 if-else 嵌套
             if (core_id == 2) {
-                pipeline = { step_nat_downstream, step_ip_shaper_downstream, step_qos_routing };
+                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_nat_downstream, step_ip_shaper_downstream, step_qos_routing };
             } else {
-                pipeline = { step_nat_upstream, step_ip_shaper_upstream, step_qos_routing };
+                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_nat_upstream, step_ip_shaper_upstream, step_qos_routing };
             }
         }
 
         // --- 回调流水线处理模块 (Pipeline Handlers) ---
+        
+        static bool step_dhcp_interceptor(PacketConsumer& self, std::span<uint8_t> pkt) {
+            // 一时钟周期的极端轻量判定，完全不阻塞默认包流
+            if (!Config::global_state.enable_dhcp.load(std::memory_order_relaxed)) return false;
+            
+            // TODO: 若命中 UDP 67/68，推送包指针至无锁 RingBuffer 交由 Core 1 (控制面) 算力处理
+            return false;
+        }
+
+        static bool step_dns_interceptor(PacketConsumer& self, std::span<uint8_t> pkt) {
+            if (!Config::global_state.enable_dns_cache.load(std::memory_order_relaxed)) return false;
+            
+            // TODO: 检测目标是否为 UDP 53。若是，从基于静态表的高速缓存中查找结果。
+            // 若命中，原地覆写 payload、修改 checksum 且返回 true（阻断流水线并沿原路反弹）
+            return false; 
+        }
 
         static bool step_nat_downstream(PacketConsumer& self, std::span<uint8_t> pkt) {
             if (self.nat_engine) self.nat_engine->process_inbound(pkt);
@@ -364,6 +380,7 @@ namespace Scalpel {
         }
     };
 }
+
 
 
 
