@@ -8,7 +8,11 @@
 #include <print>
 #include <cstring>
 #include <memory>
+#include <cstring>
+#include <memory>
 #include <unistd.h>
+#include <string_view>
+#include <charconv>
 #include "SystemOptimizer.hpp"
 #include "NatEngine.hpp"
 #include "Config.hpp"
@@ -66,24 +70,24 @@ namespace Scalpel::Logic {
                 socklen_t clen = sizeof(client);
                 int n = recvfrom(fd, buf, sizeof(buf)-1, 0, (sockaddr*)&client, &clen);
                 if (n > 0) {
-                    buf[n] = 0;
-                    std::string req(buf);
+                    std::string_view req(buf, n);
                     // Minimal check for UPnP IGD Search
-                    if (req.find("M-SEARCH") != std::string::npos && 
-                        (req.find("urn:schemas-upnp-org:device:InternetGatewayDevice") != std::string::npos ||
-                         req.find("ssdp:all") != std::string::npos)) {
+                    if (req.find("M-SEARCH") != std::string_view::npos && 
+                        (req.find("urn:schemas-upnp-org:device:InternetGatewayDevice") != std::string_view::npos ||
+                         req.find("ssdp:all") != std::string_view::npos)) {
                          
-                        std::string resp = 
+                        char resp[512];
+                        int resp_len = snprintf(resp, sizeof(resp),
                             "HTTP/1.1 200 OK\r\n"
                             "CACHE-CONTROL: max-age=1800\r\n"
                             "ST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n"
                             "USN: uuid:12345678-1234-1234-1234-123456789abc::urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n"
                             "EXT:\r\n"
                             "Server: Scalpel/1.0 UPnP/1.0 IGD/1.0\r\n"
-                            "Location: http://" + router_ip_str + ":5000/desc.xml\r\n"
-                            "\r\n";
+                            "Location: http://%s:5000/desc.xml\r\n"
+                            "\r\n", router_ip_str.c_str());
                             
-                        sendto(fd, resp.c_str(), resp.size(), 0, (sockaddr*)&client, clen);
+                        sendto(fd, resp, resp_len, 0, (sockaddr*)&client, clen);
                     }
                 }
             }
@@ -118,44 +122,76 @@ namespace Scalpel::Logic {
                 char buf[2048];
                 int n = recv(cfd, buf, sizeof(buf)-1, 0);
                 if (n > 0) {
-                    buf[n] = 0;
-                    std::string req(buf);
+                    std::string_view req(buf, n);
                     
-                    if (req.find("GET /desc.xml") != std::string::npos) {
-                        std::string xml = "<?xml version=\"1.0\"?>\r\n<root xmlns=\"urn:schemas-upnp-org:device-1-0\">\r\n  <specVersion><major>1</major><minor>0</minor></specVersion>\r\n  <URLBase>http://" + router_ip_str + ":5000/</URLBase>\r\n  <device>\r\n    <deviceType>urn:schemas-upnp-org:device:InternetGatewayDevice:1</deviceType>\r\n    <friendlyName>Scalpel Gaming Engine</friendlyName>\r\n    <serviceList>\r\n      <service>\r\n        <serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType>\r\n        <serviceId>urn:upnp-org:serviceId:WANIPConn1</serviceId>\r\n        <controlURL>/control</controlURL>\r\n        <eventSubURL>/event</eventSubURL>\r\n        <SCPDURL>/scpd.xml</SCPDURL>\r\n      </service>\r\n    </serviceList>\r\n  </device>\r\n</root>";
-                        std::string resp = "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: " + std::to_string(xml.size()) + "\r\nConnection: close\r\n\r\n" + xml;
-                        send(cfd, resp.c_str(), resp.size(), 0);
-                    } else if (req.find("POST /control") != std::string::npos) {
+                    if (req.find("GET /desc.xml") != std::string_view::npos) {
+                        char resp[1500];
+                        const char* xml_template = 
+                            "<?xml version=\"1.0\"?>\r\n<root xmlns=\"urn:schemas-upnp-org:device-1-0\">\r\n"
+                            "  <specVersion><major>1</major><minor>0</minor></specVersion>\r\n"
+                            "  <URLBase>http://%s:5000/</URLBase>\r\n"
+                            "  <device>\r\n    <deviceType>urn:schemas-upnp-org:device:InternetGatewayDevice:1</deviceType>\r\n"
+                            "    <friendlyName>Scalpel Gaming Engine</friendlyName>\r\n"
+                            "    <serviceList>\r\n      <service>\r\n"
+                            "        <serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType>\r\n"
+                            "        <serviceId>urn:upnp-org:serviceId:WANIPConn1</serviceId>\r\n"
+                            "        <controlURL>/control</controlURL>\r\n"
+                            "        <eventSubURL>/event</eventSubURL>\r\n"
+                            "        <SCPDURL>/scpd.xml</SCPDURL>\r\n"
+                            "      </service>\r\n    </serviceList>\r\n  </device>\r\n</root>";
+                        
+                        char xml_buf[1024];
+                        int xml_len = snprintf(xml_buf, sizeof(xml_buf), xml_template, router_ip_str.c_str());
+                        
+                        int resp_len = snprintf(resp, sizeof(resp),
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", 
+                            xml_len, xml_buf);
+                        send(cfd, resp, resp_len, 0);
+                    } else if (req.find("POST /control") != std::string_view::npos) {
                         auto body_idx = req.find("\r\n\r\n");
-                        if (body_idx != std::string::npos) {
-                            std::string body = req.substr(body_idx + 4);
-                            if (body.find("AddPortMapping") != std::string::npos) {
-                                auto get_tag = [&](const std::string& t) -> std::string {
-                                    auto start = body.find("<" + t + ">");
-                                    auto end = body.find("</" + t + ">");
-                                    if (start != std::string::npos && end != std::string::npos) {
-                                        return body.substr(start + t.size() + 2, end - (start + t.size() + 2));
+                        if (body_idx != std::string_view::npos && body_idx + 4 < req.size()) {
+                            std::string_view body = req.substr(body_idx + 4);
+                            if (body.find("AddPortMapping") != std::string_view::npos) {
+                                auto get_tag = [&](std::string_view t) -> std::string_view {
+                                    char start_tag[64], end_tag[64];
+                                    int start_len = snprintf(start_tag, sizeof(start_tag), "<%.*s>", (int)t.size(), t.data());
+                                    int end_len = snprintf(end_tag, sizeof(end_tag), "</%.*s>", (int)t.size(), t.data());
+                                    
+                                    auto start = body.find(std::string_view(start_tag, start_len));
+                                    auto end = body.find(std::string_view(end_tag, end_len));
+                                    if (start != std::string_view::npos && end != std::string_view::npos) {
+                                        return body.substr(start + start_len, end - (start + start_len));
                                     }
-                                    return "";
+                                    return {};
                                 };
                                 
-                                std::string ext_port = get_tag("NewExternalPort");
-                                std::string int_port = get_tag("NewInternalPort");
-                                std::string int_client = get_tag("NewInternalClient");
-                                std::string protocol = get_tag("NewProtocol");
+                                std::string_view ext_port = get_tag("NewExternalPort");
+                                std::string_view int_port = get_tag("NewInternalPort");
+                                std::string_view int_client = get_tag("NewInternalClient");
+                                std::string_view protocol = get_tag("NewProtocol");
 
                                 if (!ext_port.empty() && !int_client.empty()) {
-                                    uint16_t eP = std::stoi(ext_port);
-                                    uint16_t iP = int_port.empty() ? eP : std::stoi(int_port);
-                                    uint8_t proto = (protocol.find("TCP") != std::string::npos) ? 6 : 17;
-                                    uint32_t cIP = inet_addr(int_client.c_str());
+                                    uint16_t eP = 0;
+                                    std::from_chars(ext_port.data(), ext_port.data() + ext_port.size(), eP);
+                                    uint16_t iP = eP;
+                                    if (!int_port.empty()) {
+                                        std::from_chars(int_port.data(), int_port.data() + int_port.size(), iP);
+                                    }
+                                    uint8_t proto = (protocol.find("TCP") != std::string_view::npos) ? 6 : 17;
+                                    
+                                    char ip_buf[32] = {0};
+                                    std::memcpy(ip_buf, int_client.data(), std::min(int_client.size(), size_t(31)));
+                                    uint32_t cIP = inet_addr(ip_buf);
 
                                     nat_engine->add_upnp_rule(eP, cIP, iP, proto);
                                     std::println("[UPnP] 游戏主机开放端口申请: {} [{}] -> {}:{} 已放行至 Data Plane.", ext_port, protocol, int_client, iP);
                                     
-                                    std::string resp_xml = "<?xml version=\"1.0\"?><s:Envelope s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\" xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><u:AddPortMappingResponse xmlns:u=\"urn:schemas-upnp-org:service:WANIPConnection:1\"/></s:Body></s:Envelope>";
-                                    std::string resp = "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: " + std::to_string(resp_xml.size()) + "\r\nConnection: close\r\n\r\n" + resp_xml;
-                                    send(cfd, resp.c_str(), resp.size(), 0);
+                                    const char* resp_xml = "<?xml version=\"1.0\"?><s:Envelope s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\" xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><u:AddPortMappingResponse xmlns:u=\"urn:schemas-upnp-org:service:WANIPConnection:1\"/></s:Body></s:Envelope>";
+                                    char resp_buf[512];
+                                    int resp_len = snprintf(resp_buf, sizeof(resp_buf),
+                                        "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s", 
+                                        std::strlen(resp_xml), resp_xml);
+                                    send(cfd, resp_buf, resp_len, 0);
                                 }
                             }
                         }
