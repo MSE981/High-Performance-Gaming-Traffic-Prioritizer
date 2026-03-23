@@ -9,6 +9,7 @@
 #include "NetworkUtils.hpp"
 #include "NetworkEngine.hpp"
 #include "Processor.hpp"
+#include "NatEngine.hpp" // Added NatEngine.hpp
 #include "SystemOptimizer.hpp"
 #include "Telemetry.hpp"
 #include "ProbeManager.hpp"
@@ -34,16 +35,16 @@ namespace Scalpel {
         std::shared_ptr<Traffic::Shaper> shaper;
     };
 
-    using RouteFunc = void (*)(const RouteContext& ctx, std::span<const uint8_t> pkt, size_t prio_idx, int core_id);
+    using RouteFunc = void (*)(const RouteContext& ctx, std::span<uint8_t> pkt, size_t prio_idx, int core_id);
 
-    static void fast_path_handler(const RouteContext& ctx, std::span<const uint8_t> pkt, size_t prio_idx, int core_id) {
+    static void fast_path_handler(const RouteContext& ctx, std::span<uint8_t> pkt, size_t prio_idx, int core_id) {
         if (send(ctx.tx_fd, pkt.data(), pkt.size(), MSG_DONTWAIT) < 0) {
             // 遵守 ISR "立即完成" 与绝对零阻塞原则：如果发送缓冲区满，则果断尾丢弃，绝不挂起或轮询重试
             Telemetry::instance().core_metrics[core_id].dropped[prio_idx].fetch_add(1, std::memory_order_relaxed);
         }
     }
 
-    static void shaper_handler(const RouteContext& ctx, std::span<const uint8_t> pkt, size_t /*prio_idx*/, int /*core_id*/) {
+    static void shaper_handler(const RouteContext& ctx, std::span<uint8_t> pkt, size_t /*prio_idx*/, int /*core_id*/) {
         if (ctx.shaper) ctx.shaper->enqueue_normal(pkt);
     }
 
@@ -99,12 +100,13 @@ namespace Scalpel {
         Logic::HeuristicProcessor processor;
         
         RouteContext ctx;
+        std::shared_ptr<Logic::NatEngine> nat_engine;
         std::array<std::array<RouteFunc, 3>, 2> routes;
         StaticIpMap<std::shared_ptr<Traffic::Shaper>, 256> ip_shaper_map;
 
     public:
-        PacketConsumer(int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper)
-            : tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper} {
+        PacketConsumer(int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat)
+            : tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat) {
 
             routes = {{
                 { fast_path_handler, fast_path_handler, shaper_handler }, // 加速模式
@@ -117,8 +119,17 @@ namespace Scalpel {
             }
         }
 
-        void on_packet_event(std::span<const uint8_t> pkt) {
-            // 实时路径：基于静态哈希表的 IP 匹配
+        void on_packet_event(std::span<uint8_t> pkt) {
+            // 纯应用态零拷贝 NAT (Fast-NAT)
+            if (core_id == 2 && nat_engine) { // Core 2: WAN -> LAN (Downstream)
+                // WAN -> LAN (DNAT) 入口还原
+                nat_engine->process_inbound(pkt);
+            } else if (core_id == 3 && nat_engine) { // Core 3: LAN -> WAN (Upstream)
+                // LAN -> WAN (SNAT) 出口伪装
+                nat_engine->process_outbound(pkt);
+            }
+
+            // 实时路径：基于静态哈希表的 IP 限速匹配
             if (pkt.size() > 34) {
                 // 判断方向并读取源/目 IP (简化处理)
                 uint32_t target_ip = (core_id == 2) ? *reinterpret_cast<const uint32_t*>(&pkt[30]) 
@@ -153,21 +164,31 @@ namespace Scalpel {
 
     // 主框架：App 类
     class App {
-        std::unique_ptr<Engine::RawSocketManager> eth0, eth1;
-        HW::RGBLed led;
-        std::promise<void> shutdown_promise;
-        std::future<void> shutdown_future;
+        std::unique_ptr<Engine::RawSocketManager> iface_wan;
+        std::unique_ptr<Engine::RawSocketManager> iface_lan;
+        std::shared_ptr<Traffic::Shaper> global_shaper;
+        std::shared_ptr<Logic::NatEngine> nat_engine;
+        
+        std::jthread worker_wan_lan;
+        std::jthread worker_lan_wan;
+        std::jthread watchdog;
 
     public:
+        App() {
+            global_shaper = std::make_shared<Traffic::Shaper>(100.0); // 默认全局限速 100Mbps
+            nat_engine = std::make_shared<Logic::NatEngine>();
+            // 默认网关 IP (可通过 Config 更新)
+            nat_engine->set_wan_ip(Config::parse_ip_str("192.168.1.100"));
+        }
         std::expected<void, std::string> init() {
             Utils::Network::disable_hardware_offloads(Config::IFACE_WAN);
             Utils::Network::disable_hardware_offloads(Config::IFACE_LAN);
 
-            eth0 = std::make_unique<Engine::RawSocketManager>(Config::IFACE_WAN);
-            eth1 = std::make_unique<Engine::RawSocketManager>(Config::IFACE_LAN);
+            iface_wan = std::make_unique<Engine::RawSocketManager>(Config::IFACE_WAN);
+            iface_lan = std::make_unique<Engine::RawSocketManager>(Config::IFACE_LAN);
 
-            if (auto r = eth0->init(); !r) return r;
-            if (auto r = eth1->init(); !r) return r;
+            if (auto r = iface_wan->init(); !r) return r;
+            if (auto r = iface_lan->init(); !r) return r;
 
             return {};
         }
@@ -178,32 +199,32 @@ namespace Scalpel {
             Scalpel::System::lock_cpu_frequency();
 
             std::jthread ui_thread([this](std::stop_token st) { ui_render_loop(st); });
-            std::jthread monitor([this](std::stop_token st) { watchdog_loop(st); });
+            watchdog = std::jthread([this](std::stop_token st) { watchdog_loop(st); });
 
             std::string gw_ip = Utils::Network::get_gateway_ip();
             Utils::Network::force_arp_resolution(gw_ip);
 
             Probe::Manager::run_internal_stress();
 
-            int fd0 = eth0->get_fd();
-            int fd1 = eth1->get_fd();
+            int fd_wan = iface_wan->get_fd();
+            int fd_lan = iface_lan->get_fd();
 
             auto& tel = Telemetry::instance();
             double dl = tel.isp_down_limit_mbps.load() > 1.0 ? tel.isp_down_limit_mbps.load() : 500.0;
             double ul = tel.isp_up_limit_mbps.load() > 1.0 ? tel.isp_up_limit_mbps.load() : 50.0;
 
+            // These shapers are for global limits, individual IP shapers are in PacketConsumer
             auto shaper_dl = std::make_shared<Traffic::Shaper>(dl * 0.85);
             auto shaper_ul = std::make_shared<Traffic::Shaper>(ul * 0.85);
 
             // Core 2: WAN -> LAN (Downstream)
-            std::jthread t1([this, rx = std::move(eth0), tx_fd = fd1, shpr = shaper_dl](std::stop_token st) mutable {
-                worker_event_loop(std::move(rx), tx_fd, 2, shpr, st);
-            });
+            // Core 2: WAN -> LAN (Downstream)
+            worker_lan_wan = std::jthread(&App::worker_event_loop, this,
+                std::move(iface_lan), fd_wan, 2, shaper_dl, nat_engine);
 
             // Core 3: LAN -> WAN (Upstream)
-            std::jthread t2([this, rx = std::move(eth1), tx_fd = fd0, shpr = shaper_ul](std::stop_token st) mutable {
-                worker_event_loop(std::move(rx), tx_fd, 3, shpr, st);
-            });
+            worker_wan_lan = std::jthread(&App::worker_event_loop, this,
+                std::move(iface_wan), fd_lan, 3, shaper_ul, nat_engine);
 
             shutdown_future = shutdown_promise.get_future();
             shutdown_future.wait();
@@ -234,14 +255,14 @@ namespace Scalpel {
             close(tfd);
         }
 
-        void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::stop_token st) {
+        void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::stop_token st) {
             Scalpel::System::set_thread_affinity(core);
             Scalpel::System::set_realtime_priority();
 
-            PacketConsumer consumer(tx_fd, core, shpr);
+            PacketConsumer consumer(tx_fd, core, shpr, nat);
 
             while (!st.stop_requested()) {
-                rx->poll_and_dispatch([&consumer](std::span<const uint8_t> pkt) {
+                rx->poll_and_dispatch([&consumer](std::span<uint8_t> pkt) {
                     consumer.on_packet_event(pkt);
                 }, 1);
 
@@ -293,6 +314,11 @@ namespace Scalpel {
                 last_bytes[2] = total_bytes_down;
                 last_bytes[3] = total_bytes_up;
 
+                // 驱动 NAT 引擎滴答
+                if (app->nat_engine) {
+                    app->nat_engine->tick();
+                }
+
                 // 基于核心心跳滴答的故障检测 (高低频解耦哲学)
                 uint64_t current_tick = tel.core_metrics[2].last_heartbeat.load(std::memory_order_relaxed);
                 if (current_tick == last_ticks[2]) led.set_red(); // 1 秒内滴答值毫无变化，说明线程绝地卡死
@@ -303,6 +329,7 @@ namespace Scalpel {
         }
     };
 }
+
 
 
 
