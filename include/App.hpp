@@ -440,8 +440,15 @@ namespace Scalpel {
             uint64_t last_bytes[4] = {0, 0, 0, 0};
             uint64_t last_ticks[4] = {0, 0, 0, 0};
 
+            struct pollfd pfd{};
+            pfd.fd = tfd;
+            pfd.events = POLLIN;
+
             while (!st.stop_requested()) {
-                // 真正的内核级阻塞，不受系统负载抖动影响
+                // 使用 poll 防止 fd 失效或者意外 O_NONBLOCK 导致的 CPU 空转 Spin Lock 死循环
+                int pret = poll(&pfd, 1, 1000); 
+                if (pret <= 0) continue;
+
                 if (read(tfd, &expirations, sizeof(expirations)) <= 0) continue;
                 
                 // Map-Reduce 聚合逻辑
