@@ -209,6 +209,44 @@ def execute_command():
     except Exception as e:
         return jsonify({"status": "error", "output": "System error: " + str(e)})
 
+# --- 8. API Status Route (For Dashboard Real-time Data) ---
+@app.route('/api/status', methods=['GET'])
+def get_system_status():
+    # Security check: only logged-in users can access this data
+    if not session.get('logged_in'):
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    # 1. Fetch REAL CPU and Memory usage using psutil
+    # interval=0.1 ensures we get a fast but accurate CPU reading
+    cpu_usage = psutil.cpu_percent(interval=0.1)
+    
+    memory_info = psutil.virtual_memory()
+    memory_usage = memory_info.percent
+    
+    # 2. Calculate REAL System Uptime
+    boot_time = psutil.boot_time()
+    uptime_seconds = int(time.time() - boot_time)
+    hours, remainder = divmod(uptime_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    uptime_str = f"{hours}h {minutes}m {seconds}s"
+    
+    # 3. Mock Active Connections for the bottom table
+    # (In a real scenario, this would come from the C++ network engine)
+    mock_connections = [
+        {"source": "192.168.1.100:54321", "dest": "104.160.131.3:27015", "proto": "UDP", "rule": "Gaming Priority", "up": 15, "down": 45, "time": "00:15:22"},
+        {"source": "192.168.1.101:44322", "dest": "142.250.190.46:443", "proto": "TCP", "rule": "Streaming Mode", "up": 120, "down": 850, "time": "01:05:10"},
+        {"source": "192.168.1.105:33214", "dest": "151.101.129.69:80", "proto": "TCP", "rule": "Default Route", "up": 5, "down": 12, "time": "00:02:45"}
+    ]
+    
+    # Send all data back to dashboard.html in JSON format
+    return jsonify({
+        "cpu": cpu_usage,
+        "memory": memory_usage,
+        "uptime": uptime_str,
+        "download_speed": 450, 
+        "connections": mock_connections
+    })
+
 if __name__ == '__main__':
     Thread(target=background_monitor, daemon=True).start()
     socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
