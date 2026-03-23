@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>BMC Console - Prioritizer</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts/dist/echarts.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #121212; color: #e0e0e0; padding: 20px; margin: 0; }
+        h1 { text-align: center; margin-bottom: 20px; color: #ffffff; letter-spacing: 1px; }
+        
+        /* Top Grid Layout */
+        .top-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1400px; margin: 0 auto 20px auto; }
+        
+        .panel { background: #1e1e1e; padding: 20px; border-radius: 8px; border: 1px solid #333; box-shadow: 0 4px 6px rgba(0,0,0,0.5); }
+        .panel h2 { margin-top: 0; font-size: 18px; border-bottom: 1px solid #444; padding-bottom: 10px; color: #4da6ff; }
+        
+        /* Stats Styles */
+        .stat-row { display: flex; justify-content: space-between; margin: 10px 0; font-size: 16px; }
+        .stat-value { font-weight: bold; color: #fff; }
+        
+        /* Form Styles */
+        label { display: block; margin-top: 15px; margin-bottom: 5px; color: #bbb; font-size: 14px; }
+        input, select { padding: 10px; width: 100%; box-sizing: border-box; border-radius: 4px; border: 1px solid #444; background: #2a2a2a; color: white; }
+        button { padding: 12px; width: 100%; background: #0066cc; color: white; border: none; cursor: pointer; border-radius: 4px; font-weight: bold; margin-top: 20px; }
+        button:hover { background: #0080ff; }
+        
+        /* Bottom Table Styles */
+        .bottom-panel { max-width: 1400px; margin: 0 auto; background: #1e1e1e; padding: 20px; border-radius: 8px; border: 1px solid #333; }
+        .conn-table { width: 100%; border-collapse: collapse; font-size: 14px; text-align: left; }
+        .conn-table th { background: #2a2a2a; color: #aaa; padding: 12px; font-weight: normal; border-bottom: 2px solid #444; }
+        .conn-table td { padding: 12px; border-bottom: 1px solid #333; }
+        .conn-table tr:hover { background: #252525; }
+        
+        /* Status Colors */
+        .color-up { color: #ff9900; font-family: monospace; }
+        .color-down { color: #00ffcc; font-family: monospace; }
+        .color-gaming { color: #ff3366; font-weight: bold; }
+        .color-ip { color: #ccc; font-family: monospace; }
+
+        @media (max-width: 768px) { .top-grid { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+
+    <h1>🚀 Core System Management (BMC)</h1>
+
+    <div class="top-grid">
+        <div class="panel">
+            <h2>🖥️ Zone 1: System Health</h2>
+            <div class="stat-row"><span>CPU Usage:</span> <span class="stat-value" id="cpu-val">0%</span></div>
+            <div class="stat-row"><span>Memory Usage:</span> <span class="stat-value" id="mem-val">0%</span></div>
+            <div class="stat-row"><span>System Uptime:</span> <span class="stat-value" id="uptime-val">0h 0m 0s</span></div>
+            <div class="stat-row"><span>Engine Status:</span> <span class="stat-value" id="engine-status" style="color: #ffcc00;">● Connecting...</span></div>
+        </div>
+
+        <div class="panel">
+            <h2>📊 Zone 2: Real-time Traffic & Config</h2>
+            
+            <div id="speed-gauge" style="width: 100%; height: 200px;"></div>
+
+            <form action="/api/config" method="POST">
+                <label>QoS Traffic Mode:</label>
+                <select name="mode">
+                    <option value="gaming">🎮 Gaming Priority (Strict Latency)</option>
+                    <option value="streaming">📺 Streaming (High Throughput)</option>
+                </select>
+
+                <label>Max Bandwidth Limit (Mbps):</label>
+                <input type="number" name="limit" value="100">
+
+                <button type="submit">Deploy Configuration</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="bottom-panel">
+        <h2>🌐 Active Connections</h2>
+        <table class="conn-table">
+            <thead>
+                <tr>
+                    <th>Source (Local)</th>
+                    <th>Destination (Remote)</th>
+                    <th>Protocol</th>
+                    <th>Rule / Strategy</th>
+                    <th>Up Speed</th>
+                    <th>Down Speed</th>
+                    <th>Duration</th>
+                </tr>
+            </thead>
+            <tbody id="conn-body">
+                <tr><td colspan="7" style="text-align: center; color: #777;">Waiting for C++ Backend Data...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        // 1. Initialize the ECharts Gauge
+        var chart = echarts.init(document.getElementById('speed-gauge'));
+        var option = {
+            series: [{
+                type: 'gauge',
+                max: 1000, 
+                radius: '100%',
+                detail: { formatter: '{value} KB/s', fontSize: 16, color: '#fff' },
+                axisLine: { lineStyle: { width: 10, color: [[0.3, '#00ff00'], [0.7, '#ffff00'], [1, '#ff0000']] } },
+                data: [{ value: 0, name: 'DL Speed' }]
+            }]
+        };
+        chart.setOption(option);
+
+        // =================================================================
+        // CORE AJAX POLLING LOGIC (Complies with project guidelines)
+        // =================================================================
+        
+        // Setup a timer to fetch data every 1000ms (1 second)
+        setInterval(function() {
+            
+            // Request JSON data from the C++ FastCGI backend endpoint
+            // Teammate needs to ensure C++ serves JSON at "/api/status"
+            $.getJSON('/api/status', function(data) {
+                
+                // Connection successful, update engine status color to green
+                $('#engine-status').text('● Active').css('color', '#00ff00');
+
+                // Update Zone 1: CPU, RAM, Uptime
+                if(data.cpu !== undefined) $('#cpu-val').text(data.cpu + '%');
+                if(data.memory !== undefined) $('#mem-val').text(data.memory + '%');
+                if(data.uptime !== undefined) $('#uptime-val').text(data.uptime);
+
+                // Update Zone 2: Gauge (Download speed)
+                if(data.download_speed !== undefined) {
+                    chart.setOption({
+                        series: [{ data: [{ value: data.download_speed, name: 'DL Speed' }] }]
+                    });
+                }
+                
+                // Update Bottom Zone: Connections Table
+                if(data.connections && data.connections.length > 0) {
+                    var tbody = $('#conn-body');
+                    tbody.empty(); // Clear old table rows
+                    
+                    data.connections.forEach(function(conn) {
+                        // Highlight gaming rules in red
+                        var ruleClass = conn.rule.includes("Gaming") ? "color-gaming" : "";
+                        
+                        var tr = `<tr>
+                            <td class="color-ip">${conn.source}</td>
+                            <td class="color-ip">${conn.dest}</td>
+                            <td>${conn.proto}</td>
+                            <td class="${ruleClass}">${conn.rule}</td>
+                            <td class="color-up">▲ ${conn.up} KB/s</td>
+                            <td class="color-down">▼ ${conn.down} KB/s</td>
+                            <td>${conn.time}</td>
+                        </tr>`;
+                        tbody.append(tr); // Inject new row
+                    });
+                }
+                
+            }).fail(function() {
+                // Connection failed (C++ backend is offline or NGINX is not configured)
+                $('#engine-status').text('● Disconnected').css('color', '#ff0000');
+                console.log("[Error] Failed to connect to C++ FastCGI backend at /api/status");
+            });
+
+        }, 1000); // 1000 ms = 1 second polling interval
+    </script>
+</body>
+</html>

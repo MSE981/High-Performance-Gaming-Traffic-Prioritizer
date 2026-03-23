@@ -1,4 +1,3 @@
-#pragma once
 #include <thread>
 #include <stop_token>
 #include <memory>
@@ -9,485 +8,229 @@
 #include "NetworkUtils.hpp"
 #include "NetworkEngine.hpp"
 #include "Processor.hpp"
-#include "NatEngine.hpp"
-#include "DnsEngine.hpp"
-#include "DhcpEngine.hpp"
-#include "UpnpEngine.hpp"
 #include "SystemOptimizer.hpp"
 #include "Telemetry.hpp"
 #include "ProbeManager.hpp"
 #include "Indicator.hpp"
-#include "Scheduler.hpp"
-#include <print>
+#include "Schedu
 #include <iostream>
 #include <cstdio>
 #include <cstdlib>
 #include <span>
-#include <poll.h> 
-#include <future>
-#include <array>
-#include <map>
-#include <sys/timerfd.h>
-#include <unistd.h>
 
 namespace Scalpel {
-
-    // æ•°æ®é¢ï¼šåŸºäºå‡½æ•°æŒ‡é’ˆçš„é«˜æ•ˆé™æ€åˆ†å‘ (æ¶ˆé™¤è™šå‡½æ•°å¼€é”€)
-    struct RouteContext {
-        int tx_fd;
-        std::shared_ptr<Traffic::Shaper> shaper;
-    };
-
-    using RouteFunc = void (*)(const RouteContext& ctx, std::span<uint8_t> pkt, size_t prio_idx, int core_id);
-
-    static void fast_path_handler(const RouteContext& ctx, std::span<uint8_t> pkt, size_t prio_idx, int core_id) {
-        if (send(ctx.tx_fd, pkt.data(), pkt.size(), MSG_DONTWAIT) < 0) {
-            // éµå®ˆ ISR "ç«‹å³å®Œæˆ" ä¸ç»å¯¹é›¶é˜»å¡åŸåˆ™ï¼šå¦‚æœå‘é€ç¼“å†²åŒºæ»¡ï¼Œåˆ™æœæ–­å°¾ä¸¢å¼ƒï¼Œç»ä¸æŒ‚èµ·æˆ–è½®è¯¢é‡è¯•
-            Telemetry::instance().core_metrics[core_id].dropped[prio_idx].fetch_add(1, std::memory_order_relaxed);
-        }
-    }
-
-    static void shaper_handler(const RouteContext& ctx, std::span<uint8_t> pkt, size_t /*prio_idx*/, int /*core_id*/) {
-        if (ctx.shaper) ctx.shaper->enqueue_normal(pkt);
-    }
-
-    // è¾…åŠ©å·¥å…·ï¼šåŸºäº FNV-1a é™æ€å“ˆå¸Œè¡¨ (é’ˆå¯¹åµŒå…¥å¼å®æ—¶æ€§èƒ½ä¼˜åŒ–)
-    template<typename T, size_t Capacity = 256>
-    class StaticIpMap {
-        struct Entry {
-            uint32_t key = 0;
-            T value = nullptr;
-            bool occupied = false;
-        };
-        std::array<Entry, Capacity> table{};
-
-        static uint32_t fnv1a_hash(uint32_t val) {
-            uint32_t h = 2166136261U;
-            h ^= (val & 0xFF); h *= 16777619U;
-            h ^= ((val >> 8) & 0xFF); h *= 16777619U;
-            h ^= ((val >> 16) & 0xFF); h *= 16777619U;
-            h ^= ((val >> 24) & 0xFF); h *= 16777619U;
-            return h;
-        }
-
-    public:
-        void insert(uint32_t ip, T val) {
-            uint32_t h = fnv1a_hash(ip) % Capacity;
-            for (size_t i = 0; i < Capacity; ++i) {
-                size_t idx = (h + i) % Capacity;
-                if (!table[idx].occupied || table[idx].key == ip) {
-                    table[idx].key = ip;
-                    table[idx].value = val;
-                    table[idx].occupied = true;
-                    return;
-                }
-            }
-        }
-
-        T find(uint32_t ip) const {
-            uint32_t h = fnv1a_hash(ip) % Capacity;
-            for (size_t i = 0; i < Capacity; ++i) {
-                size_t idx = (h + i) % Capacity;
-                if (!table[idx].occupied) return nullptr;
-                if (table[idx].key == ip) return table[idx].value;
-            }
-            return nullptr;
-        }
-    };
-
-    // Phase 2.4: è½¯è·¯ç”± QoS æ— é”åŒç¼“å†²é…ç½®æ ¸å¿ƒ (RCU Config Swap)
-    struct QoSConfig {
-        std::array<StaticIpMap<std::shared_ptr<Traffic::Shaper>, 256>, 2> buffers;
-        alignas(64) std::atomic<size_t> active_idx{0};
-
-        void update(const std::map<uint32_t, double>& limits) {
-            size_t active = active_idx.load(std::memory_order_relaxed);
-            size_t inactive = 1 - active;
-            buffers[inactive] = decltype(buffers[0])(); // Zero Allocation Refresh
-            for (auto const& [ip, rate] : limits) {
-                buffers[inactive].insert(ip, std::make_shared<Traffic::Shaper>(rate));
-            }
-            active_idx.store(inactive, std::memory_order_release);
-        }
-    };
-
-    // æ•°æ®é¢ï¼šäº‹ä»¶æ¶ˆè´¹è€…æ¨¡å‹ (PacketConsumer) - å¤„ç†æ ¸å¿ƒé€»è¾‘
-    class PacketConsumer {
-    public:
-        int rx_fd; // Socket FD for reading/bouncing
-        int tx_fd; // Socket FD for writing upstream
-        int core_id; // å…·æœ‰æ ¸å¿ƒèº«ä»½
-        Telemetry::BatchStats stats;
-        Logic::HeuristicProcessor processor;
-        
-        RouteContext ctx;
-        std::shared_ptr<Logic::NatEngine> nat_engine;
-        std::shared_ptr<Logic::DnsEngine> dns_engine;
-        std::shared_ptr<QoSConfig> qos_config;
-        std::shared_ptr<Logic::DhcpEngine> dhcp_engine;
-        uint32_t gateway_ip = 0;
-
-        std::array<std::array<RouteFunc, 3>, 2> routes;
-
-        // æ ¸å¿ƒè§£è€¦ï¼šæ‹¦æˆªå™¨æµæ°´çº¿æœºåˆ¶ (Callback-based Pipeline)
-        using PipelineStep = bool (*)(PacketConsumer& self, Net::ParsedPacket& pkt);
-        std::array<PipelineStep, 6> pipeline;
-
-        PacketConsumer(int rx_fd, int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp, uint32_t gw_ip)
-            : rx_fd(rx_fd), tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat), dns_engine(dns), qos_config(qos), dhcp_engine(dhcp), gateway_ip(gw_ip) {
-
-            routes = {{
-                { fast_path_handler, fast_path_handler, shaper_handler }, // åŠ é€Ÿæ¨¡å¼
-                { fast_path_handler, fast_path_handler, fast_path_handler } // é€æ˜ç½‘æ¡¥æ¨¡å¼
-            }};
-
-            // ç¼–è¯‘æœŸå†³æ–­ç»„è£…æµæ°´çº¿ï¼šå½»åº•æ¶ˆç­è¿è¡Œæ—¶çš„ if-else åµŒå¥—
-            if (core_id == 2) {
-                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_nat_downstream, step_ip_shaper_downstream, step_qos_routing };
-            } else {
-                pipeline = {
-                step_dhcp_interceptor,
-                step_dns_interceptor,
-                step_local_delivery_blocker,
-                step_nat_downstream,
-                step_nat_upstream,
-                step_qos_routing
-            };
-        }
-
-        // --- å›è°ƒæµæ°´çº¿å¤„ç†æ¨¡å— (Pipeline Handlers) ---
-        
-        static bool step_local_delivery_blocker(PacketConsumer& self, Net::ParsedPacket& pkt) {
-            if (!pkt.is_valid_ipv4()) return false;
-            if (self.core_id == 3) { // Only checking LAN -> WAN (Upstream)
-                uint32_t daddr = pkt.ipv4->daddr;
-                if (daddr == self.gateway_ip || 
-                    daddr == 0xFAFFFFEF || // 239.255.255.250 SSDP ç»„æ’­ (Little Endian)
-                    daddr == 0xFFFFFFFF) { // å¹¿æ’­
-                    // è¿”å› true æˆªæ–­ç”¨æˆ·é¢è½¬å‘æµæ°´çº¿ã€‚
-                    // æ•ˆæœï¼šåŒ…æœªé€šè¿‡ `tx_fd` (WAN) å‘é€ï¼Œè‡ªç„¶è½å…¥ Linux æœ¬åœ°åè®®æ ˆå¤„ç†ï¼ˆå¦‚ SSDP, SSH, Nginx ç­‰ï¼‰
-                    return true; 
-                }
-            }
-            return false;
-        }
-        
-        static bool step_dhcp_interceptor(PacketConsumer& self, Net::ParsedPacket& pkt) {
-            if (!Config::global_state.enable_dhcp.load(std::memory_order_relaxed)) return false;
-            
-            // Core 3 (LAN -> WAN) è´Ÿè´£æ‹¦æˆªå‘ç½‘å…³è·å– IP çš„ DHCP è¯·æ±‚åŒ…
-            if (self.core_id == 3 && pkt.is_valid_ipv4() && pkt.l4_protocol == 17) {
-                auto udp = pkt.udp();
-                if (udp && (ntohs(udp->dest) == 67 || ntohs(udp->dest) == 68)) {
-                    if (self.dhcp_engine) self.dhcp_engine->intercept_request(pkt);
-                    return true; // æ‹¦æˆªæˆåŠŸï¼Œé˜»å¡è½¬å‘åˆ°å…¬ç½‘
-                }
-            }
-            return false;
-        }
-
-        static bool step_dns_interceptor(PacketConsumer& self, Net::ParsedPacket& pkt) {
-            if (!Config::global_state.enable_dns_cache.load(std::memory_order_relaxed)) return false;
-            
-            if (self.core_id == 3) {
-                // Core 3 (Upstream: LAN -> WAN): æˆªå–ç”¨æˆ·çš„ Query
-                if (self.dns_engine && self.dns_engine->process_query(pkt, self.rx_fd)) {
-                    return true; // ç¼“å­˜å‘½ä¸­ä¸”å·²åŸåœ°å¼¹å› LAN å£ (rx_fd)ï¼Œå³åˆ»é˜»æ–­æµæ°´çº¿
-                }
-            } else if (self.core_id == 2) {
-                // Core 2 (Downstream: WAN -> LAN): ç›‘è§†å…¬ç½‘å›é¦ˆçš„ Response
-                if (self.dns_engine) {
-                    self.dns_engine->intercept_response(pkt);
-                } // ä»ä¸é˜»æ–­ Response æ”¾è¡Œç»™ç©å®¶
-            }
-            return false; 
-        }
-
-        static bool step_nat_downstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
-            if (self.nat_engine) self.nat_engine->process_inbound(pkt);
-            return false; // ç»§ç»­æµæ°´çº¿
-        }
-        
-        static bool step_nat_upstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
-            if (self.nat_engine) self.nat_engine->process_outbound(pkt);
-            return false;
-        }
-
-        static bool step_ip_shaper_downstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
-            if (pkt.is_valid_ipv4() && self.qos_config) {
-                uint32_t target_ip = pkt.ipv4->daddr;
-                
-                size_t active_idx = self.qos_config->active_idx.load(std::memory_order_acquire);
-                auto target_shaper = self.qos_config->buffers[active_idx].find(target_ip);
-
-                if (target_shaper) {
-                    RouteContext ip_ctx{self.tx_fd, target_shaper};
-                    shaper_handler(ip_ctx, pkt.raw_span, 2, self.core_id);
-                    return true; // æ‹¦æˆªæˆåŠŸï¼Œç»ˆæ­¢æµæ°´çº¿
-                }
-            }
-            return false;
-        }
-
-        static bool step_ip_shaper_upstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
-            if (pkt.is_valid_ipv4() && self.qos_config) {
-                uint32_t target_ip = pkt.ipv4->saddr;
-                
-                size_t active_idx = self.qos_config->active_idx.load(std::memory_order_acquire);
-                auto target_shaper = self.qos_config->buffers[active_idx].find(target_ip);
-
-                if (target_shaper) {
-                    RouteContext ip_ctx{self.tx_fd, target_shaper};
-                    shaper_handler(ip_ctx, pkt.raw_span, 2, self.core_id);
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        static bool step_qos_routing(PacketConsumer& self, Net::ParsedPacket& pkt) {
-            auto prio = self.processor.process(pkt);
-            const size_t p_idx = static_cast<size_t>(prio);
-
-            self.stats.pkts++;
-            self.stats.bytes += pkt.raw_span.size();
-            self.stats.prio_pkts[p_idx]++;
-            self.stats.prio_bytes[p_idx] += pkt.raw_span.size();
-
-            size_t mode_idx = Telemetry::instance().bridge_mode.load(std::memory_order_relaxed);
-            self.routes[mode_idx][p_idx](self.ctx, pkt.raw_span, p_idx, self.core_id);
-            return true; // æ•°æ®åŒ…å·²è¿›å…¥è·¯ç”±å‘é€ï¼Œç”Ÿå‘½å‘¨æœŸç»“æŸ
-        }
-
-        // --- ä¸»å…¥å£äº‹ä½œ ---
-        void on_packet_event(Net::ParsedPacket& pkt) {
-            // Callback-based Pipeline: ä»¥æ•°ç»„æ­¥è¿›å–ä»£æ‰€æœ‰çš„è¿è¡Œæ€æ¡ä»¶åˆ†æ”¯
-            for (auto step : pipeline) {
-                if (step(*this, pkt)) break;
-            }
-
-            // æ‰¹é‡æäº¤è‡³å½“å‰ core çš„ä¸“æœ‰æ§½ä½
-            if (stats.pkts % 32 == 0) {
-                Telemetry::instance().commit_batch(stats, core_id);
-                stats.reset();
-            }
-        }
-    };
-
-    // ä¸»æ¡†æ¶ï¼šApp ç±»
     class App {
-        std::unique_ptr<Engine::RawSocketManager> iface_wan;
-        std::unique_ptr<Engine::RawSocketManager> iface_lan;
-        std::shared_ptr<Traffic::Shaper> global_shaper;
-        std::shared_ptr<Logic::NatEngine> nat_engine;
-        std::shared_ptr<Logic::DnsEngine> dns_engine;
-        std::shared_ptr<Logic::DhcpEngine> dhcp_engine;
-        std::shared_ptr<Logic::UpnpEngine> upnp_engine;
-        std::shared_ptr<QoSConfig> qos_config;
-        
-        std::jthread worker_downstream;
-        std::jthread worker_upstream;
-        std::jthread watchdog;
-        std::promise<void> shutdown_promise;
-        std::future<void> shutdown_future;
+        std::shared_ptr<Engine::RawSocketManager> eth0, eth1;
+        HW::RGBLed led;
 
     public:
-        App() {
-            global_shaper = std::make_shared<Traffic::Shaper>(100.0); // é»˜è®¤å…¨å±€é™é€Ÿ 100Mbps
-            
-            Config::global_state.enable_nat.store(true);
-            Config::global_state.enable_dns_cache.store(true);
-            Config::global_state.enable_dhcp.store(true);
-            Config::global_state.enable_upnp.store(true);
-            
-            // Default gateway IP 
-            std::string gw_ip_str = "192.168.1.100";
-            uint32_t gateway_ip = Config::parse_ip_str(gw_ip_str);
-
-            nat_engine = std::make_shared<Logic::NatEngine>();
-            dns_engine = std::make_shared<Logic::DnsEngine>();
-            dhcp_engine = std::make_shared<Logic::DhcpEngine>(gw_ip_str);
-            upnp_engine = std::make_shared<Logic::UpnpEngine>(nat_engine, gw_ip_str);
-            qos_config = std::make_shared<QoSConfig>();
-            
-            // åˆå§‹åŒ– QoS æ— é”åŒç¼“å†²è¡¨
-            qos_config->update(Config::IP_LIMIT_MAP);
-            nat_engine->set_wan_ip(Config::parse_ip_str("192.168.1.100"));
-        }
         std::expected<void, std::string> init() {
-            Utils::Network::disable_hardware_offloads(Config::IFACE_WAN);
-            Utils::Network::disable_hardware_offloads(Config::IFACE_LAN);
+            eth0 = std::make_shared<Engine::RawSocketManager>(Config::IFACE_WAN);
+            eth1 = std::make_shared<Engine::RawSocketManager>(Config::IFACE_LAN);
 
-            iface_wan = std::make_unique<Engine::RawSocketManager>(Config::IFACE_WAN);
-            iface_lan = std::make_unique<Engine::RawSocketManager>(Config::IFACE_LAN);
-
-            if (auto r = iface_wan->init(); !r) return r;
-            if (auto r = iface_lan->init(); !r) return r;
+            if (auto r = eth0->init(); !r) return r;
+            if (auto r = eth1->init(); !r) return r;
 
             return {};
         }
 
         void run() {
-            std::println("=== Scalpel High-Performance Software Router ===");
-            Telemetry::instance().bridge_mode.store(!Config::ENABLE_ACCELERATION, std::memory_order_relaxed);
-            Scalpel::System::lock_cpu_frequency();
+            std::println("=== GamingTrafficPrioritizer ===");
 
-            std::jthread ui_thread([this](std::stop_token st) { ui_render_loop(st); });
-            watchdog = std::jthread([this](std::stop_token st) { watchdog_loop(st); });
+            // 1. ÏµÍ³¼¶Ëø¶¨
+            System::lock_cpu_frequency();
 
+            // 2. Æô¶¯¼à¿ØÏß³Ì
+            std::jthread monitor([this](std::stop_token st) { watchdog_loop(st); });
+            // ---×Ô¶¯Ê¶±ğÍøÂç»·¾³ ---
+            std::string wan_name(Config::IFACE_WAN);
+            std::string local_ip = Utils::Network::get_local_ip(wan_name);
             std::string gw_ip = Utils::Network::get_gateway_ip();
-            Utils::Network::force_arp_resolution(gw_ip);
 
+            // »½ĞÑÍø¹Ø²¢»ñÈ¡ MAC
+            std::string gw_mac = Utils::Network::get_mac_from_arp(gw_ip);
+            if (gw_mac.empty() || gw_mac == "00:00:00:00:00:00") {
+                // ·¢ËÍÒ»¸ö ping °üÇ¿ÖÆË¢ĞÂÄÚºË ARP ±í
+                int ret = system(("ping -c 1 -W 1 " + gw_ip + " > /dev/null 2>&1").c_str());
+                (void)ret;
+                gw_mac = Utils::Network::get_mac_from_arp(gw_ip);
+            }
+
+            // 3. Ö´ĞĞ×Ô¼ì (Ê¹ÓÃ eth0 ·¢°ü)
             Probe::Manager::run_internal_stress();
+            Probe::Manager::run_isp_probe(eth0->get_fd());
+            // Ä£Ê½ C£ºÏÖÔÚÊ¹ÓÃ×Ô¶¯Ê¶±ğµÄ²ÎÊı
+            if (!gw_mac.empty()) {
+                Probe::Manager::run_real_isp_probe(eth0->get_fd(), gw_mac, local_ip, "223.5.5.5");
+            }
+            else {
+                std::println(stderr, "[Error] Could not resolve Gateway MAC. Skipping Probe C.");
+            }
 
-            int fd_wan = iface_wan->get_fd();
-            int fd_lan = iface_lan->get_fd();
 
-            auto& tel = Telemetry::instance();
-            double dl = tel.isp_down_limit_mbps.load() > 1.0 ? tel.isp_down_limit_mbps.load() : 500.0;
-            double ul = tel.isp_up_limit_mbps.load() > 1.0 ? tel.isp_up_limit_mbps.load() : 50.0;
+            // 4. Æô¶¯×ª·¢ºËĞÄ (Core 2 & 3)
+            std::jthread t1([this](std::stop_token st) {
+                worker(eth0, eth1, 2, Telemetry::instance().last_heartbeat_core2, st);
+                });
 
-            // These shapers are for global limits, individual IP shapers are in PacketConsumer
-            auto shaper_dl = std::make_shared<Traffic::Shaper>(dl * 0.85);
-            auto shaper_ul = std::make_shared<Traffic::Shaper>(ul * 0.85);
+            std::jthread t2([this](std::stop_token st) {
+                worker(eth1, eth0, 3, Telemetry::instance().last_heartbeat_core3, st);
+                });
 
-            // Core 2: Downstream (WAN -> LAN) â€” Processing iface_wan RX -> fd_lan TX
-            worker_downstream = std::jthread(&App::worker_event_loop, this,
-                std::move(iface_wan), fd_lan, 2, shaper_dl, nat_engine, dns_engine, qos_config, dhcp_engine);
-
-            // Core 3: Upstream (LAN -> WAN) â€” Processing iface_lan RX -> fd_wan TX
-            worker_upstream = std::jthread(&App::worker_event_loop, this,
-                std::move(iface_lan), fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config, dhcp_engine);
-
-            shutdown_future = shutdown_promise.get_future();
-            shutdown_future.wait();
-            std::println("\n[System] Graceful shutdown complete.");
+            // Ö÷Ïß³Ì¹ÒÆğ
+            while (true) std::this_thread::sleep_for(std::chrono::hours(24));
         }
-
-        void stop() { shutdown_promise.set_value(); }
 
     private:
-        void ui_render_loop(std::stop_token st) {
-            Scalpel::System::set_thread_affinity(0);
-            int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
-            if (tfd == -1) return;
+        void worker(std::shared_ptr<Engine::RawSocketManager> rx, std::shared_ptr<Engine::RawSocketManager> tx, int core_id, auto& heartbeat, std::stop_token st) {
+            System::set_thread_affinity(core_id);
+            System::set_realtime_priority();
 
-            struct itimerspec its{};
-            its.it_value.tv_sec = 0;
-            its.it_value.tv_nsec = 16666666;
-            its.it_interval.tv_sec = 0;
-            its.it_interval.tv_nsec = 16666666; 
-            timerfd_settime(tfd, 0, &its, NULL);
+            Logic::HeuristicProcessor processor;
+            auto& tel = Telemetry::instance();
 
-            uint64_t expirations;
-            while (!st.stop_requested()) {
-                if (read(tfd, &expirations, sizeof(expirations)) > 0) {
-                    // UI é‡‡é›†èšåˆæ•°æ®å¹¶æ¸²æŸ“ (æš‚ç•¥)
-                }
-            }
-            close(tfd);
-        }
+            // ---³õÊ¼»¯ÕûĞÎÆ÷ ---
+            double current_isp_limit = tel.isp_limit_mbps.load();
+            if (current_isp_limit < 10.0) current_isp_limit = 500.0; // Ä¬ÈÏÖµ
 
-        void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp) {
-            Scalpel::System::set_thread_affinity(core);
-            Scalpel::System::set_realtime_priority();
-            std::println("[App] Core {} Pipeline æŒ‚è½½å°±ç»ª.", core);
+            // °ÑÆÕÍ¨Á÷Á¿µÄÉÏÏŞËøËÀÔÚÎïÀí´ø¿íµÄ 80%
+            Traffic::Shaper shaper(current_isp_limit * 0.80);
 
-            int rx_fd = rx_mgr->get_fd();
-            PacketConsumer consumer(rx_fd, tx_fd, core, shpr, nat, dns, qos, dhcp, Config::parse_ip_str("192.168.1.100"));
+            uint32_t idx = 0;
+            // ÓÃÓÚ¼õÉÙ¿çºËÄÚ´æÍ¬²½¿ªÏúµÄ¾Ö²¿±äÁ¿
+            uint64_t local_pkts = 0;
+            uint64_t local_bytes = 0;
+            uint64_t local_pkts_crit = 0;
+            uint64_t local_pkts_high = 0;
+            uint64_t local_pkts_norm = 0;
+            uint64_t local_bytes_crit = 0;
+            uint64_t local_bytes_high = 0;
+            uint64_t local_bytes_norm = 0;
 
             while (!st.stop_requested()) {
-                rx_mgr->poll_and_dispatch([&consumer](std::span<uint8_t> raw_span) {
-                    auto pkt_ctx = Net::ParsedPacket::parse(raw_span);
-                    consumer.on_packet_event(pkt_ctx);
-                }, 1);
 
-                // QoS é˜Ÿåˆ—å‘¨æœŸæ€§æ´¾å‘ä¸ç¡¬ä»¶è§£å µå¡
-                if (shpr) shpr->process_queue(tx_fd);
-                if (consumer.qos_config) {
-                    size_t active_idx = consumer.qos_config->active_idx.load(std::memory_order_relaxed);
-                    for (auto& entry : consumer.qos_config->buffers[active_idx].table) { // Assuming table is accessible or find is used
-                        if (entry.occupied && entry.value) {
-                            entry.value->process_queue(tx_fd);
+            while (!st.stop_requested()) {
+                auto* hdr = reinterpret_cast<tpacket_hdr*>(rx->get_ring() + (idx * rx->frame_size()));
+
+                if (hdr->tp_status & TP_STATUS_USER) {
+                    std::span pkt{ reinterpret_cast<uint8_t*>(hdr) + hdr->tp_mac, hdr->tp_len };
+                    auto prio = processor.process(pkt);
+
+                    // --- ¼ÇÂ¼¸÷¼¶±ğÁ÷Á¿×´Ì¬ ---
+                    if (prio == Net::Priority::Critical) local_pkts_crit++;
+                    else if (prio == Net::Priority::High) local_pkts_high++;
+                    else local_pkts_norm++;
+
+                    // ---Èı¼¶µ÷¶È·ÖÁ÷Âß¼­ ---
+                    if (prio == Net::Priority::Critical || prio == Net::Priority::High) {
+                        // ÓÎÏ·°ü/DNS£ºÖ±½Ó×ßÁã¿½±´Í¨µÀ
+                        if (send(tx->get_fd(), pkt.data(), pkt.size(), MSG_DONTWAIT) < 0) {
+                            // ²¶×½Íø¿¨µ×²ãµÄÎïÀí¶ª°ü
+                            if (prio == Net::Priority::Critical) tel.dropped_critical.fetch_add(1, std::memory_order_relaxed);
+                            else tel.dropped_high.fetch_add(1, std::memory_order_relaxed);
                         }
                     }
+                    else {
+                        // ÏÂÔØ°ü£ºÈÓ½ø 4MB µÄÄÚ´æ³ØÀïÅÅ¶ÓµÈºò·¢Âä
+                        shaper.enqueue_normal(pkt);
+                    }
+
+                    // --- Ã¿ 32 ¸ö°ü²Å¸üĞÂÒ»´ÎÈ«¾ÖÔ­×Ó±äÁ¿ ---
+                    local_pkts++;
+                    local_bytes += pkt.size();
+                    if (local_pkts % 32 == 0) {
+                        tel.pkts_forwarded.fetch_add(local_pkts, std::memory_order_relaxed);
+                        tel.bytes_forwarded.fetch_add(local_bytes, std::memory_order_relaxed);
+                        tel.pkts_critical.fetch_add(local_pkts_crit, std::memory_order_relaxed);
+                        tel.pkts_high.fetch_add(local_pkts_high, std::memory_order_relaxed);
+                        tel.pkts_normal.fetch_add(local_pkts_norm, std::memory_order_relaxed);
+                        heartbeat.store(time(nullptr), std::memory_order_relaxed);
+                        local_pkts = 0;
+                        local_bytes = 0;
+                        local_pkts_crit = 0;
+                        local_pkts_high = 0;
+                        local_pkts_norm = 0;
+                    }
+
+                    hdr->tp_status = TP_STATUS_KERNEL;
+                    idx = (idx + 1) % rx->frame_nr();
                 }
-                
-                // æ— é”æ— è°ƒç”¨çš„å¿ƒè·³æ»´ç­” (Tick-based Heartbeat)ï¼šåº•å±‚æ±‡ç¼–çš„å•å‘¨æœŸå•æŒ‡ä»¤ï¼Œ0 ç³»ç»Ÿè°ƒç”¨ï¼
-                Telemetry::instance().core_metrics[core].last_heartbeat.fetch_add(1, std::memory_order_relaxed);
+                else {
+                    __asm__ __volatile__("yield" ::: "memory");
+                }
+
+                // ---²»¶Ï³é¿ÕÏÂÔØ°ü¶ÓÁĞ ---
+                shaper.process_queue(tx->get_fd());
             }
         }
 
         void watchdog_loop(std::stop_token st) {
-            Scalpel::System::set_thread_affinity(1);
             auto& tel = Telemetry::instance();
-            
-            int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
-            if (tfd == -1) return;
-
-            struct itimerspec its{};
-            its.it_value.tv_sec = 1;      // 1ç§’åå¯åŠ¨
-            its.it_value.tv_nsec = 0;
-            its.it_interval.tv_sec = 1;   // æ¯éš”1ç§’è§¦å‘ä¸€æ¬¡
-            its.it_interval.tv_nsec = 0;
-
-            if (timerfd_settime(tfd, 0, &its, NULL) == -1) {
-                close(tfd);
-                return;
-            }
-
-            uint64_t expirations;
-            uint64_t last_bytes[4] = {0, 0, 0, 0};
-            uint64_t last_ticks[4] = {0, 0, 0, 0};
+            // ---¼ÇÂ¼ÉÏÒ»Ãë×´Ì¬ ---
+            uint64_t last_pkts = 0;
+            uint64_t last_bytes = 0;
+            uint64_t last_crit = 0;
+            uint64_t last_high = 0;
+            uint64_t last_norm = 0;
+            auto last_time = std::chrono::steady_clock::now();
 
             while (!st.stop_requested()) {
-                // çœŸæ­£çš„å†…æ ¸çº§é˜»å¡ï¼Œä¸å—ç³»ç»Ÿè´Ÿè½½æŠ–åŠ¨å½±å“
-                if (read(tfd, &expirations, sizeof(expirations)) <= 0) continue;
-                
-                // Map-Reduce èšåˆé€»è¾‘
-                uint64_t total_bytes_down = tel.core_metrics[2].bytes.load(std::memory_order_relaxed);
-                uint64_t total_bytes_up = tel.core_metrics[3].bytes.load(std::memory_order_relaxed);
-
-                double dl_mbps = (total_bytes_down - last_bytes[2]) * 8.0 / 1e6;
-                double ul_mbps = (total_bytes_up - last_bytes[3]) * 8.0 / 1e6;
-                
-                std::println("[Monitor] DL: {:.2f} Mbps | UL: {:.2f} Mbps | Mode: {}", 
-                    dl_mbps, ul_mbps, tel.bridge_mode.load() ? "Bridge" : "Accel");
-
-                last_bytes[2] = total_bytes_down;
-                last_bytes[3] = total_bytes_up;
-
-                // å–‚ç»™ Watchdog å„å¤§æ§åˆ¶é¢å¼•æ“è¿è¡Œï¼ˆä½é¢‘å¼‚æ­¥è¿ç®—æ± ï¼‰
-                // The original code had `app->nat_engine` etc. but `app` is not defined here.
-                // Assuming `this->nat_engine` is intended.
-                if (nat_engine) nat_engine->tick();
-                if (dns_engine) {
-                    dns_engine->tick();
-                    dns_engine->process_background_tasks(); // å¼‚æ­¥åˆ†è§£ DNS
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                if (tel.is_probing) {
+                    led.set_yellow();
                 }
-                if (dhcp_engine) {
-                    // å›ç­”ä¸‹å‘å‘ LAN å£
-                    dhcp_engine->process_background_tasks(iface_lan->get_fd());
-                }
+                // ---¼ÆËãÊµÊ±ËÙÂÊ ---
+                auto now = std::chrono::steady_clock::now();
+                uint64_t cur_pkts = tel.pkts_forwarded.load(std::memory_order_relaxed);
+                uint64_t cur_bytes = tel.bytes_forwarded.load(std::memory_order_relaxed);
+                uint64_t cur_crit = tel.pkts_critical.load(std::memory_order_relaxed);
+                uint64_t cur_high = tel.pkts_high.load(std::memory_order_relaxed);
+                uint64_t cur_norm = tel.pkts_normal.load(std::memory_order_relaxed);
+                uint64_t cur_b_crit = tel.bytes_critical.load(std::memory_order_relaxed);
+                uint64_t cur_b_high = tel.bytes_high.load(std::memory_order_relaxed);
+                uint64_t cur_b_norm = tel.bytes_normal.load(std::memory_order_relaxed);
+                uint64_t drops_crit = tel.dropped_critical.load(std::memory_order_relaxed);
+                uint64_t drops_high = tel.dropped_high.load(std::memory_order_relaxed);
+                uint64_t drops_norm = tel.dropped_normal.load(std::memory_order_relaxed);
+                
+                double seconds = std::chrono::duration<double>(now - last_time).count();
 
-                // åŸºäºæ ¸å¿ƒå¿ƒè·³æ»´ç­”çš„æ•…éšœæ£€æµ‹ (é«˜ä½é¢‘è§£è€¦å“²å­¦)
-                uint64_t current_tick = tel.core_metrics[2].last_heartbeat.load(std::memory_order_relaxed);
-                if (current_tick == last_ticks[2]) led.set_red(); // 1 ç§’å†…æ»´ç­”å€¼æ¯«æ— å˜åŒ–ï¼Œè¯´æ˜çº¿ç¨‹ç»åœ°å¡æ­»
-                else led.set_green();
-                last_ticks[2] = current_tick;
+                uint64_t pps_crit = static_cast<uint64_t>((cur_crit - last_crit) / seconds);
+                uint64_t pps_high = static_cast<uint64_t>((cur_high - last_high) / seconds);
+                uint64_t pps_norm = static_cast<uint64_t>((cur_norm - last_norm) / seconds);
+
+                double mbps_crit = ((cur_b_crit - last_bytes_crit) * 8.0 / 1e6) / seconds;
+                double mbps_high = ((cur_b_high - last_bytes_high) * 8.0 / 1e6) / seconds;
+                double mbps_norm = ((cur_b_norm - last_bytes_norm) * 8.0 / 1e6) / seconds;
+
+                // Ê¹ÓÃ \r ¸²¸Çµ±Ç°ĞĞ£¬ÊµÏÖ¶¯Ì¬Ë¢ĞÂ£¬È«·½Î»Õ¹Ê¾¸÷¸ö¼¶±ğµÄ Mbps¡¢PPS ºÍ Drop
+                std::print("\r Mbps[C:{:4.1f} H:{:4.1f} N:{:5.1f}] | PPS[C:{:<4} H:{:<4} N:{:<5}] | Drp[C:{} H:{} N:{:<3}]  ",
+                    mbps_crit, mbps_high, mbps_norm, pps_crit, pps_high, pps_norm, drops_crit, drops_high, drops_norm);
+                std::cout.flush();
+
+                last_pkts = cur_pkts;
+                last_bytes = cur_bytes;
+                last_crit = cur_crit;
+                last_high = cur_high;
+                last_norm = cur_norm;
+                last_bytes_crit = cur_b_crit;
+                last_bytes_high = cur_b_high;
+                last_bytes_norm = cur_b_norm;
+                last_time = now;
+
+                if (!tel.is_probing) {
+                    auto heartbeat_now = time(nullptr);
+                    if (heartbeat_now - tel.last_heartbeat_core2 > 5 || heartbeat_now - tel.last_heartbeat_core3 > 5) {
+                        led.set_red();
+                        // ¼ÓÈë \n ·ÀÖ¹¸²¸ÇÍ¬ĞĞÕıÔÚ´òÓ¡µÄËÙÂÊ×´Ì¬
+                        std::println(stderr, "\nWatchdog: Forwarding STALLED!");
+                    }
+                    else {
+                        led.set_green();
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
             }
-            close(tfd);
         }
     };
 }
-
-
-
-
-
-
-
-
-
-
-
