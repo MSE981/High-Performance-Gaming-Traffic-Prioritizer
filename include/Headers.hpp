@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <cstdint>
 #include <netinet/in.h>
 
@@ -47,6 +47,33 @@ namespace Scalpel::Net {
         uint16_t urg_ptr;
     };
 #pragma pack(pop)
+
+    // 零拷贝 SPSC 无锁环形队列 (专用于将跨核心数据从数据面递交控制面，无 Mutex)
+    template<typename T, size_t Capacity = 1024>
+    class SpscRingBuffer {
+        std::array<T, Capacity> buffer{};
+        alignas(64) std::atomic<size_t> head{0};
+        alignas(64) std::atomic<size_t> tail{0};
+    public:
+        // 数据面调用：推入
+        bool push(const T& item) {
+            size_t current_tail = tail.load(std::memory_order_relaxed);
+            size_t next_tail = (current_tail + 1) % Capacity;
+            if (next_tail == head.load(std::memory_order_acquire)) return false; // 满则丢弃
+            buffer[current_tail] = item;
+            tail.store(next_tail, std::memory_order_release);
+            return true;
+        }
+
+        // 控制面调用：弹出
+        bool pop(T& item) {
+            size_t current_head = head.load(std::memory_order_relaxed);
+            if (current_head == tail.load(std::memory_order_acquire)) return false; // 空
+            item = buffer[current_head]; 
+            head.store((current_head + 1) % Capacity, std::memory_order_release);
+            return true;
+        }
+    };
 
     // Phase 2.6: 统一零拷贝包上下文解析器
     // 消除下游模块 (NAT, DNS, QoS, HeuristicProcessor) 冗余重叠的标量偏移计算

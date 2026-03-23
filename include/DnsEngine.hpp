@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <span>
 #include <chrono>
 #include <array>
@@ -11,33 +11,6 @@
 #include "Headers.hpp"
 
 namespace Scalpel::Logic {
-    // 零拷贝 SPSC 无锁环形队列 (专用于将跨核心数据从数据面递交控制面，无 Mutex)
-    template<typename T, size_t Capacity = 1024>
-    class SpscRingBuffer {
-        std::array<T, Capacity> buffer{};
-        alignas(64) std::atomic<size_t> head{0};
-        alignas(64) std::atomic<size_t> tail{0};
-    public:
-        // Core 2 数据面调用：推入
-        bool push(const T& item) {
-            size_t current_tail = tail.load(std::memory_order_relaxed);
-            size_t next_tail = (current_tail + 1) % Capacity;
-            if (next_tail == head.load(std::memory_order_acquire)) return false; // 满则丢弃，容忍非致命丢失
-            buffer[current_tail] = item;
-            tail.store(next_tail, std::memory_order_release);
-            return true;
-        }
-
-        // Core 1 控制面调用：弹出
-        bool pop(T& item) {
-            size_t current_head = head.load(std::memory_order_relaxed);
-            if (current_head == tail.load(std::memory_order_acquire)) return false; // 空
-            item = buffer[current_head]; // Array 直接复制栈上对象
-            head.store((current_head + 1) % Capacity, std::memory_order_release);
-            return true;
-        }
-    };
-
     struct DnsHeader {
         uint16_t id;
         uint16_t flags;
@@ -64,7 +37,7 @@ namespace Scalpel::Logic {
 
         static constexpr size_t CACHE_SIZE = 4096;
         std::array<DnsCacheEntry, CACHE_SIZE> cache{};
-        SpscRingBuffer<DnsMessage, 1024> response_queue{}; 
+        Net::SpscRingBuffer<DnsMessage, 1024> response_queue{}; 
         
         uint32_t current_tick = 0;
 
