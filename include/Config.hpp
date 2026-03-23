@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <string>
 #include <cstdint>
 #include <fstream>
@@ -10,9 +10,11 @@
 namespace Scalpel::Config {
     // 动态运行时开关状态 (遵循 RCU/锁屏障概念，用于数据面 O(1) 获取特性状态)
     struct DynamicState {
-        std::atomic<bool> enable_dhcp{false};
-        std::atomic<bool> enable_dns_cache{false};
-        std::atomic<bool> enable_upnp{false};
+        std::atomic<bool> enable_nat{true};
+        std::atomic<bool> enable_dhcp{true};
+        std::atomic<bool> enable_dns_cache{true};
+        std::atomic<bool> enable_upnp{true};
+        std::atomic<bool> enable_firewall{true};
         std::atomic<bool> enable_pppoe{false};
     };
     inline DynamicState global_state;
