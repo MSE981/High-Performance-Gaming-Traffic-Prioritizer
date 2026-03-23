@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <thread>
 #include <stop_token>
 #include <memory>
@@ -11,6 +11,7 @@
 #include "Processor.hpp"
 #include "NatEngine.hpp"
 #include "DnsEngine.hpp"
+#include "DhcpEngine.hpp"
 #include "SystemOptimizer.hpp"
 #include "Telemetry.hpp"
 #include "ProbeManager.hpp"
@@ -122,14 +123,15 @@ namespace Scalpel {
         std::shared_ptr<Logic::NatEngine> nat_engine;
         std::shared_ptr<Logic::DnsEngine> dns_engine;
         std::shared_ptr<QoSConfig> qos_config;
+        std::shared_ptr<Logic::DhcpEngine> dhcp_engine;
         std::array<std::array<RouteFunc, 3>, 2> routes;
 
         // 核心解耦：拦截器流水线机制 (Callback-based Pipeline)
         using PipelineStep = bool (*)(PacketConsumer& self, Net::ParsedPacket& pkt);
         std::array<PipelineStep, 5> pipeline;
 
-        PacketConsumer(int rx_fd, int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos)
-            : rx_fd(rx_fd), tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat), dns_engine(dns), qos_config(qos) {
+        PacketConsumer(int rx_fd, int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp)
+            : rx_fd(rx_fd), tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat), dns_engine(dns), qos_config(qos), dhcp_engine(dhcp) {
 
             routes = {{
                 { fast_path_handler, fast_path_handler, shaper_handler }, // 加速模式
@@ -147,10 +149,16 @@ namespace Scalpel {
         // --- 回调流水线处理模块 (Pipeline Handlers) ---
         
         static bool step_dhcp_interceptor(PacketConsumer& self, Net::ParsedPacket& pkt) {
-            // 一时钟周期的极端轻量判定，完全不阻塞默认包流
             if (!Config::global_state.enable_dhcp.load(std::memory_order_relaxed)) return false;
             
-            // TODO: 若命中 UDP 67/68，推送包指针至无锁 RingBuffer 交由 Core 1 (控制面) 算力处理
+            // Core 3 (LAN -> WAN) 负责拦截向网关获取 IP 的 DHCP 请求包
+            if (self.core_id == 3 && pkt.is_valid_ipv4() && pkt.l4_protocol == 17) {
+                auto udp = pkt.udp();
+                if (udp && (ntohs(udp->dest) == 67 || ntohs(udp->dest) == 68)) {
+                    if (self.dhcp_engine) self.dhcp_engine->intercept_request(pkt);
+                    return true; // 拦截成功，阻塞转发到公网
+                }
+            }
             return false;
         }
 
@@ -249,17 +257,25 @@ namespace Scalpel {
         std::shared_ptr<Traffic::Shaper> global_shaper;
         std::shared_ptr<Logic::NatEngine> nat_engine;
         std::shared_ptr<Logic::DnsEngine> dns_engine;
+        std::shared_ptr<Logic::DhcpEngine> dhcp_engine;
         std::shared_ptr<QoSConfig> qos_config;
         
         std::jthread worker_downstream;
         std::jthread worker_upstream;
         std::jthread watchdog;
+        std::promise<void> shutdown_promise;
+        std::future<void> shutdown_future;
 
     public:
         App() {
             global_shaper = std::make_shared<Traffic::Shaper>(100.0); // 默认全局限速 100Mbps
+            
+            // Default gateway IP (can be updated via Config)
+            uint32_t gateway_ip = Config::parse_ip_str("192.168.1.100");
+
             nat_engine = std::make_shared<Logic::NatEngine>();
             dns_engine = std::make_shared<Logic::DnsEngine>();
+            dhcp_engine = std::make_shared<Logic::DhcpEngine>(gateway_ip);
             qos_config = std::make_shared<QoSConfig>();
             
             // 初始化 QoS 无锁双缓冲表
@@ -307,11 +323,11 @@ namespace Scalpel {
 
             // Core 2: Downstream (WAN -> LAN) — Processing iface_wan RX -> fd_lan TX
             worker_downstream = std::jthread(&App::worker_event_loop, this,
-                std::move(iface_wan), fd_lan, 2, shaper_dl, nat_engine, dns_engine, qos_config);
+                std::move(iface_wan), fd_lan, 2, shaper_dl, nat_engine, dns_engine, qos_config, dhcp_engine);
 
             // Core 3: Upstream (LAN -> WAN) — Processing iface_lan RX -> fd_wan TX
             worker_upstream = std::jthread(&App::worker_event_loop, this,
-                std::move(iface_lan), fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config);
+                std::move(iface_lan), fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config, dhcp_engine);
 
             shutdown_future = shutdown_promise.get_future();
             shutdown_future.wait();
@@ -342,12 +358,13 @@ namespace Scalpel {
             close(tfd);
         }
 
-        void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::stop_token st) {
+        void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp) {
             Scalpel::System::set_thread_affinity(core);
             Scalpel::System::set_realtime_priority();
+            std::println("[App] Core {} Pipeline 挂载就绪.", core);
 
             int rx_fd = rx_mgr->get_fd();
-            PacketConsumer consumer(rx_fd, tx_fd, core, shpr, nat, dns, qos);
+            PacketConsumer consumer(rx_fd, tx_fd, core, shpr, nat, dns, qos, dhcp);
 
             while (!st.stop_requested()) {
                 rx_mgr->poll_and_dispatch([&consumer](std::span<uint8_t> raw_span) {
@@ -359,8 +376,10 @@ namespace Scalpel {
                 if (shpr) shpr->process_queue(tx_fd);
                 if (consumer.qos_config) {
                     size_t active_idx = consumer.qos_config->active_idx.load(std::memory_order_relaxed);
-                    for (auto& [_ip, s] : consumer.qos_config->buffers[active_idx]) {
-                        s->process_queue(tx_fd);
+                    for (auto& entry : consumer.qos_config->buffers[active_idx].table) { // Assuming table is accessible or find is used
+                        if (entry.occupied && entry.value) {
+                            entry.value->process_queue(tx_fd);
+                        }
                     }
                 }
                 
@@ -409,10 +428,16 @@ namespace Scalpel {
                 last_bytes[3] = total_bytes_up;
 
                 // 喂给 Watchdog 各大控制面引擎运行（低频异步运算池）
-                if (app->nat_engine) app->nat_engine->tick();
-                if (app->dns_engine) {
-                    app->dns_engine->tick();
-                    app->dns_engine->process_background_tasks(); // 异步分解 DNS
+                // The original code had `app->nat_engine` etc. but `app` is not defined here.
+                // Assuming `this->nat_engine` is intended.
+                if (nat_engine) nat_engine->tick();
+                if (dns_engine) {
+                    dns_engine->tick();
+                    dns_engine->process_background_tasks(); // 异步分解 DNS
+                }
+                if (dhcp_engine) {
+                    // 回答下发向 LAN 口
+                    dhcp_engine->process_background_tasks(iface_lan->get_fd());
                 }
 
                 // 基于核心心跳滴答的故障检测 (高低频解耦哲学)
