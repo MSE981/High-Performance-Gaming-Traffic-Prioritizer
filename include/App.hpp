@@ -9,7 +9,8 @@
 #include "NetworkUtils.hpp"
 #include "NetworkEngine.hpp"
 #include "Processor.hpp"
-#include "NatEngine.hpp" // Added NatEngine.hpp
+#include "NatEngine.hpp"
+#include "DnsEngine.hpp"
 #include "SystemOptimizer.hpp"
 #include "Telemetry.hpp"
 #include "ProbeManager.hpp"
@@ -95,13 +96,15 @@ namespace Scalpel {
     // 数据面：事件消费者模型 (PacketConsumer) - 处理核心逻辑
     class PacketConsumer {
     public:
-        int tx_fd;
-        int core_id; // 增加核心 ID 标识
+        int rx_fd; // Socket FD for reading/bouncing
+        int tx_fd; // Socket FD for writing upstream
+        int core_id; // 具有核心身份
         Telemetry::BatchStats stats;
         Logic::HeuristicProcessor processor;
         
         RouteContext ctx;
         std::shared_ptr<Logic::NatEngine> nat_engine;
+        std::shared_ptr<Logic::DnsEngine> dns_engine;
         std::array<std::array<RouteFunc, 3>, 2> routes;
         StaticIpMap<std::shared_ptr<Traffic::Shaper>, 256> ip_shaper_map;
 
@@ -109,8 +112,8 @@ namespace Scalpel {
         using PipelineStep = bool (*)(PacketConsumer& self, std::span<uint8_t> pkt);
         std::array<PipelineStep, 5> pipeline;
 
-        PacketConsumer(int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat)
-            : tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat) {
+        PacketConsumer(int rx_fd, int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns)
+            : rx_fd(rx_fd), tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat), dns_engine(dns) {
 
             routes = {{
                 { fast_path_handler, fast_path_handler, shaper_handler }, // 加速模式
@@ -143,8 +146,17 @@ namespace Scalpel {
         static bool step_dns_interceptor(PacketConsumer& self, std::span<uint8_t> pkt) {
             if (!Config::global_state.enable_dns_cache.load(std::memory_order_relaxed)) return false;
             
-            // TODO: 检测目标是否为 UDP 53。若是，从基于静态表的高速缓存中查找结果。
-            // 若命中，原地覆写 payload、修改 checksum 且返回 true（阻断流水线并沿原路反弹）
+            if (self.core_id == 3) {
+                // Core 3 (Upstream: LAN -> WAN): 截取用户的 Query
+                if (self.dns_engine && self.dns_engine->process_query(pkt, self.rx_fd)) {
+                    return true; // 缓存命中且已原地弹回 LAN 口 (rx_fd)，即刻阻断流水线
+                }
+            } else if (self.core_id == 2) {
+                // Core 2 (Downstream: WAN -> LAN): 监视公网回馈的 Response
+                if (self.dns_engine) {
+                    self.dns_engine->intercept_response(pkt);
+                } // 从不阻断 Response 放行给玩家
+            }
             return false; 
         }
 
@@ -219,6 +231,7 @@ namespace Scalpel {
         std::unique_ptr<Engine::RawSocketManager> iface_lan;
         std::shared_ptr<Traffic::Shaper> global_shaper;
         std::shared_ptr<Logic::NatEngine> nat_engine;
+        std::shared_ptr<Logic::DnsEngine> dns_engine;
         
         std::jthread worker_wan_lan;
         std::jthread worker_lan_wan;
@@ -228,6 +241,7 @@ namespace Scalpel {
         App() {
             global_shaper = std::make_shared<Traffic::Shaper>(100.0); // 默认全局限速 100Mbps
             nat_engine = std::make_shared<Logic::NatEngine>();
+            dns_engine = std::make_shared<Logic::DnsEngine>();
             // 默认网关 IP (可通过 Config 更新)
             nat_engine->set_wan_ip(Config::parse_ip_str("192.168.1.100"));
         }
@@ -271,11 +285,11 @@ namespace Scalpel {
             // Core 2: WAN -> LAN (Downstream)
             // Core 2: WAN -> LAN (Downstream)
             worker_lan_wan = std::jthread(&App::worker_event_loop, this,
-                std::move(iface_lan), fd_wan, 2, shaper_dl, nat_engine);
+                std::move(iface_lan), fd_wan, 2, shaper_dl, nat_engine, dns_engine);
 
             // Core 3: LAN -> WAN (Upstream)
             worker_wan_lan = std::jthread(&App::worker_event_loop, this,
-                std::move(iface_wan), fd_lan, 3, shaper_ul, nat_engine);
+                std::move(iface_wan), fd_lan, 3, shaper_ul, nat_engine, dns_engine);
 
             shutdown_future = shutdown_promise.get_future();
             shutdown_future.wait();
@@ -306,14 +320,15 @@ namespace Scalpel {
             close(tfd);
         }
 
-        void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::stop_token st) {
+        void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::stop_token st) {
             Scalpel::System::set_thread_affinity(core);
             Scalpel::System::set_realtime_priority();
 
-            PacketConsumer consumer(tx_fd, core, shpr, nat);
+            int rx_fd = rx_mgr->get_fd();
+            PacketConsumer consumer(rx_fd, tx_fd, core, shpr, nat, dns);
 
             while (!st.stop_requested()) {
-                rx->poll_and_dispatch([&consumer](std::span<uint8_t> pkt) {
+                rx_mgr->poll_and_dispatch([&consumer](std::span<uint8_t> pkt) {
                     consumer.on_packet_event(pkt);
                 }, 1);
 
@@ -365,9 +380,11 @@ namespace Scalpel {
                 last_bytes[2] = total_bytes_down;
                 last_bytes[3] = total_bytes_up;
 
-                // 驱动 NAT 引擎滴答
-                if (app->nat_engine) {
-                    app->nat_engine->tick();
+                // 喂给 Watchdog 各大控制面引擎运行（低频异步运算池）
+                if (app->nat_engine) app->nat_engine->tick();
+                if (app->dns_engine) {
+                    app->dns_engine->tick();
+                    app->dns_engine->process_background_tasks(); // 异步分解 DNS
                 }
 
                 // 基于核心心跳滴答的故障检测 (高低频解耦哲学)
@@ -380,6 +397,7 @@ namespace Scalpel {
         }
     };
 }
+
 
 
 
