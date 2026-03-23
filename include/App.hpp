@@ -93,6 +93,22 @@ namespace Scalpel {
         }
     };
 
+    // Phase 2.4: 软路由 QoS 无锁双缓冲配置核心 (RCU Config Swap)
+    struct QoSConfig {
+        std::array<StaticIpMap<std::shared_ptr<Traffic::Shaper>, 256>, 2> buffers;
+        alignas(64) std::atomic<size_t> active_idx{0};
+
+        void update(const std::map<uint32_t, double>& limits) {
+            size_t active = active_idx.load(std::memory_order_relaxed);
+            size_t inactive = 1 - active;
+            buffers[inactive] = decltype(buffers[0])(); // Zero Allocation Refresh
+            for (auto const& [ip, rate] : limits) {
+                buffers[inactive].insert(ip, std::make_shared<Traffic::Shaper>(rate));
+            }
+            active_idx.store(inactive, std::memory_order_release);
+        }
+    };
+
     // 数据面：事件消费者模型 (PacketConsumer) - 处理核心逻辑
     class PacketConsumer {
     public:
@@ -105,25 +121,20 @@ namespace Scalpel {
         RouteContext ctx;
         std::shared_ptr<Logic::NatEngine> nat_engine;
         std::shared_ptr<Logic::DnsEngine> dns_engine;
+        std::shared_ptr<QoSConfig> qos_config;
         std::array<std::array<RouteFunc, 3>, 2> routes;
-        StaticIpMap<std::shared_ptr<Traffic::Shaper>, 256> ip_shaper_map;
 
         // 核心解耦：拦截器流水线机制 (Callback-based Pipeline)
         using PipelineStep = bool (*)(PacketConsumer& self, std::span<uint8_t> pkt);
         std::array<PipelineStep, 5> pipeline;
 
-        PacketConsumer(int rx_fd, int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns)
-            : rx_fd(rx_fd), tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat), dns_engine(dns) {
+        PacketConsumer(int rx_fd, int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos)
+            : rx_fd(rx_fd), tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat), dns_engine(dns), qos_config(qos) {
 
             routes = {{
                 { fast_path_handler, fast_path_handler, shaper_handler }, // 加速模式
                 { fast_path_handler, fast_path_handler, fast_path_handler } // 透明网桥模式
             }};
-
-            for (auto const& [ip, rate] : Config::IP_LIMIT_MAP) {
-                auto s = std::make_shared<Traffic::Shaper>(rate);
-                ip_shaper_map.insert(ip, s);
-            }
 
             // 编译期决断组装流水线：彻底消灭运行时的 if-else 嵌套
             if (core_id == 2) {
@@ -171,9 +182,12 @@ namespace Scalpel {
         }
 
         static bool step_ip_shaper_downstream(PacketConsumer& self, std::span<uint8_t> pkt) {
-            if (pkt.size() > 34) {
+            if (pkt.size() > 34 && self.qos_config) {
                 uint32_t target_ip = *reinterpret_cast<const uint32_t*>(&pkt[30]);
-                auto target_shaper = self.ip_shaper_map.find(target_ip);
+                
+                size_t active_idx = self.qos_config->active_idx.load(std::memory_order_acquire);
+                auto target_shaper = self.qos_config->buffers[active_idx].find(target_ip);
+
                 if (target_shaper) {
                     RouteContext ip_ctx{self.tx_fd, target_shaper};
                     shaper_handler(ip_ctx, pkt, 2, self.core_id);
@@ -184,9 +198,12 @@ namespace Scalpel {
         }
 
         static bool step_ip_shaper_upstream(PacketConsumer& self, std::span<uint8_t> pkt) {
-            if (pkt.size() > 34) {
+            if (pkt.size() > 34 && self.qos_config) {
                 uint32_t target_ip = *reinterpret_cast<const uint32_t*>(&pkt[26]);
-                auto target_shaper = self.ip_shaper_map.find(target_ip);
+                
+                size_t active_idx = self.qos_config->active_idx.load(std::memory_order_acquire);
+                auto target_shaper = self.qos_config->buffers[active_idx].find(target_ip);
+
                 if (target_shaper) {
                     RouteContext ip_ctx{self.tx_fd, target_shaper};
                     shaper_handler(ip_ctx, pkt, 2, self.core_id);
@@ -232,9 +249,10 @@ namespace Scalpel {
         std::shared_ptr<Traffic::Shaper> global_shaper;
         std::shared_ptr<Logic::NatEngine> nat_engine;
         std::shared_ptr<Logic::DnsEngine> dns_engine;
+        std::shared_ptr<QoSConfig> qos_config;
         
-        std::jthread worker_wan_lan;
-        std::jthread worker_lan_wan;
+        std::jthread worker_downstream;
+        std::jthread worker_upstream;
         std::jthread watchdog;
 
     public:
@@ -242,6 +260,11 @@ namespace Scalpel {
             global_shaper = std::make_shared<Traffic::Shaper>(100.0); // 默认全局限速 100Mbps
             nat_engine = std::make_shared<Logic::NatEngine>();
             dns_engine = std::make_shared<Logic::DnsEngine>();
+            qos_config = std::make_shared<QoSConfig>();
+            
+            // 初始化 QoS 无锁双缓冲表
+            qos_config->update(Config::IP_LIMIT_MAP);
+
             // 默认网关 IP (可通过 Config 更新)
             nat_engine->set_wan_ip(Config::parse_ip_str("192.168.1.100"));
         }
@@ -282,14 +305,13 @@ namespace Scalpel {
             auto shaper_dl = std::make_shared<Traffic::Shaper>(dl * 0.85);
             auto shaper_ul = std::make_shared<Traffic::Shaper>(ul * 0.85);
 
-            // Core 2: WAN -> LAN (Downstream)
-            // Core 2: WAN -> LAN (Downstream)
-            worker_lan_wan = std::jthread(&App::worker_event_loop, this,
-                std::move(iface_lan), fd_wan, 2, shaper_dl, nat_engine, dns_engine);
+            // Core 2: Downstream (WAN -> LAN) — Processing iface_wan RX -> fd_lan TX
+            worker_downstream = std::jthread(&App::worker_event_loop, this,
+                std::move(iface_wan), fd_lan, 2, shaper_dl, nat_engine, dns_engine, qos_config);
 
-            // Core 3: LAN -> WAN (Upstream)
-            worker_wan_lan = std::jthread(&App::worker_event_loop, this,
-                std::move(iface_wan), fd_lan, 3, shaper_ul, nat_engine, dns_engine);
+            // Core 3: Upstream (LAN -> WAN) — Processing iface_lan RX -> fd_wan TX
+            worker_upstream = std::jthread(&App::worker_event_loop, this,
+                std::move(iface_lan), fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config);
 
             shutdown_future = shutdown_promise.get_future();
             shutdown_future.wait();
@@ -320,20 +342,25 @@ namespace Scalpel {
             close(tfd);
         }
 
-        void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::stop_token st) {
+        void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::stop_token st) {
             Scalpel::System::set_thread_affinity(core);
             Scalpel::System::set_realtime_priority();
 
             int rx_fd = rx_mgr->get_fd();
-            PacketConsumer consumer(rx_fd, tx_fd, core, shpr, nat, dns);
+            PacketConsumer consumer(rx_fd, tx_fd, core, shpr, nat, dns, qos);
 
             while (!st.stop_requested()) {
                 rx_mgr->poll_and_dispatch([&consumer](std::span<uint8_t> pkt) {
                     consumer.on_packet_event(pkt);
                 }, 1);
 
-                if (!Telemetry::instance().bridge_mode.load(std::memory_order_relaxed)) {
-                    shpr->process_queue(tx_fd);
+                // QoS 队列周期性派发与硬件解堵塞
+                if (shpr) shpr->process_queue(tx_fd);
+                if (consumer.qos_config) {
+                    size_t active_idx = consumer.qos_config->active_idx.load(std::memory_order_relaxed);
+                    for (auto& [_ip, s] : consumer.qos_config->buffers[active_idx]) {
+                        s->process_queue(tx_fd);
+                    }
                 }
                 
                 // 无锁无调用的心跳滴答 (Tick-based Heartbeat)：底层汇编的单周期单指令，0 系统调用！
@@ -397,6 +424,7 @@ namespace Scalpel {
         }
     };
 }
+
 
 
 
