@@ -16,6 +16,7 @@ namespace Scalpel::Config {
         std::atomic<bool> enable_upnp{true};
         std::atomic<bool> enable_firewall{true};
         std::atomic<bool> enable_pppoe{false};
+        std::atomic<bool> enable_gui{true};
     };
     inline DynamicState global_state;
 
