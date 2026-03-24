@@ -1,37 +1,39 @@
-#pragma once
+﻿#pragma once
 #include <chrono>
-#include <vector>
+#include <array>
 #include <span>
 #include <cstring>
 #include <algorithm>
 #include <sys/socket.h>
+#include <cerrno>
+#include <thread>
+#include <print>
 #include "Headers.hpp"
 #include "Telemetry.hpp"
 
 namespace Scalpel::Traffic {
 
-    // 1. 令牌桶算法：精确控制普通流量的最高带宽
+    // 令牌桶速率限制器
     class TokenBucket {
-        uint64_t tokens;
-        uint64_t capacity;
-        uint64_t rate_bytes_per_sec;
+        double tokens;
+        double capacity;
+        double rate_bytes_per_sec;
         std::chrono::time_point<std::chrono::steady_clock> last_refill;
 
     public:
         explicit TokenBucket(double limit_mbps) {
-            // 将 Mbps 转换为 每秒字节数
-            rate_bytes_per_sec = static_cast<uint64_t>((limit_mbps * 1e6) / 8.0);
-
-            // 桶容量设定：允许的最大突发量（约 20ms 的数据量，且至少容纳 10 个满载 MTU）
-            capacity = std::max<uint64_t>(15000ULL, static_cast<uint64_t>(rate_bytes_per_sec * 0.02));
+            rate_bytes_per_sec = (limit_mbps * 1e6) / 8.0;
+            // 默认预留 15KB 突发或 0.1秒的等效带宽
+            capacity = std::max<double>(15000.0, rate_bytes_per_sec * 0.1);
             tokens = capacity;
             last_refill = std::chrono::steady_clock::now();
         }
 
+        // 刷新令牌
         void refill() {
             auto now = std::chrono::steady_clock::now();
             std::chrono::duration<double> dt = now - last_refill;
-            uint64_t new_tokens = static_cast<uint64_t>(dt.count() * rate_bytes_per_sec);
+            double new_tokens = dt.count() * rate_bytes_per_sec;
 
             if (new_tokens > 0) {
                 tokens = std::min(capacity, tokens + new_tokens);
@@ -39,6 +41,7 @@ namespace Scalpel::Traffic {
             }
         }
 
+        // 尝试消耗令牌
         bool try_consume(uint32_t bytes) {
             refill();
             if (tokens >= bytes) {
@@ -47,89 +50,144 @@ namespace Scalpel::Traffic {
             }
             return false;
         }
+
+        // 硬件发送失败时归还令牌
+        void refund(uint32_t bytes) {
+            tokens = std::min(capacity, tokens + static_cast<double>(bytes));
+        }
+
+        // 动态调整速率
+        void set_rate(double limit_mbps) {
+            rate_bytes_per_sec = (limit_mbps * 1e6) / 8.0;
+            capacity = std::max<double>(15000.0, rate_bytes_per_sec * 0.1);
+            tokens = capacity;
+            last_refill = std::chrono::steady_clock::now();
+        }
     };
 
-    // 2. 零动态分配环形缓冲区
+    // 零动态分配环形缓冲区 (针对特定 Capacity 优化)
+    // 使用 std::array 替代 vector，PacketSlot 采用缓存行对齐防止伪共享。
+    template<size_t Capacity = 8192>
     class ZeroAllocRingBuffer {
-        // 强制编译器将每个槽位对齐到 4KB。
-        // 彻底消除 TLB Miss，大幅提升 CPU 寻址效率。
-        struct alignas(4096) PacketSlot {
+        struct alignas(64) PacketSlot {
             uint16_t size = 0;
-            uint8_t payload[2048]; // 足够装下标准的 1514 字节 MTU
+            uint8_t payload[2048];
         };
 
-        // 运行时永不扩容，启动时一次性在堆上划拨 4MB 连续内存
-        std::vector<PacketSlot> pool;
+        std::array<PacketSlot, Capacity> pool;
         size_t head = 0;
         size_t tail = 0;
         size_t count = 0;
-        const size_t capacity_limit = 1024;
 
     public:
-        ZeroAllocRingBuffer() : pool(1024) {}
+        ZeroAllocRingBuffer() = default;
 
+        // 压入包数据
         bool push(std::span<const uint8_t> pkt) {
-            // AQM 机制：队列满时实施 Tail Drop，主动丢弃下载包触发 TCP 降速
-            if (count == capacity_limit || pkt.size() > 2048) {
+            if (count == Capacity || pkt.size() > 2048) {
                 return false;
             }
-
             auto& slot = pool[tail];
             slot.size = static_cast<uint16_t>(pkt.size());
-            // 极速内存拷贝
             std::memcpy(slot.payload, pkt.data(), pkt.size());
-
-            tail = (tail + 1) % capacity_limit;
+            tail = (tail + 1) % Capacity;
             count++;
             return true;
         }
 
+        // 获取首部数据块
         std::span<const uint8_t> front() const {
             if (count == 0) return {};
             const auto& slot = pool[head];
             return { slot.payload, slot.size };
         }
 
+        // 弹出首部项
         void pop() {
             if (count > 0) {
-                head = (head + 1) % capacity_limit;
+                head = (head + 1) % Capacity;
                 count--;
             }
         }
 
         bool empty() const { return count == 0; }
+        size_t size() const { return count; }
     };
 
-    // 3. 流量整形器
+    // 底层硬件发送结果定义
+    enum class TxResult : size_t { Success = 0, Congested = 1, Fatal = 2 };
+
+    // 硬件发送重试抽象 (零阻塞拦截)
+    inline TxResult try_hardware_send(int fd, std::span<const uint8_t> pkt) {
+        if (send(fd, pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) return TxResult::Success;
+        if (errno == ENOBUFS || errno == EAGAIN) return TxResult::Congested;
+        return TxResult::Fatal;
+    }
+
+    // 流量整形器
+    // 处理普通流量的入队、限速控制与硬件分发。
     class Shaper {
-        ZeroAllocRingBuffer normal_queue;
+        ZeroAllocRingBuffer<8192> normal_queue;
         TokenBucket bucket;
+        uint64_t trace_counter = 0;
+
+        // 发送结果处理器表 (Functor Table)
+        using ResultHandler = void (*)(Shaper*, size_t);
+        static constexpr std::array<ResultHandler, 3> result_handlers = {
+            [](Shaper* s, size_t) { // Success
+                s->normal_queue.pop();
+                if (++s->trace_counter % 5000 == 0) {
+                    std::println("[Shaper] 已稳定转发 5000 个普通包。");
+                }
+            },
+            [](Shaper* s, size_t bytes) { // Congested (硬件忙，归还令牌但不弹出，待下次重试)
+                s->bucket.refund(bytes);
+            },
+            [](Shaper* s, size_t bytes) { // Fatal (严重错误，丢弃包)
+                s->bucket.refund(bytes);
+                s->normal_queue.pop();
+            }
+        };
 
     public:
         explicit Shaper(double limit_mbps) : bucket(limit_mbps) {}
 
-        // 将普通包送入缓存排队
+        void set_rate_limit(double limit_mbps) {
+            bucket.set_rate(limit_mbps);
+        }
+
+        // 普通流量入队逻辑
         void enqueue_normal(std::span<const uint8_t> pkt) {
             if (!normal_queue.push(pkt)) {
-                // 如果 push 失败（队列已满），记录一次主动丢包
                 Telemetry::instance().dropped_normal.fetch_add(1, std::memory_order_relaxed);
+                
+                static time_t last_log = 0;
+                time_t now = time(nullptr);
+                if (now != last_log) {
+                    if (pkt.size() > 2048) {
+                        std::println(stderr, "\n[Alert] 丢包: 包过大 ({} bytes)，硬件卸载可能未完全关闭！", pkt.size());
+                    } else {
+                        std::println(stderr, "\n[Alert] 丢包: 队列溢出 (Cap: 8192)，并发过载。");
+                    }
+                    last_log = now;
+                }
             }
         }
 
-        // 抽空队列：由 worker 线程在每一轮循环中调用
+        // 队列消费主流程 (被 App 驱动层周期性调用)
         void process_queue(int tx_fd) {
             while (!normal_queue.empty()) {
                 auto pkt_span = normal_queue.front();
 
-                // 检查令牌是否足够发这个包
-                if (bucket.try_consume(pkt_span.size())) {
-                    send(tx_fd, pkt_span.data(), pkt_span.size(), MSG_DONTWAIT);
-                    normal_queue.pop();
-                }
-                else {
-                    break; // 令牌耗尽，退出循环让包继续排队
-                }
+                if (!bucket.try_consume(pkt_span.size())) break;
+
+                TxResult res = try_hardware_send(tx_fd, pkt_span);
+                result_handlers[static_cast<size_t>(res)](this, pkt_span.size());
+
+                if (res == TxResult::Congested) break;
             }
         }
     };
 }
+
+
