@@ -353,11 +353,15 @@ namespace Scalpel {
             auto shaper_dl = std::make_shared<Traffic::Shaper>(dl * 0.85);
             auto shaper_ul = std::make_shared<Traffic::Shaper>(ul * 0.85);
 
-            worker_downstream = std::jthread(&App::worker_event_loop, this,
-                std::move(iface_wan), fd_lan, 2, shaper_dl, nat_engine, dns_engine, qos_config, dhcp_engine);
+            worker_downstream = std::jthread(
+                [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, int tx, int c, std::shared_ptr<Traffic::Shaper> sh, std::shared_ptr<Logic::NatEngine> ne, std::shared_ptr<Logic::DnsEngine> de, std::shared_ptr<QoSConfig> qc, std::shared_ptr<Logic::DhcpEngine> d) {
+                    worker_event_loop(std::move(st), std::move(iface), tx, c, sh, ne, de, qc, d);
+                }, std::move(iface_wan), fd_lan, 2, shaper_dl, nat_engine, dns_engine, qos_config, dhcp_engine);
 
-            worker_upstream = std::jthread(&App::worker_event_loop, this,
-                std::move(iface_lan), fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config, dhcp_engine);
+            worker_upstream = std::jthread(
+                [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, int tx, int c, std::shared_ptr<Traffic::Shaper> sh, std::shared_ptr<Logic::NatEngine> ne, std::shared_ptr<Logic::DnsEngine> de, std::shared_ptr<QoSConfig> qc, std::shared_ptr<Logic::DhcpEngine> d) {
+                    worker_event_loop(std::move(st), std::move(iface), tx, c, sh, ne, de, qc, d);
+                }, std::move(iface_lan), fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config, dhcp_engine);
 
             std::println("[App] 核心数据平面与控制平面已启动完成.");
         }
