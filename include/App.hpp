@@ -54,13 +54,15 @@ namespace Scalpel {
     // 辅助工具：基于 FNV-1a 静态哈希表 (针对嵌入式实时性能优化)
     template<typename T, size_t Capacity = 256>
     class StaticIpMap {
+    public:
         struct Entry {
             uint32_t key = 0;
             T value = nullptr;
             bool occupied = false;
         };
         std::array<Entry, Capacity> table{};
-
+        
+    private:
         static uint32_t fnv1a_hash(uint32_t val) {
             uint32_t h = 2166136261U;
             h ^= (val & 0xFF); h *= 16777619U;
