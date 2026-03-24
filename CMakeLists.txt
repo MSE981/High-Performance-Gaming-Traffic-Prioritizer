@@ -8,7 +8,7 @@ project(GamingTrafficPrioritizer VERSION 3.0 LANGUAGES CXX)
 
 include_directories(include)
 find_package(Threads REQUIRED)
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL)
 
 # 启用 Qt 自动元对象编译器 (MOC) 以支持信号与槽
 set(CMAKE_AUTOMOC ON)
@@ -22,6 +22,7 @@ add_executable(GamingTrafficPrioritizer
 
 target_link_libraries(GamingTrafficPrioritizer PRIVATE 
     Qt6::Widgets
+    Qt6::OpenGL
     Threads::Threads
     gpiodcxx  
 )
