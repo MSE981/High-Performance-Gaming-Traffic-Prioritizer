@@ -105,7 +105,7 @@ namespace Scalpel {
         void update(const std::map<uint32_t, double>& limits) {
             size_t active = active_idx.load(std::memory_order_relaxed);
             size_t inactive = 1 - active;
-            buffers[inactive] = decltype(buffers[0])(); // Zero Allocation Refresh
+            buffers[inactive] = {}; // Zero Allocation Refresh
             for (auto const& [ip, rate] : limits) {
                 buffers[inactive].insert(ip, std::make_shared<Traffic::Shaper>(rate));
             }

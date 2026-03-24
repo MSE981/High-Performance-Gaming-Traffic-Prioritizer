@@ -137,7 +137,7 @@ namespace Scalpel::Logic {
                         ip->check = 0;
                         uint32_t ip_sum = 0;
                         const uint16_t* ip_words = reinterpret_cast<const uint16_t*>(ip);
-                        for(size_t i=0; i<pkt.ipv4_header_len/2; ++i) ip_sum += ntohs(ip_words[i]);
+                        for(size_t i=0; i<ip->ihl * 2; ++i) ip_sum += ntohs(ip_words[i]);
                         ip_sum = (ip_sum & 0xFFFF) + (ip_sum >> 16);
                         ip_sum += (ip_sum >> 16);
                         ip->check = htons(~ip_sum);
@@ -232,7 +232,7 @@ namespace Scalpel::Logic {
                         ip->check = 0;
                         uint32_t ip_sum = 0;
                         const uint16_t* ip_words = reinterpret_cast<const uint16_t*>(ip);
-                        for(size_t i=0; i<pkt.ipv4_header_len/2; ++i) ip_sum += ntohs(ip_words[i]);
+                        for(size_t i=0; i<ip->ihl * 2; ++i) ip_sum += ntohs(ip_words[i]);
                         ip_sum = (ip_sum & 0xFFFF) + (ip_sum >> 16);
                         ip_sum += (ip_sum >> 16);
                         ip->check = htons(~ip_sum);
@@ -251,9 +251,9 @@ namespace Scalpel::Logic {
                 return false; 
             }
 
-            table[idx].last_active_tick = current_tick;
-            uint32_t internal_ip = table[idx].internal_key.saddr;
-            uint16_t internal_port = table[idx].internal_key.sport;
+            sessions[idx].last_active_tick = current_tick;
+            uint32_t internal_ip = sessions[idx].internal_key.saddr;
+            uint16_t internal_port = sessions[idx].internal_key.sport;
 
             // O(1) 修改并校准
             update_checksum_32(ip->check, ip->daddr, internal_ip);
