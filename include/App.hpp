@@ -285,6 +285,7 @@ namespace Scalpel {
         std::shared_ptr<Logic::DhcpEngine> dhcp_engine;
         std::shared_ptr<Logic::UpnpEngine> upnp_engine;
         std::shared_ptr<QoSConfig> qos_config;
+        HW::RGBLed led;
         
         std::jthread worker_downstream;
         std::jthread worker_upstream;

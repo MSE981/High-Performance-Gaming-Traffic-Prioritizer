@@ -3,6 +3,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QLinearGradient>
+#include <QTimerEvent>
 #include <thread>
 #include <print>
 

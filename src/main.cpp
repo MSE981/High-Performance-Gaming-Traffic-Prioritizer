@@ -9,6 +9,7 @@ std::atomic<bool> signal_received{false};
 
 // 信号处理入口
 extern "C" void signal_handler(int signal) {
+    (void)signal;
     if (signal_received.exchange(true)) return; // 拦截二次退出
     
     // 注意：不要在异步 UNIX 信号里直接执行重度逻辑，仅放行底层关闭
