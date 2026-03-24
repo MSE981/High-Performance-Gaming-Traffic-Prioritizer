@@ -392,9 +392,9 @@ namespace Scalpel {
             close(tfd);
         }
 
-        void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp) {
+        void worker_event_loop(std::stop_token st, std::unique_ptr<Engine::RawSocketManager> rx_mgr, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp) {
             Scalpel::System::Optimizer::set_current_thread_affinity(core);
-            Scalpel::System::set_realtime_priority();
+            Scalpel::System::Optimizer::set_realtime_priority();
             std::println("[App] Core {} Pipeline 挂载就绪.", core);
 
             int rx_fd = rx_mgr->get_fd();
