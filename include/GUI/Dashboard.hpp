@@ -64,6 +64,7 @@ namespace Scalpel::GUI {
         Q_OBJECT
     public:
         explicit InterfacePage(QWidget* parent = nullptr);
+        void scan_interfaces();
     private slots:
         void on_save_clicked();
         void on_reset_clicked();
@@ -74,6 +75,10 @@ namespace Scalpel::GUI {
         // LAN 表单
         QLineEdit* lan_iface_edit;
         QCheckBox* chk_bridge;
+        QCheckBox* chk_stp;
+        QCheckBox* chk_igmp;
+        QVBoxLayout* iface_list_layout;
+        QList<QCheckBox*> iface_checkboxes;
     };
 
     // ═══════════════════════════════════════════
@@ -132,6 +137,15 @@ namespace Scalpel::GUI {
     };
 
     // ═══════════════════════════════════════════
+    // 占位页：Docker / VPN 等
+    // ═══════════════════════════════════════════
+    class PlaceholderPage : public QWidget {
+        Q_OBJECT
+    public:
+        explicit PlaceholderPage(const QString& name, QWidget* parent = nullptr);
+    };
+
+    // ═══════════════════════════════════════════
     // 主控面板：导航 + 堆栈 + 状态栏
     // ═══════════════════════════════════════════
     class Dashboard : public QMainWindow {
@@ -150,11 +164,13 @@ namespace Scalpel::GUI {
         QStackedWidget* page_stack;
 
         // 各功能页面
-        OverviewPage*   page_overview;
-        InterfacePage*  page_interfaces;
-        QosPage*        page_qos;
-        ServicePage*    page_services;
-        SystemPage*     page_system;
+        OverviewPage*    page_overview;
+        InterfacePage*   page_interfaces;
+        QosPage*         page_qos;
+        ServicePage*     page_services;
+        PlaceholderPage* page_docker;
+        PlaceholderPage* page_vpn;
+        SystemPage*      page_system;
 
         // 状态栏标签
         QLabel* status_cpu;
