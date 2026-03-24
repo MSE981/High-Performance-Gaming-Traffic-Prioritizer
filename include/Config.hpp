@@ -23,7 +23,7 @@ namespace Scalpel::Config {
     // 接口配置 (允许运行时由 Web 端或配置文件覆盖)
     inline std::string IFACE_WAN = "eth0";
     inline std::string IFACE_LAN = "eth1"; // 局域网/USB网卡接口
-    inline bool ENABLE_ACCELERATION = true; // 加速/透明网桥开关
+    inline std::atomic<bool> ENABLE_ACCELERATION{true}; // 加速/透明网桥开关
 
     // 启发式检测算法阈值
     inline uint32_t LARGE_PACKET_THRESHOLD = 1000;

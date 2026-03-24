@@ -14,7 +14,10 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-add_executable(GamingTrafficPrioritizer src/main.cpp)
+add_executable(GamingTrafficPrioritizer 
+    src/main.cpp
+    src/GUI/Dashboard.cpp
+)
 
 target_link_libraries(GamingTrafficPrioritizer PRIVATE 
     Qt6::Widgets
