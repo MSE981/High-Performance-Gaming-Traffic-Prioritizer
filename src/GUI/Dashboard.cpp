@@ -154,8 +154,9 @@ namespace Scalpel::GUI {
     void Dashboard::on_toggle_acceleration_clicked() {
         // [准则 #3] 回调非阻塞执行：不可以直接修改重负载网络参数，推入独立事件或使用无锁标记投递给 Core 1
         std::jthread bg_task([](){
-            Scalpel::Config::ENABLE_ACCELERATION = !Scalpel::Config::ENABLE_ACCELERATION;
-            std::println("[GUI Action] Toggled Acceleration State to {}", Scalpel::Config::ENABLE_ACCELERATION);
+            bool current = Scalpel::Config::ENABLE_ACCELERATION.load();
+            Scalpel::Config::ENABLE_ACCELERATION.store(!current);
+            std::println("[GUI Action] Toggled Acceleration State to {}", !current);
         });
         bg_task.detach();
     }
