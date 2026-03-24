@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <chrono>
 #include <array>
 #include <span>
@@ -173,7 +173,6 @@ namespace Scalpel::Traffic {
         // 普通流量入队逻辑
         void enqueue_normal(std::span<const uint8_t> pkt) {
             if (!normal_queue.push(pkt)) {
-                Telemetry::instance().dropped_normal.fetch_add(1, std::memory_order_relaxed);
                 
                 static time_t last_log = 0;
                 time_t now = time(nullptr);

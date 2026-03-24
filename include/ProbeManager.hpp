@@ -1,9 +1,10 @@
-﻿#include <chrono>
+#include <chrono>
 #include <cstring>
 #include <vector>
 #include <print>
 #include <array>
 #include <memory>
+#include <functional>
 #include <sys/socket.h>
 #include "Telemetry.hpp"
 #include "Processor.hpp"
@@ -45,7 +46,8 @@ namespace Scalpel::Probe {
 
             // 纯粹的底层算法压测，移除 yield 以全速压榨 CPU 天花板
             while (std::chrono::steady_clock::now() - start < std::chrono::seconds(5)) {
-                temp_proc.process(std::span{dummy_data});
+                auto pkt_ctx = Net::ParsedPacket::parse(std::span<uint8_t>{dummy_data});
+                temp_proc.process(pkt_ctx);
                 count++;
             }
 
