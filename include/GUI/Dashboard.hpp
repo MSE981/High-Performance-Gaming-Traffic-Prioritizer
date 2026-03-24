@@ -19,6 +19,9 @@ namespace Scalpel::GUI {
         
         // 准则 #3: 仅将样本推入 Shift Buffer，绝对不触发绘图
         void add_sample(double val);
+        
+        // 执行物理运动积分
+        void step_physics();
 
     protected:
         void paintEvent(QPaintEvent* event) override;
@@ -27,6 +30,8 @@ namespace Scalpel::GUI {
         static constexpr int SHIFT_BUFFER_SIZE = 100;
         std::deque<double> shift_buffer;
         double current_max = 1.0;
+        double target_max = 1.0;
+        double current_velocity = 0.0;
     };
 
     class Dashboard : public QMainWindow {
