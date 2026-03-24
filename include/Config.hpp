@@ -4,6 +4,7 @@
 #include <fstream>
 #include <array>
 #include <map>
+#include <vector>
 #include <print>  
 #include <ranges> 
 
@@ -24,6 +25,11 @@ namespace Scalpel::Config {
     inline std::string IFACE_WAN = "eth0";
     inline std::string IFACE_LAN = "eth1"; // 局域网/USB网卡接口
     inline std::atomic<bool> ENABLE_ACCELERATION{true}; // 加速/透明网桥开关
+
+    // 桥接深度配置
+    inline std::atomic<bool> ENABLE_STP{false};
+    inline std::atomic<bool> ENABLE_IGMP_SNOOPING{false};
+    inline std::vector<std::string> BRIDGED_INTERFACES = {"eth1", "eth2", "eth3"};
 
     // 启发式检测算法阈值
     inline uint32_t LARGE_PACKET_THRESHOLD = 1000;

@@ -156,17 +156,38 @@ InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
 
     // === LAN 标签页 ===
     auto* lan_page = new QWidget();
-    auto* lan_form = new QFormLayout(lan_page);
-    lan_form->setSpacing(12);
-    lan_iface_edit = new QLineEdit(QString::fromStdString(Config::IFACE_LAN));
-    lan_form->addRow("LAN 接口名称:", lan_iface_edit);
-    chk_bridge = new QCheckBox("启用桥接模式 (透传所有流量)");
-    chk_bridge->setChecked(!Config::ENABLE_ACCELERATION.load());
-    lan_form->addRow("桥接接口:", chk_bridge);
-    auto* lan_desc = new QLabel("局域网接口 (连接内网设备)");
-    lan_desc->setStyleSheet("color: #707080; font-size: 12px;");
-    lan_form->addRow("", lan_desc);
-    tab_widget->addTab(lan_page, "LAN (eth1)");
+    auto* lan_main_lay = new QVBoxLayout(lan_page);
+    
+    auto* lan_tabs = new QTabWidget();
+    
+    // --- 基本内容 (General Settings) ---
+    auto* general_settings = new QWidget();
+    auto* general_form = new QFormLayout(general_settings);
+    chk_bridge = new QCheckBox("桥接接口");
+    chk_bridge->setChecked(true); // 默认开启网桥
+    general_form->addRow(new QLabel("建立网桥:"), chk_bridge);
+    
+    chk_stp = new QCheckBox("开启 STP");
+    chk_stp->setChecked(Config::ENABLE_STP.load());
+    general_form->addRow(new QLabel("生成树协议:"), chk_stp);
+    
+    chk_igmp = new QCheckBox("启用 IGMP 嗅探");
+    chk_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load());
+    general_form->addRow(new QLabel("IGMP Snooping:"), chk_igmp);
+    
+    // 物理设置区域 (Physical Settings)
+    auto* physical_group = new QGroupBox("物理接口列表");
+    iface_list_layout = new QVBoxLayout(physical_group);
+    scan_interfaces(); // 填充列表
+    general_form->addRow(physical_group);
+    
+    lan_tabs->addTab(general_settings, "一般配置");
+    lan_tabs->addTab(new QWidget(), "高级设置");
+    lan_tabs->addTab(new QWidget(), "物理设置");
+    lan_tabs->addTab(new QWidget(), "防火墙设置");
+    
+    lan_main_lay->addWidget(lan_tabs);
+    tab_widget->addTab(lan_page, "LAN (br-lan)");
 
     layout->addWidget(tab_widget);
 
@@ -184,22 +205,71 @@ InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
     layout->addStretch();
 }
 
+void InterfacePage::scan_interfaces() {
+    // 清理旧列表
+    qDeleteAll(iface_checkboxes);
+    iface_checkboxes.clear();
+
+    // 扫描 /sys/class/net
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator("/sys/class/net")) {
+            std::string name = entry.path().filename().string();
+            if (name == "lo") continue; // 忽略回环
+            
+            auto* cb = new QCheckBox(QString::fromStdString(name));
+            // 默认勾选 eth1, eth2, eth3 等 LAN 常用口
+            if (name.find("eth") != std::string::npos && name != "eth0") {
+                cb->setChecked(true);
+            }
+            iface_checkboxes.append(cb);
+            iface_list_layout->addWidget(cb);
+        }
+    } catch (...) {
+        // Fallback for non-Linux or permission issues
+        for (int i = 0; i < 4; ++i) {
+            auto* cb = new QCheckBox(QString("eth%1").arg(i));
+            iface_checkboxes.append(cb);
+            iface_list_layout->addWidget(cb);
+        }
+    }
+}
+
 void InterfacePage::on_save_clicked() {
-    std::jthread([](){
-        // 异步下发，不阻塞 GUI
-        // 实际的接口切换需要底层 socket 重建，此处仅保存配置
-        std::println("[GUI] 接口配置已保存。");
-    }).detach();
     Config::IFACE_WAN = wan_iface_edit->text().toStdString();
-    Config::IFACE_LAN = lan_iface_edit->text().toStdString();
+    Config::ENABLE_STP.store(chk_stp->isChecked());
+    Config::ENABLE_IGMP_SNOOPING.store(chk_igmp->isChecked());
+    
+    // 收集选中的接口
+    Config::BRIDGED_INTERFACES.clear();
+    for (auto* cb : iface_checkboxes) {
+        if (cb->isChecked()) {
+            Config::BRIDGED_INTERFACES.push_back(cb->text().toStdString());
+        }
+    }
+
+    std::jthread([](){
+        std::println("[GUI] 已保存网桥配置。包含接口: {}", 
+            Config::BRIDGED_INTERFACES.size());
+    }).detach();
+
     Config::ENABLE_ACCELERATION.store(!chk_bridge->isChecked());
     Telemetry::instance().bridge_mode.store(chk_bridge->isChecked(), std::memory_order_relaxed);
 }
 
 void InterfacePage::on_reset_clicked() {
     wan_iface_edit->setText(QString::fromStdString(Config::IFACE_WAN));
-    lan_iface_edit->setText(QString::fromStdString(Config::IFACE_LAN));
-    chk_bridge->setChecked(!Config::ENABLE_ACCELERATION.load());
+    chk_stp->setChecked(Config::ENABLE_STP.load());
+    chk_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load());
+    
+    // 根据 Config::BRIDGED_INTERFACES 重置勾选状态
+    for (auto* cb : iface_checkboxes) {
+        std::string name = cb->text().toStdString();
+        bool found = false;
+        for (const auto& iface : Config::BRIDGED_INTERFACES) {
+            if (iface == name) { found = true; break; }
+        }
+        cb->setChecked(found);
+    }
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -484,6 +554,23 @@ void SystemPage::on_restart_engine() {
 }
 
 // ═════════════════════════════════════════════════════════════
+// PlaceholderPage: 占位页 (Docker / VPN)
+// ═════════════════════════════════════════════════════════════
+PlaceholderPage::PlaceholderPage(const QString& name, QWidget* parent) : QWidget(parent) {
+    auto* layout = new QVBoxLayout(this);
+    auto* title = new QLabel(name);
+    title->setObjectName("section_title");
+    layout->addWidget(title);
+    
+    auto* msg = new QLabel(QString("'%1' 功能模块正在构建中...\n\n该模块将包含: \n - 容器生命周期管理\n - 镜像快速部署\n - 虚拟化网络隔绝").arg(name));
+    msg->setStyleSheet("color: #707080; font-size: 15px;");
+    msg->setAlignment(Qt::AlignCenter);
+    layout->addStretch();
+    layout->addWidget(msg);
+    layout->addStretch();
+}
+
+// ═════════════════════════════════════════════════════════════
 // Dashboard: 主控面板框架
 // ═════════════════════════════════════════════════════════════
 Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
@@ -528,12 +615,16 @@ void Dashboard::setup_ui() {
     page_interfaces = new InterfacePage();
     page_qos = new QosPage();
     page_services = new ServicePage();
+    page_docker = new PlaceholderPage("🐳 DOCKER 管理");
+    page_vpn = new PlaceholderPage("🔐 VPN / IPsec 安全传输");
     page_system = new SystemPage();
 
     page_stack->addWidget(page_overview);
     page_stack->addWidget(page_interfaces);
     page_stack->addWidget(page_qos);
     page_stack->addWidget(page_services);
+    page_stack->addWidget(page_docker);
+    page_stack->addWidget(page_vpn);
     page_stack->addWidget(page_system);
     body_layout->addWidget(page_stack, 1);
 
@@ -549,7 +640,7 @@ void Dashboard::setup_nav() {
     nav_list->setFixedWidth(160);
     nav_list->setIconSize(QSize(0, 0));
 
-    QStringList items = {"📊 总览", "🌐 接口", "⚡ QoS", "🔧 服务", "💻 系统"};
+    QStringList items = {"📊 总览", "🌐 接口 (LAN/WAN)", "⚡ QoS", "🔧 服务 (NAT/DHCP)", "🐳 DOCKER", "🔐 VPN / IPsec", "💻 系统"};
     for (auto& label : items) nav_list->addItem(label);
 
     nav_list->setCurrentRow(0);
@@ -574,7 +665,7 @@ void Dashboard::setup_statusbar() {
 void Dashboard::on_nav_changed(int index) {
     page_stack->setCurrentIndex(index);
     // 切换到系统页时刷新信息
-    if (index == 4) page_system->refresh_info();
+    if (index == 6) page_system->refresh_info();
 }
 
 void Dashboard::timerEvent(QTimerEvent* event) {
