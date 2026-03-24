@@ -48,6 +48,8 @@ namespace Scalpel::GUI {
         QPushButton* btn_toggle_acceleration;
         
         int refresh_timer_id;
+        uint64_t last_pkts[4] = {0, 0, 0, 0};
+        uint64_t last_bytes[4] = {0, 0, 0, 0};
 
     private slots:
         // 准则 #2: Qt 原生的 Signal/Slot 回调函数绑定

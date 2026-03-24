@@ -95,12 +95,22 @@ namespace Scalpel::GUI {
             double total_bps = 0;
             
             for (int i = 0; i < 4; ++i) {
-                auto pkts = tel.core_metrics[i].pkts.load(std::memory_order_relaxed);
-                auto bytes = tel.core_metrics[i].bytes.load(std::memory_order_relaxed);
-                core_stats_labels[i]->setText(QString("C%1: %2 Pkts").arg(i).arg(pkts));
+                uint64_t current_pkts = tel.core_metrics[i].pkts.load(std::memory_order_relaxed);
+                uint64_t current_bytes = tel.core_metrics[i].bytes.load(std::memory_order_relaxed);
                 
-                total_pps += pkts;
-                total_bps += bytes;
+                // 计算 40ms 窗口内的微积分差值 (Delta)
+                uint64_t delta_pkts = current_pkts - last_pkts[i];
+                uint64_t delta_bytes = current_bytes - last_bytes[i];
+                
+                // 刷新游标
+                last_pkts[i] = current_pkts;
+                last_bytes[i] = current_bytes;
+                
+                // 乘 25 (因为 40ms * 25 = 1000ms) 零开销推导精准每秒速率
+                total_pps += (delta_pkts * 25.0);
+                total_bps += (delta_bytes * 25.0);
+                
+                core_stats_labels[i]->setText(QString("C%1: %2 Pkts").arg(i).arg(current_pkts));
             }
             
             pps_plot->add_sample(total_pps);
