@@ -59,8 +59,18 @@ namespace Scalpel::GUI {
             else path.lineTo(i * x_step, y);
         }
 
-        QPen pen(QColor(0, 150, 255), 2);
-        painter.setPen(pen);
+        // 下层：漫反射发光 (Base Glow)
+        QPen glowPen(QColor(0, 150, 255, 40), 8);
+        glowPen.setJoinStyle(Qt::RoundJoin);
+        glowPen.setCapStyle(Qt::RoundCap);
+        painter.setPen(glowPen);
+        painter.drawPath(path);
+        
+        // 上层：实体脉络骨干 (Core Strand)
+        QPen corePen(QColor(200, 240, 255, 255), 2);
+        corePen.setJoinStyle(Qt::RoundJoin);
+        corePen.setCapStyle(Qt::RoundCap);
+        painter.setPen(corePen);
         painter.drawPath(path);
     }
 
