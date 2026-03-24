@@ -288,6 +288,7 @@ namespace Scalpel {
         std::shared_ptr<Logic::UpnpEngine> upnp_engine;
         std::shared_ptr<QoSConfig> qos_config;
         HW::RGBLed led;
+        int lan_fd_ = -1;
         
         std::jthread worker_downstream;
         std::jthread worker_upstream;
@@ -345,6 +346,7 @@ namespace Scalpel {
 
             int fd_wan = iface_wan->get_fd();
             int fd_lan = iface_lan->get_fd();
+            lan_fd_ = fd_lan; // 缓存 fd，防止 move 后 use-after-move
 
             auto& tel = Telemetry::instance();
             double dl = tel.isp_down_limit_mbps.load() > 1.0 ? tel.isp_down_limit_mbps.load() : 500.0;
@@ -482,7 +484,7 @@ namespace Scalpel {
                 }
                 if (dhcp_engine) {
                     // 回答下发向 LAN 口
-                    dhcp_engine->process_background_tasks(iface_lan->get_fd());
+                    dhcp_engine->process_background_tasks(lan_fd_);
                 }
 
                 // 基于核心心跳滴答的故障检测 (高低频解耦哲学)
