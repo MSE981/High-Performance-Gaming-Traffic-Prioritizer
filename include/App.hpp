@@ -327,12 +327,11 @@ namespace Scalpel {
             return {};
         }
 
-        void run() {
+        void start() {
             std::println("=== Scalpel High-Performance Software Router ===");
             Telemetry::instance().bridge_mode.store(!Config::ENABLE_ACCELERATION, std::memory_order_relaxed);
             Scalpel::System::Optimizer::lock_cpu_frequency();
 
-            std::jthread ui_thread([this](std::stop_token st) { ui_render_loop(st); });
             watchdog = std::jthread([this](std::stop_token st) { watchdog_loop(st); });
 
             std::string gw_ip = Utils::Network::get_gateway_ip();
@@ -347,24 +346,25 @@ namespace Scalpel {
             double dl = tel.isp_down_limit_mbps.load() > 1.0 ? tel.isp_down_limit_mbps.load() : 500.0;
             double ul = tel.isp_up_limit_mbps.load() > 1.0 ? tel.isp_up_limit_mbps.load() : 50.0;
 
-            // These shapers are for global limits, individual IP shapers are in PacketConsumer
             auto shaper_dl = std::make_shared<Traffic::Shaper>(dl * 0.85);
             auto shaper_ul = std::make_shared<Traffic::Shaper>(ul * 0.85);
 
-            // Core 2: Downstream (WAN -> LAN) — Processing iface_wan RX -> fd_lan TX
             worker_downstream = std::jthread(&App::worker_event_loop, this,
                 std::move(iface_wan), fd_lan, 2, shaper_dl, nat_engine, dns_engine, qos_config, dhcp_engine);
 
-            // Core 3: Upstream (LAN -> WAN) — Processing iface_lan RX -> fd_wan TX
             worker_upstream = std::jthread(&App::worker_event_loop, this,
                 std::move(iface_lan), fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config, dhcp_engine);
 
-            shutdown_future = shutdown_promise.get_future();
-            shutdown_future.wait();
-            std::println("\n[System] Graceful shutdown complete.");
+            std::println("[App] 核心数据平面与控制平面已启动完成.");
         }
 
         void stop() { shutdown_promise.set_value(); }
+
+        void wait_for_shutdown() {
+            shutdown_future = shutdown_promise.get_future();
+            shutdown_future.wait();
+            std::println("\n[System] 收到退出信号，核心服务已优雅关闭.");
+        }
 
     private:
         void ui_render_loop(std::stop_token st) {

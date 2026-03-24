@@ -1,4 +1,4 @@
-﻿#include "App.hpp"
+#include "App.hpp"
 #include "Config.hpp"
 #include <csignal>
 #include <print>
@@ -14,7 +14,10 @@ extern "C" void signal_handler(int signal) {
     }
 }
 
-int main() {
+#include <QApplication>
+#include "GUI/Dashboard.hpp"
+
+int main(int argc, char* argv[]) {
     // 忽略 SIGPIPE
     std::signal(SIGPIPE, SIG_IGN);
 
@@ -35,8 +38,22 @@ int main() {
     }
 
     try {
-        // 4. 启动多核异构事件循环
-        app.run();
+        if (Scalpel::Config::global_state.enable_gui) {
+            // [阶段 3] 启动 Qt GUI 模式 (Core 0 将用于 QEventLoop)
+            QApplication qapp(argc, argv);
+            Scalpel::GUI::Dashboard gui;
+            
+            app.start(); // 异步启动底层网络引擎
+            gui.show();
+            
+            int ret = qapp.exec(); // 阻塞在主事件循环，不污染底层数据刷新
+            app.stop();
+            return ret;
+        } else {
+            // 纯命令行模式，阻塞等待退出
+            app.start();
+            app.wait_for_shutdown();
+        }
     } catch (const std::exception& e) {
         std::println(stderr, "[Fatal Error] 未俘获异常: {}", e.what());
         return 1;
