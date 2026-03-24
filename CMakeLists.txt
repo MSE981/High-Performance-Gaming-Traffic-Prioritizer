@@ -50,8 +50,5 @@ elseif(MSVC)
     )
 endif()
 
-# 自动化授权：编译后自动赋予网络和实时调度权限
-add_custom_command(TARGET GamingTrafficPrioritizer POST_BUILD
-    COMMAND sudo /usr/sbin/setcap 'cap_net_raw,cap_net_admin,cap_sys_nice=eip' $<TARGET_FILE:GamingTrafficPrioritizer>
-    COMMENT "Granting CAP_NET_RAW and Realtime permissions..."
-)
+# 自动化授权：此步骤暂时由于 SSH 密码无终端交互而禁用。
+# 手动运行时请使用 sudo ./GamingTrafficPrioritizer
