@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <chrono>
 #include <array>
 #include <span>
@@ -20,36 +20,17 @@ namespace Scalpel::Traffic {
         double rate_bytes_per_sec;
         std::chrono::time_point<std::chrono::steady_clock> last_refill;
 
-        // Phase 2.4 RCU: 无锁配置桥接
-        alignas(64) std::atomic<double> requested_limit{-1.0};
-
     public:
         explicit TokenBucket(double limit_mbps) {
-            apply_new_rate(limit_mbps);
-        }
-
-    private:
-        void apply_new_rate(double limit_mbps) {
             rate_bytes_per_sec = (limit_mbps * 1e6) / 8.0;
+            // 默认预留 15KB 突发或 0.1秒的等效带宽
             capacity = std::max<double>(15000.0, rate_bytes_per_sec * 0.1);
             tokens = capacity;
             last_refill = std::chrono::steady_clock::now();
         }
 
-    public:
-        // 控制面被动接口：无锁推入更新指令
-        void set_rate(double limit_mbps) {
-            requested_limit.store(limit_mbps, std::memory_order_release);
-        }
-
-        // 数据面实时泵：原子嗅探变更，100% 极低开销
+        // 刷新令牌
         void refill() {
-            double req_limit = requested_limit.load(std::memory_order_acquire);
-            if (req_limit >= 0.0) {
-                apply_new_rate(req_limit); // 吸收更新
-                requested_limit.store(-1.0, std::memory_order_relaxed);
-            }
-
             auto now = std::chrono::steady_clock::now();
             std::chrono::duration<double> dt = now - last_refill;
             double new_tokens = dt.count() * rate_bytes_per_sec;
@@ -75,8 +56,13 @@ namespace Scalpel::Traffic {
             tokens = std::min(capacity, tokens + static_cast<double>(bytes));
         }
 
-        // 此函数改由 set_rate 控制热刷新，故移除原逻辑
-
+        // 动态调整速率
+        void set_rate(double limit_mbps) {
+            rate_bytes_per_sec = (limit_mbps * 1e6) / 8.0;
+            capacity = std::max<double>(15000.0, rate_bytes_per_sec * 0.1);
+            tokens = capacity;
+            last_refill = std::chrono::steady_clock::now();
+        }
     };
 
     // 零动态分配环形缓冲区 (针对特定 Capacity 优化)
@@ -173,6 +159,7 @@ namespace Scalpel::Traffic {
         // 普通流量入队逻辑
         void enqueue_normal(std::span<const uint8_t> pkt) {
             if (!normal_queue.push(pkt)) {
+                Telemetry::instance().dropped_normal.fetch_add(1, std::memory_order_relaxed);
                 
                 static time_t last_log = 0;
                 time_t now = time(nullptr);
@@ -202,6 +189,5 @@ namespace Scalpel::Traffic {
         }
     };
 }
-
 
 

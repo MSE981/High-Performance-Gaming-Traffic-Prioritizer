@@ -1,5 +1,4 @@
-#pragma once
-#include <fstream>
+﻿#include <fstream>
 #include <print>
 #include <format>
 #include <string>
@@ -7,7 +6,7 @@
 #include <pthread.h>
 #include <sched.h>
 
-namespace Scalpel::System::Optimizer {
+namespace Scalpel::System {
     // 锁定 CPU 频率为 Performance 模式
     inline void lock_cpu_frequency() {
         for (int i = 0; i < 4; ++i) {
@@ -19,7 +18,7 @@ namespace Scalpel::System::Optimizer {
     }
 
     // 设置当前线程的亲和性
-    inline void set_current_thread_affinity(int core_id) {
+    inline void set_thread_affinity(int core_id) {
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
         CPU_SET(core_id, &cpuset);

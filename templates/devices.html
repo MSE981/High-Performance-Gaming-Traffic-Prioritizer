@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Connected Devices</title>
+    <style>
+        /* Global Styles */
+        body { font-family: sans-serif; background: #1a1a1a; color: white; padding: 20px; margin: 0; }
+        h1 { text-align: center; margin-bottom: 30px; }
+        
+        /* Navigation Bar Styles */
+        .navbar { background-color: #2d2d2d; overflow: hidden; border-radius: 8px; margin-bottom: 25px; box-shadow: 0 4px 8px rgba(0,0,0,0.3); display: flex; justify-content: center; }
+        .navbar a { display: block; color: #ccc; text-align: center; padding: 14px 20px; text-decoration: none; font-weight: bold; transition: 0.3s; }
+        .navbar a:hover { background-color: #444; color: white; }
+        .navbar a.active { background-color: #28a745; color: white; }
+        
+        /* Panel Styles */
+        .container { display: flex; flex-direction: column; align-items: center; max-width: 1000px; margin: 0 auto; gap: 20px; }
+        .panel { background: #2d2d2d; padding: 30px; border-radius: 10px; width: 100%; box-sizing: border-box; box-shadow: 0 4px 8px rgba(0,0,0,0.3); }
+        h2 { margin-top: 0; border-bottom: 2px solid #444; padding-bottom: 10px; color: #28a745; }
+        
+        /* Table Styles */
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 15px; text-align: left; border-bottom: 1px solid #444; }
+        th { background-color: #222; color: #28a745; font-size: 16px; }
+        tr:hover { background-color: #333; }
+        
+        /* Status Badges */
+        .badge { padding: 5px 10px; border-radius: 15px; font-size: 12px; font-weight: bold; }
+        .badge-optimized { background-color: #28a745; color: white; }
+        .badge-streaming { background-color: #007bff; color: white; }
+        .badge-warning { background-color: #dc3545; color: white; }
+        
+        /* Action Buttons */
+        .action-btn { padding: 8px 12px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 14px; transition: 0.3s; }
+        .btn-limit { background-color: #ffc107; color: black; }
+        .btn-limit:hover { background-color: #e0a800; }
+        .btn-block { background-color: #dc3545; color: white; margin-left: 10px; }
+        .btn-block:hover { background-color: #c82333; }
+    </style>
+</head>
+<body>
+
+    <h1>🚀 Gaming Traffic Prioritizer</h1>
+
+    <div class="navbar">
+        <a href="/">📊 Dashboard</a>
+        <a href="/network">🌐 Network</a>
+        <a href="/qos">🚦 Traffic QoS</a>
+        <a href="/devices" class="active">📱 Devices</a>
+        <a href="/logs">📈 Logs</a>
+        <a href="/dev">🛠️ Developer</a>
+    </div>
+
+    <div class="container">
+        <div class="panel">
+            <h2>Network Client Monitor</h2>
+            <p style="color: #ccc;">Scanning local network for active connections...</p>
+            
+            <table>
+                <thead>
+                    <tr>
+                        <th>Device Name</th>
+                        <th>IP Address</th>
+                        <th>MAC Address</th>
+                        <th>Network Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for device in devices %}
+                    <tr>
+                        <td><strong>{{ device.name }}</strong></td>
+                        <td style="font-family: monospace;">{{ device.ip }}</td>
+                        <td style="font-family: monospace; color: #aaa;">{{ device.mac }}</td>
+                        
+                        <td>
+                            {% if device.status == 'Optimized' %}
+                                <span class="badge badge-optimized">Optimized</span>
+                            {% elif device.status == 'Streaming' %}
+                                <span class="badge badge-streaming">Streaming</span>
+                            {% else %}
+                                <span class="badge badge-warning">High Traffic</span>
+                            {% endif %}
+                        </td>
+                        
+                        <td>
+                            <button class="action-btn btn-limit" onclick="alert('Bandwidth limited for {{ device.ip }}')">Limit Speed</button>
+                            <button class="action-btn btn-block" onclick="alert('Device {{ device.ip }} blocked from network!')">Block</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</body>
+</html>

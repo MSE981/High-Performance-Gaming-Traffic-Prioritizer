@@ -85,27 +85,28 @@ namespace Scalpel::Logic {
         StaticFlowMap<4096> flows;
         uint32_t process_counter = 0;
 
-        using ProtocolHandler = Net::Priority(*)(HeuristicProcessor*, const Net::ParsedPacket&);
+        using ProtocolHandler = Net::Priority(*)(HeuristicProcessor*, std::span<const uint8_t>, const Net::IPv4Header*, size_t);
         std::array<ProtocolHandler, 256> protocol_handlers;
 
         // UDP 协议特定识别逻辑
-        static Net::Priority handle_udp(HeuristicProcessor* self, const Net::ParsedPacket& parsed) {
-            auto udp = parsed.udp();
-            if (!udp) return Net::Priority::Normal;
-            
+        static Net::Priority handle_udp(HeuristicProcessor* self, std::span<const uint8_t> pkt, const Net::IPv4Header* ip, size_t ihl) {
+            size_t offset = sizeof(Net::EthernetHeader) + ihl;
+            if (pkt.size() < offset + sizeof(Net::UDPHeader)) return Net::Priority::Normal;
+
+            auto udp = reinterpret_cast<const Net::UDPHeader*>(pkt.data() + offset);
             uint16_t dport = ntohs(udp->dest);
             uint16_t sport = ntohs(udp->source);
 
             // DNS 优先放行
             if (dport == 53 || sport == 53) return Net::Priority::Critical;
 
-            FlowKey key{ parsed.ipv4->saddr, parsed.ipv4->daddr, sport, dport };
+            FlowKey key{ ip->saddr, ip->daddr, sport, dport };
             auto* stats = self->flows.get_or_create(key);
             
             if (stats) {
                 stats->total_pkts++;
                 stats->last_seen = std::chrono::steady_clock::now();
-                if (parsed.raw_span.size() > Config::LARGE_PACKET_THRESHOLD) stats->large_pkts++;
+                if (pkt.size() > Config::LARGE_PACKET_THRESHOLD) stats->large_pkts++;
                 
                 // 伪装流量检测 (如 UDP-Ping 洪水)
                 if (!stats->is_disguised && stats->total_pkts < 50) {
@@ -121,14 +122,15 @@ namespace Scalpel::Logic {
             }
 
             if (Config::is_game_port(dport) || Config::is_game_port(sport)) return Net::Priority::High;
-            return parsed.raw_span.size() < 256 ? Net::Priority::High : Net::Priority::Normal;
+            return pkt.size() < 256 ? Net::Priority::High : Net::Priority::Normal;
         }
 
         // TCP 协议识别
-        static Net::Priority handle_tcp(HeuristicProcessor*, const Net::ParsedPacket& parsed) {
-            if (parsed.raw_span.size() < 74) return Net::Priority::Critical; // 优先小包 (SYN/ACK)
-            auto tcp = parsed.tcp();
-            if (tcp) {
+        static Net::Priority handle_tcp(HeuristicProcessor*, std::span<const uint8_t> pkt, const Net::IPv4Header* ip, size_t ihl) {
+            if (pkt.size() < 74) return Net::Priority::Critical; // 优先小包 (SYN/ACK)
+            size_t offset = sizeof(Net::EthernetHeader) + ihl;
+            if (pkt.size() >= offset + sizeof(Net::TCPHeader)) {
+                auto tcp = reinterpret_cast<const Net::TCPHeader*>(pkt.data() + offset);
                 uint16_t dport = ntohs(tcp->dest);
                 uint16_t sport = ntohs(tcp->source);
                 if (Config::is_game_port(dport) || Config::is_game_port(sport)) return Net::Priority::High;
@@ -136,7 +138,7 @@ namespace Scalpel::Logic {
             return Net::Priority::Normal;
         }
 
-        static Net::Priority handle_default(HeuristicProcessor*, const Net::ParsedPacket&) {
+        static Net::Priority handle_default(HeuristicProcessor*, std::span<const uint8_t>, const Net::IPv4Header*, size_t) {
             return Net::Priority::Normal;
         }
 
@@ -148,11 +150,18 @@ namespace Scalpel::Logic {
         }
 
         // 识别主入口
-        Net::Priority process(const Net::ParsedPacket& parsed) {
-            if (!parsed.is_valid_ipv4()) return Net::Priority::Normal;
-            return protocol_handlers[parsed.l4_protocol](this, parsed);
+        Net::Priority process(std::span<const uint8_t> pkt) {
+            if (pkt.size() < sizeof(Net::EthernetHeader)) return Net::Priority::Normal;
+            auto eth = reinterpret_cast<const Net::EthernetHeader*>(pkt.data());
+            if (ntohs(eth->proto) != 0x0800) return Net::Priority::Normal;
+
+            if (pkt.size() < sizeof(Net::EthernetHeader) + sizeof(Net::IPv4Header)) return Net::Priority::Normal;
+            auto ip = reinterpret_cast<const Net::IPv4Header*>(pkt.data() + sizeof(Net::EthernetHeader));
+            size_t ihl = (ip->ver_ihl & 0x0F) * 4;
+            uint8_t protocol = ip->protocol;
+
+            return protocol_handlers[protocol](this, pkt, ip, ihl);
         }
     };
 }
-
 

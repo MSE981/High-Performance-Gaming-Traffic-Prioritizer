@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+﻿cmake_minimum_required(VERSION 3.20)
 
 set(CMAKE_CXX_COMPILER "g++-14")
 set(CMAKE_C_COMPILER "gcc-14")
@@ -8,21 +8,12 @@ project(GamingTrafficPrioritizer VERSION 3.0 LANGUAGES CXX)
 
 include_directories(include)
 find_package(Threads REQUIRED)
-find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL)
+find_library(PCAP_LIB pcap REQUIRED)
 
-# 启用 Qt 自动元对象编译器 (MOC) 以支持信号与槽
-set(CMAKE_AUTOMOC ON)
-set(CMAKE_AUTORCC ON)
-
-add_executable(GamingTrafficPrioritizer 
-    src/main.cpp
-    src/GUI/Dashboard.cpp
-    include/GUI/Dashboard.hpp
-)
+add_executable(GamingTrafficPrioritizer src/main.cpp)
 
 target_link_libraries(GamingTrafficPrioritizer PRIVATE 
-    Qt6::Widgets
-    Qt6::OpenGL
+    ${PCAP_LIB}
     Threads::Threads
     gpiodcxx  
 )
@@ -51,5 +42,8 @@ elseif(MSVC)
     )
 endif()
 
-# 自动化授权：此步骤暂时由于 SSH 密码无终端交互而禁用。
-# 手动运行时请使用 sudo ./GamingTrafficPrioritizer
+# 自动化授权：编译后自动赋予网络和实时调度权限
+add_custom_command(TARGET GamingTrafficPrioritizer POST_BUILD
+    COMMAND sudo /usr/sbin/setcap 'cap_net_raw,cap_net_admin,cap_sys_nice=eip' $<TARGET_FILE:GamingTrafficPrioritizer>
+    COMMENT "Granting CAP_NET_RAW and Realtime permissions..."
+)
