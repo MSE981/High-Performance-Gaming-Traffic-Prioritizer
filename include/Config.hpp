@@ -79,6 +79,7 @@ namespace Scalpel::Config {
                 else if (key == "LARGE_PACKET_THRESHOLD") LARGE_PACKET_THRESHOLD = std::stoul(val);
                 else if (key == "PUNISH_TRIGGER_COUNT") PUNISH_TRIGGER_COUNT = std::stoul(val);
                 else if (key == "CLEANUP_INTERVAL") CLEANUP_INTERVAL = std::stoul(val);
+                else if (key == "enable_gui") global_state.enable_gui.store(val == "true" || val == "1", std::memory_order_relaxed);
                 else if (key == "IP_LIMIT") {
                     auto dash = val.find(':');
                     if (dash != std::string::npos) {
