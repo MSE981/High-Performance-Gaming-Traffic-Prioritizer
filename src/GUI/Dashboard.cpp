@@ -17,9 +17,24 @@ namespace Scalpel::GUI {
         // [准则 #3] 数据与渲染分离：只操作内存缓冲区结构，无阻塞，无重绘
         shift_buffer.pop_front();
         shift_buffer.push_back(val);
-        if (val > current_max) {
-            current_max = val * 1.2;
+        if (val > target_max) {
+            target_max = val * 1.2;
+        } else {
+            // 缓慢衰退 target_max，保持动感
+            target_max = std::max(1.0, target_max * 0.99);
         }
+    }
+
+    void RealTimePlot::step_physics() {
+        // RK4 极简版 (Spring-Damper 阻尼弹簧)
+        constexpr double spring_k = 0.15;
+        constexpr double damper = 0.1;
+        
+        double force = spring_k * (target_max - current_max);
+        current_velocity = (current_velocity + force) * (1.0 - damper);
+        current_max += current_velocity;
+        
+        if (current_max < 1.0) current_max = 1.0;
     }
 
     void RealTimePlot::paintEvent(QPaintEvent*) {
@@ -115,6 +130,10 @@ namespace Scalpel::GUI {
             
             pps_plot->add_sample(total_pps);
             bps_plot->add_sample(total_bps);
+            
+            // 步进物理引擎
+            pps_plot->step_physics();
+            bps_plot->step_physics();
             
             // 批量应用重塑并更新 UI
             pps_plot->update();
