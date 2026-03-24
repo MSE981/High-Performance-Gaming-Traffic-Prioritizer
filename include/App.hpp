@@ -154,6 +154,7 @@ namespace Scalpel {
                 step_qos_routing
             };
         }
+        } // 补充闭合 PacketConsumer 构造函数
 
         // --- 回调流水线处理模块 (Pipeline Handlers) ---
         
