@@ -17,6 +17,7 @@ set(CMAKE_AUTORCC ON)
 add_executable(GamingTrafficPrioritizer 
     src/main.cpp
     src/GUI/Dashboard.cpp
+    include/GUI/Dashboard.hpp
 )
 
 target_link_libraries(GamingTrafficPrioritizer PRIVATE 
