@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.20)
 
 set(CMAKE_CXX_COMPILER "g++-14")
 set(CMAKE_C_COMPILER "gcc-14")
@@ -8,12 +8,16 @@ project(GamingTrafficPrioritizer VERSION 3.0 LANGUAGES CXX)
 
 include_directories(include)
 find_package(Threads REQUIRED)
-find_library(PCAP_LIB pcap REQUIRED)
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
+
+# 启用 Qt 自动元对象编译器 (MOC) 以支持信号与槽
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
 
 add_executable(GamingTrafficPrioritizer src/main.cpp)
 
 target_link_libraries(GamingTrafficPrioritizer PRIVATE 
-    ${PCAP_LIB}
+    Qt6::Widgets
     Threads::Threads
     gpiodcxx  
 )
