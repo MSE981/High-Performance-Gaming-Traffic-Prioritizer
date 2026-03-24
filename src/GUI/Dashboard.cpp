@@ -241,7 +241,7 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     for (auto& [ip, rate] : Config::IP_LIMIT_MAP) {
         int row = rules_table->rowCount();
         rules_table->insertRow(row);
-        uint8_t* b = reinterpret_cast<uint8_t*>(&ip);
+        const uint8_t* b = reinterpret_cast<const uint8_t*>(&ip);
         rules_table->setItem(row, 0, new QTableWidgetItem(
             QString("%1.%2.%3.%4").arg(b[0]).arg(b[1]).arg(b[2]).arg(b[3])));
         rules_table->setItem(row, 1, new QTableWidgetItem(QString::number(rate)));
@@ -472,7 +472,7 @@ void SystemPage::on_save_config() {
         f << "PUNISH_TRIGGER_COUNT=" << Config::PUNISH_TRIGGER_COUNT << "\n";
         f << "CLEANUP_INTERVAL=" << Config::CLEANUP_INTERVAL << "\n";
         for (auto& [ip, rate] : Config::IP_LIMIT_MAP) {
-            uint8_t* b = reinterpret_cast<uint8_t*>(const_cast<uint32_t*>(&ip));
+            const uint8_t* b = reinterpret_cast<const uint8_t*>(&ip);
             f << "IP_LIMIT=" << (int)b[0] << "." << (int)b[1] << "." << (int)b[2] << "." << (int)b[3] << ":" << rate << "\n";
         }
         std::println("[GUI] 配置已保存至: {}", path);
