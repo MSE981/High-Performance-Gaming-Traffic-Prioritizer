@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <string>
 #include <expected>
 #include <span>
@@ -113,7 +113,7 @@ namespace Scalpel::Engine {
                 
                 // 仅处理流入数据包，过滤流出干扰
                 if (sll->sll_pkttype != PACKET_OUTGOING) {
-                    std::span<uint8_t> pkt{ reinterpret_cast<uint8_t*>(hdr) + hdr->tp_mac, hdr->tp_len };
+                    std::span<const uint8_t> pkt{ reinterpret_cast<uint8_t*>(hdr) + hdr->tp_mac, hdr->tp_len };
                     // 核心调用：由于 cb 是模板参数，此处会被编译器 100% 内联
                     cb(pkt);
                 }
