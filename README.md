@@ -29,15 +29,22 @@ The result: Zero lag, stable ping, and maximum bandwidth efficiency.
 
 The core forwarding engine is fully functional. The next phase of development focuses on building professional user interfaces, strictly following real-time embedded coding guidelines:
 
-### 1. Local GUI Frontend (Qt Dashboard)
+### 1. Local GUI Frontend (Qt6 Dashboard)
 
-We will build a local desktop application to display real-time network statistics on a monitor connected directly to the Raspberry Pi.
+We have built a local desktop application to display real-time network statistics on a monitor connected directly to the Raspberry Pi.
 
-Technology Stack: Qt (C++).
+**Technology Stack**: Qt 6 (C++).
 
-Core Mechanism: To keep the interface highly responsive, the application will use Qt's native Signals and Slots mechanism .
+**Strict Real-Time Adherence**:
+- **Pure C++ Layouts**: Zero reliance on XML or `.ui` files. The layout is explicitly declared using nested `QVBoxLayout` and `QHBoxLayout` arrays to ensure memory transparency and comply with modern declarative design.
+- **Signals and Slots**: All callbacks execute instantly via pointer-based `connect()` functions. Heavy background operations are detached to independent `std::jthread` contexts, guaranteeing zero latency spikes in the GUI.
+- **Data Buffering vs Screen Refresh**: Due to the massive hardware packet rates, the GUI never samples network traffic instantaneously. Differential calculation for Packets Per Second (PPS) and Bytes Per Second (BPS) is pushed to a designated `Shift Buffer` asynchronously. 
+- **Throttled Updates (25Hz)**: To conserve CPU, visual updates strictly respect a `QTimer` driven limit of 40ms.
+- **Timer Restrictions**: Qt's timing resolution is banned for true data sampling. The global `QTimer` dictates *screen refreshes only*; network probing remains solely governed by kernel `timerfd_create` logic mapping to `Core 1/2/3`.
 
-Real-Time Charting: Drawing charts can easily freeze a program. To ensure the GUI never blocks the main thread, the fast-paced network data will be saved into a background Buffer using a Callback. Then, a safe Qt timerEvent will quietly read that buffer and refresh the screen at a steady, human-friendly frame rate.
+**Cyber-Physical Motion Engine**:
+- The UI mimics fluid, high-end "iOS 25" style interactions via an integrated **RK4 (Runge-Kutta) Spring-Damper Engine**. Chart axis fluctuations absorb bursts natively without visually aggressive jitter.
+- Rendered using **Dual-Pass Liquid Glass Glow**, an overlapping path algorithm simulating diffused neon refractions beneath a solid vector core wireframe.
 
 ### 2. Remote Web Management Dashboard
 
@@ -75,7 +82,7 @@ speedtest-cli: Required by the automated Probe module to measure your true ISP b
 
 libgpiod-dev (v2): Required for the zero-latency memory-mapped LED status indicators.
 
-libpcap-dev: Required by the CMake configuration for network packet handling.
+qt6-base-dev: Required for compiling the local GUI dashboard and eglfs direct rendering.
 
 ### Future UI Dependencies 
 
@@ -83,15 +90,13 @@ libjsoncpp-dev: For the C++ FastCGI JSON parsing.
 
 libfcgi-dev & nginx: For the web server backend.
 
-qt6-base-dev: For the local GUI dashboard.
-
 ## 🔨 Build & Run Instructions
 
 ### 1. Install Dependencies ( Raspberry Pi OS ):
 
 sudo apt update
 
-sudo apt install build-essential cmake gcc-14 g++-14 ethtool speedtest-cli libgpiod-dev libpcap-dev
+sudo apt install build-essential cmake gcc-14 g++-14 ethtool speedtest-cli libgpiod-dev qt6-base-dev
 
 ### 2. Compile the Project:
 
