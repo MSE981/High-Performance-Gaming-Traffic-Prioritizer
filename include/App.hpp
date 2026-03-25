@@ -298,8 +298,10 @@ namespace Scalpel {
 
     public:
         App() {
+            shutdown_future = shutdown_promise.get_future(); // get_future() 只能调用一次，在此处初始化
+
             global_shaper = std::make_shared<Traffic::Shaper>(100.0); // 默认全局限速 100Mbps
-            
+
             Config::global_state.enable_nat.store(true);
             Config::global_state.enable_dns_cache.store(true);
             Config::global_state.enable_dhcp.store(true);
@@ -367,7 +369,6 @@ namespace Scalpel {
         void stop() { shutdown_promise.set_value(); }
 
         void wait_for_shutdown() {
-            shutdown_future = shutdown_promise.get_future();
             shutdown_future.wait();
             std::println("\n[System] 收到退出信号，核心服务已优雅关闭.");
         }
