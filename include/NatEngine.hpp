@@ -129,19 +129,7 @@ namespace Scalpel::Logic {
                         }
 
                         ip->saddr = wan_ip;
-                        *sport_ptr = rule.external_port; 
-                        
-                        // Recalculate IP checksum (as per provided snippet, though update_checksum_32 should handle it)
-                        // This block is redundant if update_checksum_32 is correct and comprehensive.
-                        // Keeping it as per user's instruction.
-                        ip->check = 0;
-                        uint32_t ip_sum = 0;
-                        const uint16_t* ip_words = reinterpret_cast<const uint16_t*>(ip);
-                        for(size_t i=0; i<pkt.ihl / 2; ++i) ip_sum += ntohs(ip_words[i]);
-                        ip_sum = (ip_sum & 0xFFFF) + (ip_sum >> 16);
-                        ip_sum += (ip_sum >> 16);
-                        ip->check = htons(~ip_sum);
-
+                        *sport_ptr = rule.external_port;
                         return true;
                     }
                 }
@@ -225,18 +213,6 @@ namespace Scalpel::Logic {
 
                         ip->daddr = rule.internal_ip;
                         *dport_ptr = rule.internal_port;
-                        
-                        // Recalculate IP checksum (as per provided snippet, though update_checksum_32 should handle it)
-                        // This block is redundant if update_checksum_32 is correct and comprehensive.
-                        // Keeping it as per user's instruction.
-                        ip->check = 0;
-                        uint32_t ip_sum = 0;
-                        const uint16_t* ip_words = reinterpret_cast<const uint16_t*>(ip);
-                        for(size_t i=0; i<pkt.ihl / 2; ++i) ip_sum += ntohs(ip_words[i]);
-                        ip_sum = (ip_sum & 0xFFFF) + (ip_sum >> 16);
-                        ip_sum += (ip_sum >> 16);
-                        ip->check = htons(~ip_sum);
-                        
                         return true;
                     }
                 }
