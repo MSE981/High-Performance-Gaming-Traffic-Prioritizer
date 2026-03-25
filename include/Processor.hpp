@@ -10,14 +10,14 @@
 
 namespace Scalpel::Logic {
 
-    // 5元组流量标识
+    // 5-tuple flow identifier
     struct FlowKey {
         uint32_t saddr, daddr;
         uint16_t sport, dport;
         bool operator==(const FlowKey&) const = default;
     };
 
-    // 流量统计信息
+    // Flow statistics
     struct FlowStats {
         uint32_t total_pkts = 0;
         uint32_t large_pkts = 0;
@@ -25,7 +25,7 @@ namespace Scalpel::Logic {
         std::chrono::steady_clock::time_point last_seen;
     };
 
-    // 基于 FNV-1a 算法的静态流表 (零动态分配)
+    // Static flow table based on FNV-1a algorithm (zero dynamic allocation)
     template<size_t Capacity = 4096>
     class StaticFlowMap {
         struct Entry {
@@ -36,7 +36,7 @@ namespace Scalpel::Logic {
 
         std::array<Entry, Capacity> table{};
 
-        // FNV-1a 字节哈希实现
+        // FNV-1a byte hash implementation
         static uint32_t fnv1a_hash(const FlowKey& k) {
             uint32_t h = 2166136261U;
             auto process_bytes = [&](const auto& val) {
@@ -51,7 +51,7 @@ namespace Scalpel::Logic {
         }
 
     public:
-        // 在热路径中查找或创建流实体
+        // Find or create flow entity in hot path
         FlowStats* get_or_create(const FlowKey& key) {
             uint32_t h = fnv1a_hash(key) % Capacity;
             for (size_t i = 0; i < Capacity; ++i) {
@@ -69,7 +69,7 @@ namespace Scalpel::Logic {
             return nullptr;
         }
 
-        // 定期清理过期流
+        // Periodically clean up expired flows
         void cleanup(std::chrono::seconds timeout) {
             auto now = std::chrono::steady_clock::now();
             for (auto& entry : table) {
@@ -80,7 +80,7 @@ namespace Scalpel::Logic {
         }
     };
 
-    // 启发式流量识别引擎
+    // Heuristic traffic identification engine
     class HeuristicProcessor {
         StaticFlowMap<4096> flows;
         uint32_t process_counter = 0;
@@ -88,33 +88,33 @@ namespace Scalpel::Logic {
         using ProtocolHandler = Net::Priority(*)(HeuristicProcessor*, const Net::ParsedPacket&);
         std::array<ProtocolHandler, 256> protocol_handlers;
 
-        // UDP 协议特定识别逻辑
+        // UDP protocol-specific identification logic
         static Net::Priority handle_udp(HeuristicProcessor* self, const Net::ParsedPacket& parsed) {
             auto udp = parsed.udp();
             if (!udp) return Net::Priority::Normal;
-            
+
             uint16_t dport = ntohs(udp->dest);
             uint16_t sport = ntohs(udp->source);
 
-            // DNS 优先放行
+            // DNS priority pass
             if (dport == 53 || sport == 53) return Net::Priority::Critical;
 
             FlowKey key{ parsed.ipv4->saddr, parsed.ipv4->daddr, sport, dport };
             auto* stats = self->flows.get_or_create(key);
-            
+
             if (stats) {
                 stats->total_pkts++;
                 stats->last_seen = std::chrono::steady_clock::now();
                 if (parsed.raw_span.size() > Config::LARGE_PACKET_THRESHOLD) stats->large_pkts++;
-                
-                // 伪装流量检测 (如 UDP-Ping 洪水)
+
+                // Disguised traffic detection (e.g., UDP-Ping flood)
                 if (!stats->is_disguised && stats->total_pkts < 50) {
                     if (stats->large_pkts > Config::PUNISH_TRIGGER_COUNT) stats->is_disguised = true;
                 }
                 if (stats->is_disguised) return Net::Priority::Normal;
             }
 
-            // 周期性清理
+            // Periodic cleanup
             if (++self->process_counter > Config::CLEANUP_INTERVAL) {
                 self->flows.cleanup(std::chrono::seconds(30));
                 self->process_counter = 0;
@@ -124,9 +124,9 @@ namespace Scalpel::Logic {
             return parsed.raw_span.size() < 256 ? Net::Priority::High : Net::Priority::Normal;
         }
 
-        // TCP 协议识别
+        // TCP protocol identification
         static Net::Priority handle_tcp(HeuristicProcessor*, const Net::ParsedPacket& parsed) {
-            if (parsed.raw_span.size() < 74) return Net::Priority::Critical; // 优先小包 (SYN/ACK)
+            if (parsed.raw_span.size() < 74) return Net::Priority::Critical; // Prioritize small packets (SYN/ACK)
             auto tcp = parsed.tcp();
             if (tcp) {
                 uint16_t dport = ntohs(tcp->dest);
@@ -147,7 +147,7 @@ namespace Scalpel::Logic {
             protocol_handlers[6] = handle_tcp;
         }
 
-        // 识别主入口
+        // Main identification entry point
         Net::Priority process(const Net::ParsedPacket& parsed) {
             if (!parsed.is_valid_ipv4()) return Net::Priority::Normal;
             return protocol_handlers[parsed.l4_protocol](this, parsed);
