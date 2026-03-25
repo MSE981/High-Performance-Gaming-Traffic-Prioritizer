@@ -25,9 +25,9 @@ namespace Scalpel::Logic {
         std::array<uint8_t, 512> data;
     };
 
-    // 核心分离式 DNS 解析引警
+    // Core separated DNS resolution engine
     class DnsEngine {
-        // 静态表：遵守准则 3.1: Zero Dynamic Allocation
+        // Static table: compliance with principle 3.1 - Zero Dynamic Allocation
         struct DnsCacheEntry {
             uint32_t domain_hash = 0;
             uint32_t ipv4_address = 0;
@@ -45,7 +45,7 @@ namespace Scalpel::Logic {
         static uint32_t hash_qname(const uint8_t* qname, size_t max_len) {
             uint32_t h = 2166136261U;
             size_t i = 0;
-            while (i < max_len && qname[i] != 0) { // DNS 标签以 0 终止
+            while (i < max_len && qname[i] != 0) { // DNS labels end with 0
                 h ^= qname[i]; h *= 16777619U;
                 i++;
             }
@@ -55,7 +55,7 @@ namespace Scalpel::Logic {
     public:
         void tick() { current_tick++; }
 
-        // Core 3 (Upstream: LAN -> WAN) - 数据面命中与零拷贝覆写反弹
+        // Core 3 (Upstream: LAN -> WAN) - data plane cache hit and zero-copy bounce
         bool process_query(Net::ParsedPacket& pkt, int bounce_fd) {
             if (!pkt.is_valid_ipv4() || pkt.l4_protocol != 17) return false;
 
@@ -73,33 +73,33 @@ namespace Scalpel::Logic {
             size_t qname_offset = dns_offset + sizeof(DnsHeader);
             if (qname_offset >= pkt.raw_span.size()) return false;
 
-            // O(1) 原地哈希
+            // O(1) in-place hash
             uint32_t h = hash_qname(pkt.raw_span.data() + qname_offset, pkt.raw_span.size() - qname_offset);
             size_t idx = h % CACHE_SIZE;
 
-            // 准则 3.0: 纯解引用的 Acquire 屏障实现无锁读取
+            // Principle 3.0: pure dereference with acquire barrier for lock-free reads
             if (!cache[idx].valid.load(std::memory_order_acquire)) return false;
             if (cache[idx].domain_hash != h || current_tick > cache[idx].expire_tick) {
                 cache[idx].valid.store(false, std::memory_order_relaxed);
                 return false;
             }
 
-            // --- Cache Hit: Zero-Copy Bounce (原地修改，零内存复制) ---
+            // Cache hit: zero-copy bounce (in-place modification, no memory copy)
             uint32_t cached_ip = cache[idx].ipv4_address;
             size_t old_len = pkt.raw_span.size();
             size_t new_len = old_len + 16;
-            if (new_len > 1500) return false; // 防止 MTU 溢出
+            if (new_len > 1500) return false; // Prevent MTU overflow
 
-            dns->flags = htons(ntohs(dns->flags) | 0x8180); // 置为 Response (QR=1)
+            dns->flags = htons(ntohs(dns->flags) | 0x8180); // Set as response (QR=1)
             dns->ancount = htons(1);
 
-            // 强插 16 bytes A Record 到 packet 尾部（假定 RawSocket mmap ring 预留了足够 padding）
+            // Inject 16 bytes A record at packet end (assume RawSocket mmap ring has padding)
             uint8_t* tail = pkt.raw_span.data() + old_len;
             tail[0] = 0xC0; tail[1] = 0x0C; // Name Pointer 回指 Question
             tail[2] = 0x00; tail[3] = 0x01; // Type A
             tail[4] = 0x00; tail[5] = 0x01; // Class IN
-            tail[6] = 0x00; tail[7] = 0x00; tail[8] = 0x01; tail[9] = 0x2C; // TTL = 300s
-            tail[10] = 0x00; tail[11] = 0x04; // IP 长度 = 4
+            tail[6] = 0x00; tail[7] = 0x00; tail[8] = 0x01; tail[9] = 0x2C; // TTL = 300 sec
+            tail[10] = 0x00; tail[11] = 0x04; // IP length = 4
             std::memcpy(&tail[12], &cached_ip, 4);
 
             for (int i=0; i<6; ++i) { std::swap(pkt.eth->src[i], pkt.eth->dest[i]); }
@@ -123,31 +123,31 @@ namespace Scalpel::Logic {
             udp->len = htons(new_len - sizeof(Net::EthernetHeader) - pkt.ihl);
             udp->check = 0; 
 
-            // Fast Bounce! 原地以物理极速将其打回内网口 (`bounce_fd` = `rx_fd`)
+            // Fast bounce: send back to LAN interface at wire speed (bounce_fd = rx_fd)
             send(bounce_fd, pkt.raw_span.data(), new_len, MSG_DONTWAIT);
-            return true; // 阻断数据面流水线
+            return true; // Block data path pipeline
         }
 
-        // Core 2 (Downstream: WAN -> LAN) - 数据面外网响应截留，推向 Control Plane 异步处理
+        // Core 2 (Downstream: WAN -> LAN) - intercept external responses, queue to control plane
         void intercept_response(const Net::ParsedPacket& pkt) {
             if (pkt.raw_span.size() > 512 || !pkt.is_valid_ipv4()) return;
             if (pkt.l4_protocol != 17) return;
 
             auto udp = pkt.udp();
-            if (!udp || ntohs(udp->source) != 53) return; // 只监听外部发来的 DNS 数据
+            if (!udp || ntohs(udp->source) != 53) return; // Only listen for external DNS
 
             DnsMessage msg;
             msg.len = pkt.raw_span.size();
             std::memcpy(msg.data.data(), pkt.raw_span.data(), pkt.raw_span.size());
-            // 无休止向无锁队列中推送（由 C1 看门狗稍后吸收），若溢出丢弃不造成阻塞
+            // Queue to lock-free queue (Core 1 watchdog processes later), drops on overflow
             response_queue.push(msg); 
         }
 
-        // Control Plane (Core 1) 后台慢速学习循环（剥离自高频数据流）
+        // Control plane (Core 1) background learning loop (decoupled from high-frequency data)
         void process_background_tasks() {
             DnsMessage msg;
             int counter = 0;
-            while (response_queue.pop(msg) && counter++ < 32) { // 每秒最多拆分 32 个包，绝不能吃尽 Watchdog
+            while (response_queue.pop(msg) && counter++ < 32) { // Max 32 packets/sec, don't starve watchdog
                 auto ip = reinterpret_cast<const Net::IPv4Header*>(msg.data.data() + sizeof(Net::EthernetHeader));
                 size_t ihl = (ip->ver_ihl & 0x0F) * 4;
                 size_t dns_offset = sizeof(Net::EthernetHeader) + ihl + sizeof(Net::UDPHeader);
@@ -160,25 +160,25 @@ namespace Scalpel::Logic {
                 
                 uint32_t h = hash_qname(msg.data.data() + qname_offset, msg.len - qname_offset);
 
-                // 解包过程极其复杂且充满不确定性指针：绝佳证明了剥离到 Core 1 是正确的决定
+                // Packet parsing is complex with uncertain pointers: justifies separation to Core 1
                 size_t ptr = qname_offset;
                 while (ptr < msg.len && msg.data[ptr] != 0) { ptr += msg.data[ptr] + 1; }
-                ptr += 5; // skip null byte (1) + qtype (2) + qclass (2)
+                ptr += 5; // Skip null byte (1) + qtype (2) + qclass (2)
 
-                // 第一条 Answer
+                // First answer record
                 if (ptr + 12 <= msg.len) {
-                    // Type A (0x0001) Record
+                    // Type A (0x0001) record
                     if (msg.data[ptr+2] == 0x00 && msg.data[ptr+3] == 0x01) {
                         uint32_t ipv4 = *reinterpret_cast<const uint32_t*>(&msg.data[ptr+10]);
                         
                         size_t idx = h % CACHE_SIZE;
                         cache[idx].domain_hash = h;
                         cache[idx].ipv4_address = ipv4;
-                        cache[idx].expire_tick = current_tick + 300; // 有效期 (TICK 单位)
-                        // 准则 3.0：Release 屏障确保上面的内存写完毕后，数据面才能 acquire 到 True
+                        cache[idx].expire_tick = current_tick + 300; // Expiry in tick units
+                        // Principle 3.0: release barrier ensures memory writes complete before data plane acquires true
                         cache[idx].valid.store(true, std::memory_order_release);
-                        
-                        // std::println("[Control Plane] Learned DNS Record Hash:{}", h);
+
+                        // std::println("[Control Plane] Learned DNS record hash:{}", h);
                     }
                 }
             }
