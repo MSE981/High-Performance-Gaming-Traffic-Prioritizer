@@ -305,19 +305,15 @@ namespace Scalpel {
             Config::global_state.enable_dhcp.store(true);
             Config::global_state.enable_upnp.store(true);
             
-            // Default gateway IP 
-            std::string gw_ip_str = "192.168.1.100";
-            uint32_t gateway_ip = Config::parse_ip_str(gw_ip_str);
-
             nat_engine = std::make_shared<Logic::NatEngine>();
             dns_engine = std::make_shared<Logic::DnsEngine>();
-            dhcp_engine = std::make_shared<Logic::DhcpEngine>(gw_ip_str);
-            upnp_engine = std::make_shared<Logic::UpnpEngine>(nat_engine, gw_ip_str);
+            dhcp_engine = std::make_shared<Logic::DhcpEngine>(Config::ROUTER_IP);
+            upnp_engine = std::make_shared<Logic::UpnpEngine>(nat_engine, Config::ROUTER_IP);
             qos_config = std::make_shared<QoSConfig>();
-            
+
             // 初始化 QoS 无锁双缓冲表
             qos_config->update(Config::IP_LIMIT_MAP);
-            nat_engine->set_wan_ip(Config::parse_ip_str("192.168.1.100"));
+            nat_engine->set_wan_ip(Config::parse_ip_str(Config::ROUTER_IP));
         }
         std::expected<void, std::string> init() {
             Utils::Network::disable_hardware_offloads(Config::IFACE_WAN);
@@ -383,7 +379,7 @@ namespace Scalpel {
             std::println("[App] Core {} Pipeline 挂载就绪.", core);
 
             int rx_fd = rx_mgr->get_fd();
-            PacketConsumer consumer(rx_fd, tx_fd, core, shpr, nat, dns, qos, dhcp, Config::parse_ip_str("192.168.1.100"));
+            PacketConsumer consumer(rx_fd, tx_fd, core, shpr, nat, dns, qos, dhcp, Config::parse_ip_str(Config::ROUTER_IP));
 
             while (!st.stop_requested()) {
                 rx_mgr->poll_and_dispatch([&consumer](std::span<uint8_t> raw_span) {
