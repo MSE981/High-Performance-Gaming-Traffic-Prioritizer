@@ -41,12 +41,12 @@ namespace Scalpel::Logic {
 
     struct DhcpLease {
         uint8_t mac[6]{};
-        uint32_t ip;      // 托管的 IP (网络字节序)
+        uint32_t ip;      // Managed IP in network byte order
         bool active = false;
         std::chrono::steady_clock::time_point lease_expiry;
     };
 
-    // Phase 2.5: Zero-Allocation 用户态原生 DHCP Server (无需 Dnsmasq)
+    // Phase 2.5: Zero-Allocation user-space DHCP server (no Dnsmasq needed)
     class DhcpEngine {
         Net::SpscRingBuffer<DhcpMessage, 512> request_queue{};
         
@@ -67,7 +67,7 @@ namespace Scalpel::Logic {
             }
         }
 
-        // Data Plane (Core 3 LAN_RX) Call: 拦截请求并无锁抛给控制面
+        // Data plane (Core 3 LAN_RX): intercept and queue request to control plane
         void intercept_request(const Net::ParsedPacket& pkt) {
             DhcpMessage msg;
             msg.len = std::min(pkt.raw_span.size(), size_t(512));
@@ -75,7 +75,7 @@ namespace Scalpel::Logic {
             request_queue.push(msg);
         }
 
-        // Control Plane (Core 1) Watchdog Call: 离线解析与下发
+        // Control plane (Core 1) watchdog: offline parsing and transmission
         void process_background_tasks(int lan_fd) {
             DhcpMessage msg;
             while (request_queue.pop(msg)) {
@@ -120,7 +120,7 @@ namespace Scalpel::Logic {
             if (msg_type == 1) { // DHCP Discover
                 uint32_t offered_ip = find_or_assign_lease(dhcp->chaddr);
                 if (offered_ip != 0) {
-                    send_dhcp_response(msg.data, parsed, dhcp, 2, offered_ip, lan_fd); // Send Offer
+                    send_dhcp_response(msg.data, parsed, dhcp, 2, offered_ip, lan_fd); // DHCP Offer
                 }
             } else if (msg_type == 3) { // DHCP Request
                 if (requested_ip == 0) requested_ip = dhcp->ciaddr;
@@ -128,10 +128,10 @@ namespace Scalpel::Logic {
                 
                 if (leased_ip == requested_ip) {
                     commit_lease(dhcp->chaddr, leased_ip);
-                    send_dhcp_response(msg.data, parsed, dhcp, 5, leased_ip, lan_fd); // Send ACK
-                    std::println("[DHCP Engine] 已为终端派发独立 IP: {}", inet_ntoa(*(in_addr*)&leased_ip));
+                    send_dhcp_response(msg.data, parsed, dhcp, 5, leased_ip, lan_fd); // DHCP ACK
+                    std::println("[DHCP Engine] Assigned IP to device: {}", inet_ntoa(*(in_addr*)&leased_ip));
                 } else {
-                    send_dhcp_response(msg.data, parsed, dhcp, 6, requested_ip, lan_fd); // Send NAK
+                    send_dhcp_response(msg.data, parsed, dhcp, 6, requested_ip, lan_fd); // DHCP NAK
                 }
             }
         }
