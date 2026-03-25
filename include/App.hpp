@@ -32,7 +32,7 @@
 
 namespace Scalpel {
 
-    // 数据面：基于函数指针的高效静态分发 (消除虚函数开销)
+    // Data plane: efficient static dispatch based on function pointers (eliminates virtual function overhead)
     struct RouteContext {
         int tx_fd;
         std::shared_ptr<Traffic::Shaper> shaper;
@@ -42,7 +42,7 @@ namespace Scalpel {
 
     static void fast_path_handler(const RouteContext& ctx, std::span<uint8_t> pkt, size_t prio_idx, int core_id) {
         if (send(ctx.tx_fd, pkt.data(), pkt.size(), MSG_DONTWAIT) < 0) {
-            // 遵守 ISR "立即完成" 与绝对零阻塞原则：如果发送缓冲区满，则果断尾丢弃，绝不挂起或轮询重试
+            // Follow ISR "complete immediately" and zero-blocking principle: if send buffer full, tail drop decisively, never hang or poll-retry
             Telemetry::instance().core_metrics[core_id].dropped[prio_idx].fetch_add(1, std::memory_order_relaxed);
         }
     }
@@ -51,7 +51,7 @@ namespace Scalpel {
         if (ctx.shaper) ctx.shaper->enqueue_normal(pkt);
     }
 
-    // 辅助工具：基于 FNV-1a 静态哈希表 (针对嵌入式实时性能优化)
+    // Helper: static hash table based on FNV-1a (optimized for embedded real-time)
     template<typename T, size_t Capacity = 256>
     class StaticIpMap {
     public:
@@ -97,7 +97,7 @@ namespace Scalpel {
         }
     };
 
-    // Phase 2.4: 软路由 QoS 无锁双缓冲配置核心 (RCU Config Swap)
+    // Phase 2.4: Software router QoS lock-free double-buffer config core (RCU config swap)
     struct QoSConfig {
         std::array<StaticIpMap<std::shared_ptr<Traffic::Shaper>, 256>, 2> buffers;
         alignas(64) std::atomic<size_t> active_idx{0};

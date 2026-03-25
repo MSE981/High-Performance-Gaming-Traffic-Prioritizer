@@ -18,17 +18,17 @@
 namespace Scalpel::Engine {
     class RawSocketManager {
 
-        // 禁止拷贝
+        // No copy
         RawSocketManager(const RawSocketManager&) = delete;
-        RawSocketManager& operator=(const RawSocketManager&) = delete; 
+        RawSocketManager& operator=(const RawSocketManager&) = delete;
 
         int fd = -1;
         uint8_t* ring = nullptr;
         size_t ring_size = 0;
 
-        uint32_t rx_idx = 0; // 环形缓冲区索引
+        uint32_t rx_idx = 0; // Ring buffer index
 
-        // TPACKET_V1/V2 默认配置
+        // TPACKET_V1/V2 default configuration
         static constexpr uint32_t BLOCK_SIZE = 4096 * 16;
         static constexpr uint32_t FRAME_SIZE = 2048;
         static constexpr uint32_t BLOCK_NR = 1024;
@@ -43,16 +43,16 @@ namespace Scalpel::Engine {
         }
 
         std::expected<void, std::string> init() {
-            // 1. 创建 Raw Socket
+            // 1. Create raw socket
             fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
             if (fd < 0) return std::unexpected(std::string("Socket creation failed: ") + strerror(errno));
 
-            // 2. 获取接口 Index
+            // 2. Get interface index
             struct ifreq ifr {};
             iface.copy(ifr.ifr_name, IFNAMSIZ - 1);
             if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) return std::unexpected("Interface lookup failed");
 
-            // --- 自动开启网卡混杂模式 ---
+            // Auto-enable promiscuous mode
             struct ifreq ifr_p {};
             iface.copy(ifr_p.ifr_name, IFNAMSIZ - 1);
 
@@ -64,9 +64,9 @@ namespace Scalpel::Engine {
             if (ioctl(fd, SIOCSIFFLAGS, &ifr_p) < 0) {
                 return std::unexpected("Failed to set IFF_PROMISC. Check permissions.");
             }
-            std::println("[Engine] 接口 {} 已开启混杂模式", iface);
+            std::println("[Engine] Interface {} set to promiscuous mode", iface);
 
-            // 3. 配置 PACKET_RX_RING
+            // 3. Configure PACKET_RX_RING
             tpacket_req req{
                 .tp_block_size = BLOCK_SIZE,
                 .tp_block_nr = BLOCK_NR,
@@ -77,7 +77,7 @@ namespace Scalpel::Engine {
             if (setsockopt(fd, SOL_PACKET, PACKET_RX_RING, &req, sizeof(req)) < 0)
                 return std::unexpected("Setsockopt RX_RING failed");
 
-            // 4. mmap 映射
+            // 4. Memory map
             ring_size = (size_t)req.tp_block_size * req.tp_block_nr;
             ring = (uint8_t*)mmap(nullptr, ring_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
             if (ring == MAP_FAILED) return std::unexpected("mmap failed");
@@ -94,8 +94,8 @@ namespace Scalpel::Engine {
 
         int get_fd() const { return fd; }
 
-        // 核心包分发循环 (编译期多态优化)
-        // 模板参数实现处理逻辑的 100% 内联，消除虚函数开销。
+        // Core packet dispatch loop (compile-time polymorphism optimization)
+        // Template parameters achieve 100% inlining of processing logic, eliminating virtual function overhead
         template<typename Callback>
         void poll_and_dispatch(Callback&& cb, int timeout_ms = 1) {
             struct pollfd pfd {};
@@ -104,17 +104,17 @@ namespace Scalpel::Engine {
 
             poll(&pfd, 1, timeout_ms);
 
-            // 批量抽空环形缓冲区
+            // Drain ring buffer in bulk
             while (true) {
                 auto* hdr = reinterpret_cast<tpacket_hdr*>(ring + (rx_idx * FRAME_SIZE));
                 if (!(hdr->tp_status & TP_STATUS_USER)) break;
 
                 auto* sll = reinterpret_cast<sockaddr_ll*>(reinterpret_cast<uint8_t*>(hdr) + TPACKET_ALIGN(sizeof(tpacket_hdr)));
-                
-                // 仅处理流入数据包，过滤流出干扰
+
+                // Process only incoming packets, filter outgoing noise
                 if (sll->sll_pkttype != PACKET_OUTGOING) {
                     std::span<uint8_t> pkt{ reinterpret_cast<uint8_t*>(hdr) + hdr->tp_mac, hdr->tp_len };
-                    // 核心调用：由于 cb 是模板参数，此处会被编译器 100% 内联
+                    // Core call: since cb is template parameter, compiler inlines 100%
                     cb(pkt);
                 }
 

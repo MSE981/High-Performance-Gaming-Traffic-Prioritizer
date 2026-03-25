@@ -13,14 +13,14 @@
 
 namespace Scalpel::Traffic {
 
-    // 令牌桶速率限制器
+    // Token bucket rate limiter
     class TokenBucket {
         double tokens;
         double capacity;
         double rate_bytes_per_sec;
         std::chrono::time_point<std::chrono::steady_clock> last_refill;
 
-        // Phase 2.4 RCU: 无锁配置桥接
+        // Phase 2.4 RCU: lock-free config bridge
         alignas(64) std::atomic<double> requested_limit{-1.0};
 
     public:
@@ -37,16 +37,16 @@ namespace Scalpel::Traffic {
         }
 
     public:
-        // 控制面被动接口：无锁推入更新指令
+        // Control plane passive interface: lock-free update enqueue
         void set_rate(double limit_mbps) {
             requested_limit.store(limit_mbps, std::memory_order_release);
         }
 
-        // 数据面实时泵：原子嗅探变更，100% 极低开销
+        // Data plane real-time pump: atomic sniff for changes, ultra-low overhead
         void refill() {
             double req_limit = requested_limit.load(std::memory_order_acquire);
             if (req_limit >= 0.0) {
-                apply_new_rate(req_limit); // 吸收更新
+                apply_new_rate(req_limit); // Absorb update
                 requested_limit.store(-1.0, std::memory_order_relaxed);
             }
 
@@ -60,7 +60,7 @@ namespace Scalpel::Traffic {
             }
         }
 
-        // 尝试消耗令牌
+        // Try to consume tokens
         bool try_consume(uint32_t bytes) {
             refill();
             if (tokens >= bytes) {
@@ -70,17 +70,17 @@ namespace Scalpel::Traffic {
             return false;
         }
 
-        // 硬件发送失败时归还令牌
+        // Refund tokens on hardware send failure
         void refund(uint32_t bytes) {
             tokens = std::min(capacity, tokens + static_cast<double>(bytes));
         }
 
-        // 此函数改由 set_rate 控制热刷新，故移除原逻辑
+        // Hot refresh now controlled by set_rate(), original logic removed
 
     };
 
-    // 零动态分配环形缓冲区 (针对特定 Capacity 优化)
-    // 使用 std::array 替代 vector，PacketSlot 采用缓存行对齐防止伪共享。
+    // Zero dynamic allocation ring buffer (optimized for specific capacity)
+    // Use std::array instead of vector, PacketSlot aligned to cache line to prevent false sharing
     template<size_t Capacity = 8192>
     class ZeroAllocRingBuffer {
         struct alignas(64) PacketSlot {
@@ -96,7 +96,7 @@ namespace Scalpel::Traffic {
     public:
         ZeroAllocRingBuffer() = default;
 
-        // 压入包数据
+        // Push packet data
         bool push(std::span<const uint8_t> pkt) {
             if (count == Capacity || pkt.size() > 2048) {
                 return false;
@@ -109,14 +109,14 @@ namespace Scalpel::Traffic {
             return true;
         }
 
-        // 获取首部数据块
+        // Get front data block
         std::span<const uint8_t> front() const {
             if (count == 0) return {};
             const auto& slot = pool[head];
             return { slot.payload, slot.size };
         }
 
-        // 弹出首部项
+        // Pop front item
         void pop() {
             if (count > 0) {
                 head = (head + 1) % Capacity;
@@ -128,36 +128,36 @@ namespace Scalpel::Traffic {
         size_t size() const { return count; }
     };
 
-    // 底层硬件发送结果定义
+    // Low-level hardware send result definition
     enum class TxResult : size_t { Success = 0, Congested = 1, Fatal = 2 };
 
-    // 硬件发送重试抽象 (零阻塞拦截)
+    // Hardware send retry abstraction (zero-blocking intercept)
     inline TxResult try_hardware_send(int fd, std::span<const uint8_t> pkt) {
         if (send(fd, pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) return TxResult::Success;
         if (errno == ENOBUFS || errno == EAGAIN) return TxResult::Congested;
         return TxResult::Fatal;
     }
 
-    // 流量整形器
-    // 处理普通流量的入队、限速控制与硬件分发。
+    // Traffic shaper
+    // Handles normal traffic queue, rate limiting, and hardware dispatch
     class Shaper {
         ZeroAllocRingBuffer<8192> normal_queue;
         TokenBucket bucket;
         uint64_t trace_counter = 0;
 
-        // 发送结果处理器表 (Functor Table)
+        // Send result handler table (Functor table)
         using ResultHandler = void (*)(Shaper*, size_t);
         static constexpr std::array<ResultHandler, 3> result_handlers = {
             [](Shaper* s, size_t) { // Success
                 s->normal_queue.pop();
                 if (++s->trace_counter % 5000 == 0) {
-                    std::println("[Shaper] 已稳定转发 5000 个普通包。");
+                    std::println("[Shaper] Stably forwarded 5000 normal packets.");
                 }
             },
-            [](Shaper* s, size_t bytes) { // Congested (硬件忙，归还令牌但不弹出，待下次重试)
+            [](Shaper* s, size_t bytes) { // Congested: hardware busy, refund tokens but don't pop, retry next time
                 s->bucket.refund(bytes);
             },
-            [](Shaper* s, size_t bytes) { // Fatal (严重错误，丢弃包)
+            [](Shaper* s, size_t bytes) { // Fatal: serious error, discard packet
                 s->bucket.refund(bytes);
                 s->normal_queue.pop();
             }
@@ -170,7 +170,7 @@ namespace Scalpel::Traffic {
             bucket.set_rate(limit_mbps);
         }
 
-        // 普通流量入队逻辑
+        // Normal traffic enqueue logic
         void enqueue_normal(std::span<const uint8_t> pkt) {
             if (!normal_queue.push(pkt)) {
                 static std::atomic<uint64_t> drop_count{0};
@@ -179,12 +179,12 @@ namespace Scalpel::Traffic {
                     if (pkt.size() > 2048)
                         std::println(stderr, "[Alert] Drop: oversized packet ({} bytes), hw offload may be active.", pkt.size());
                     else
-                        std::println(stderr, "[Alert] Drop: queue overflow (Cap: 8192), total drops: {}.", c);
+                        std::println(stderr, "[Alert] Drop: queue overflow (capacity 8192), total drops: {}.", c);
                 }
             }
         }
 
-        // 队列消费主流程 (被 App 驱动层周期性调用)
+        // Queue consumption main loop (called periodically by App drive layer)
         void process_queue(int tx_fd) {
             while (!normal_queue.empty()) {
                 auto pkt_span = normal_queue.front();
