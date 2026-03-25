@@ -25,12 +25,12 @@ namespace Scalpel::Logic {
         std::string router_ip_str;
 
     public:
-        UpnpEngine(std::shared_ptr<NatEngine> nat, const std::string& ip) 
+        UpnpEngine(std::shared_ptr<NatEngine> nat, const std::string& ip)
             : nat_engine(nat), router_ip_str(ip) {
-            
+
             ssdp_thread = std::jthread([this]() { run_ssdp_server(); });
             soap_thread = std::jthread([this]() { run_soap_server(); });
-            std::println("[UPnP Engine] 启动完成. 监听局域网内主机 SSDP 广播.");
+            std::println("[UPnP Engine] Startup complete. Listening for LAN SSDP broadcasts.");
         }
 
         ~UpnpEngine() {
