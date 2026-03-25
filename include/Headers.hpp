@@ -48,35 +48,35 @@ namespace Scalpel::Net {
     };
 #pragma pack(pop)
 
-    // 零拷贝 SPSC 无锁环形队列 (专用于将跨核心数据从数据面递交控制面，无 Mutex)
+    // Zero-copy SPSC lock-free ring buffer (cross-core data from data plane to control plane, no mutex)
     template<typename T, size_t Capacity = 1024>
     class SpscRingBuffer {
         std::array<T, Capacity> buffer{};
         alignas(64) std::atomic<size_t> head{0};
         alignas(64) std::atomic<size_t> tail{0};
     public:
-        // 数据面调用：推入
+        // Data plane call: push
         bool push(const T& item) {
             size_t current_tail = tail.load(std::memory_order_relaxed);
             size_t next_tail = (current_tail + 1) % Capacity;
-            if (next_tail == head.load(std::memory_order_acquire)) return false; // 满则丢弃
+            if (next_tail == head.load(std::memory_order_acquire)) return false; // Full, discard
             buffer[current_tail] = item;
             tail.store(next_tail, std::memory_order_release);
             return true;
         }
 
-        // 控制面调用：弹出
+        // Control plane call: pop
         bool pop(T& item) {
             size_t current_head = head.load(std::memory_order_relaxed);
-            if (current_head == tail.load(std::memory_order_acquire)) return false; // 空
+            if (current_head == tail.load(std::memory_order_acquire)) return false; // Empty
             item = buffer[current_head]; 
             head.store((current_head + 1) % Capacity, std::memory_order_release);
             return true;
         }
     };
 
-    // Phase 2.6: 统一零拷贝包上下文解析器
-    // 消除下游模块 (NAT, DNS, QoS, HeuristicProcessor) 冗余重叠的标量偏移计算
+    // Phase 2.6: Unified zero-copy packet context parser
+    // Eliminate redundant scalar offset calculations in downstream modules (NAT, DNS, QoS, HeuristicProcessor)
     struct ParsedPacket {
         std::span<uint8_t> raw_span;
         Net::EthernetHeader* eth = nullptr;
@@ -98,7 +98,7 @@ namespace Scalpel::Net {
             
             if (span.size() < sizeof(Net::EthernetHeader)) return p;
             p.eth = reinterpret_cast<Net::EthernetHeader*>(span.data());
-            if (ntohs(p.eth->proto) != 0x0800) return p; // 目前只追踪 IPv4 封包
+            if (ntohs(p.eth->proto) != 0x0800) return p; // Currently track IPv4 only
             
             if (span.size() < sizeof(Net::EthernetHeader) + sizeof(Net::IPv4Header)) return p;
             p.ipv4 = reinterpret_cast<Net::IPv4Header*>(span.data() + sizeof(Net::EthernetHeader));
