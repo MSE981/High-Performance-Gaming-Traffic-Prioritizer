@@ -3,16 +3,16 @@
 #include <csignal>
 #include <print>
 
-// 全局指针与信号防抖标记
+// Global pointer and signal debounce flag
 Scalpel::App* global_app = nullptr;
 std::atomic<bool> signal_received{false};
 
-// 信号处理入口
+// Signal handler entry point
 extern "C" void signal_handler(int signal) {
     (void)signal;
-    if (signal_received.exchange(true)) return; // 拦截二次退出
-    
-    // 注意：不要在异步 UNIX 信号里直接执行重度逻辑，仅放行底层关闭
+    if (signal_received.exchange(true)) return; // Intercept double shutdown
+
+    // Note: don't execute heavy logic directly in async UNIX signal, just trigger shutdown
     if (global_app) {
         global_app->stop();
     }
@@ -25,61 +25,63 @@ extern "C" void signal_handler(int signal) {
 #include "SystemOptimizer.hpp"
 
 int main(int argc, char* argv[]) {
-    // 忽略 SIGPIPE
+    // Ignore SIGPIPE
     std::signal(SIGPIPE, SIG_IGN);
 
-    // 1. 加载软路由与系统配置
+    // 1. Load router and system config
     Scalpel::Config::load_config();
 
     Scalpel::App app;
     global_app = &app;
 
-    // 2. 注册退出信号
+    // 2. Register shutdown signals
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
-    // 3. 系统底层初始化
+    // 3. Low-level system initialization
     if (auto res = app.init(); !res) {
-        std::println(stderr, "[Fatal Error] 初始化失败: {}", res.error());
+        std::println(stderr, "[Fatal Error] Initialization failed: {}", res.error());
         return 1;
     }
 
     try {
         if (Scalpel::Config::global_state.enable_gui) {
-            // [阶段 3] 启动 Qt GUI 模式
+            // Phase 3: Start Qt GUI mode
             Scalpel::System::Optimizer::set_current_thread_affinity(0); // Core 0: UI/Graphics
             QApplication qapp(argc, argv);
             Scalpel::GUI::Dashboard gui;
 
-            app.start(); // 异步启动底层网络引擎
+            app.start(); // Async start underlying network engine
             gui.show();
-            
-            // 守护线程：当底层引擎收到 Ctrl+C (stop_promise被设置) 完毕后，安全通知 Qt 退出界面。
-            // 解决此前单纯的 signal_handler 无法中断 Qt exec() 导致终端被完全卡死的恶性 Bug！
+
+            // Watchdog thread: when underlying engine receives Ctrl+C (stop_promise set),
+            // safely notify Qt to exit GUI. Fixes bug where signal_handler alone couldn't interrupt
+            // Qt exec(), causing terminal to hang completely!
             std::jthread qt_stopper([&app, &qapp]() {
                 app.wait_for_shutdown();
                 QMetaObject::invokeMethod(&qapp, "quit", Qt::QueuedConnection);
             });
-            
-            int ret = qapp.exec(); // 阻塞在主事件循环
-            
-            // 如果是用户点击窗口 X 号主动关闭了 GUI，此时并未产生 UNIX 信号，我们必须反向告知底层结束。
+
+            int ret = qapp.exec(); // Block on main event loop
+
+            // If user clicked window X button to close GUI, no UNIX signal generated,
+            // must notify underlying engine to stop
             if (!signal_received.exchange(true)) {
-                app.stop(); 
+                app.stop();
             }
             return ret;
         } else {
-            // 纯命令行模式，阻塞等待退出
+            // Pure CLI mode, block waiting for exit
             app.start();
             app.wait_for_shutdown();
         }
     } catch (const std::exception& e) {
-        std::println(stderr, "[Fatal Error] 未俘获异常: {}", e.what());
+        std::println(stderr, "[Fatal Error] Uncaught exception: {}", e.what());
         return 1;
     }
 
     global_app = nullptr;
-    std::println("[System] 应用程序已清理退出。内核资源已完全释放。");
+    std::println("[System] Application cleanly exited. Kernel resources fully released.");
 
     return 0;
 }
