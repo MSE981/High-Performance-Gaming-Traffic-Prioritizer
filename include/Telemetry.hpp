@@ -41,12 +41,7 @@ namespace Scalpel {
             void reset() { *this = BatchStats{}; }
         };
 
-        /**
-         * @brief 零竞争批量提交
-         * @param s 批量统计结果
-         * @param core_id 当前 CPU 核心 ID
-         * @details 写入端完全隔离：核心 2 仅写入槽位 2，核心 3 仅写入槽位 3。
-         */
+        // Zero-contention batch commit: core N writes only to slot N.
         void commit_batch(const BatchStats& s, int core_id) {
             if (core_id < 0 || core_id >= 4) return;
             auto& m = core_metrics[core_id];
