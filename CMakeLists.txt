@@ -3,6 +3,10 @@ cmake_minimum_required(VERSION 3.20)
 set(CMAKE_CXX_COMPILER "g++-14")
 set(CMAKE_C_COMPILER "gcc-14")
 
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS ON)
+
 project(GamingTrafficPrioritizer VERSION 3.0 LANGUAGES CXX)
 
 
@@ -14,22 +18,20 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-add_executable(GamingTrafficPrioritizer 
+add_executable(GamingTrafficPrioritizer
     src/main.cpp
     src/GUI/Dashboard.cpp
     include/GUI/Dashboard.hpp
 )
 
-target_link_libraries(GamingTrafficPrioritizer PRIVATE 
+target_link_libraries(GamingTrafficPrioritizer PRIVATE
     Qt6::Widgets
     Qt6::OpenGL
     Threads::Threads
-    gpiodcxx  
+    gpiodcxx
 )
 
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS ON)
+target_compile_definitions(GamingTrafficPrioritizer PRIVATE _GNU_SOURCE)
 
 
 
