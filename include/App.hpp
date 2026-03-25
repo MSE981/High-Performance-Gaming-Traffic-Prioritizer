@@ -377,27 +377,6 @@ namespace Scalpel {
         }
 
     private:
-        void ui_render_loop(std::stop_token st) {
-            Scalpel::System::Optimizer::set_current_thread_affinity(0);
-            int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
-            if (tfd == -1) return;
-
-            struct itimerspec its{};
-            its.it_value.tv_sec = 0;
-            its.it_value.tv_nsec = 16666666;
-            its.it_interval.tv_sec = 0;
-            its.it_interval.tv_nsec = 16666666; 
-            timerfd_settime(tfd, 0, &its, NULL);
-
-            uint64_t expirations;
-            while (!st.stop_requested()) {
-                if (read(tfd, &expirations, sizeof(expirations)) > 0) {
-                    // UI 采集聚合数据并渲染 (暂略)
-                }
-            }
-            close(tfd);
-        }
-
         void worker_event_loop(std::stop_token st, std::unique_ptr<Engine::RawSocketManager> rx_mgr, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp) {
             Scalpel::System::Optimizer::set_current_thread_affinity(core);
             Scalpel::System::Optimizer::set_realtime_priority();
