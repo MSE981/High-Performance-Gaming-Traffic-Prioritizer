@@ -9,7 +9,7 @@ namespace Scalpel::HW {
         std::shared_ptr<gpiod::line_request> request;
         static constexpr int PIN_RED = 17;
         static constexpr int PIN_GREEN = 27;
-        static constexpr int PIN_YELLOW = 22; // 如有需要可后续加入
+        static constexpr int PIN_YELLOW = 22; // Can add later if needed
 
     public:
         RGBLed() {
@@ -19,7 +19,7 @@ namespace Scalpel::HW {
 
                 gpiod::line_config line_cfg;
 
-                // 配置 RED 和 GREEN 引脚为输出模式
+                // Configure RED and GREEN pins as output
                 line_cfg.add_line_settings(
                     PIN_RED,
                     gpiod::line_settings().set_direction(gpiod::line::direction::OUTPUT)
@@ -33,18 +33,18 @@ namespace Scalpel::HW {
                 builder.set_consumer("GamingTrafficPrioritizer_Watchdog");
                 builder.set_line_config(line_cfg);
 
-                // 发起请求，底层完成内存映射并锁定这两个引脚
+                // Request pins: kernel maps memory and locks these two lines
                 request = std::make_shared<gpiod::line_request>(builder.do_request());
 
-                off(); // 初始状态关闭
+                off(); // Initial state: off
             }
             catch (const std::exception& e) {
-                // 异常保护：如果未以 sudo 运行或芯片号不对，确保主程序不会崩溃
+                // Error protection: ensure main program doesn't crash if not running as sudo or chip number wrong
                 std::println(stderr, "[HW] Warning: libgpiod init failed. LEDs disabled. ({})", e.what());
             }
         }
 
-        // 极速内存操作，没有任何文件 I/O 开销！
+        // Ultra-fast memory operations, no file I/O overhead!
         void set_yellow() { set_pins(gpiod::line::value::ACTIVE, gpiod::line::value::ACTIVE); }
         void set_green() { set_pins(gpiod::line::value::INACTIVE, gpiod::line::value::ACTIVE); }
         void set_red() { set_pins(gpiod::line::value::ACTIVE, gpiod::line::value::INACTIVE); }
