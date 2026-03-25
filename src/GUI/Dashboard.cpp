@@ -247,11 +247,7 @@ void InterfacePage::on_save_clicked() {
         }
     }
 
-    std::jthread([](){
-        std::println("[GUI] 已保存网桥配置。包含接口: {}", 
-            Config::BRIDGED_INTERFACES.size());
-    }).detach();
-
+    std::println("[GUI] 已保存网桥配置。包含接口: {}", Config::BRIDGED_INTERFACES.size());
     Config::ENABLE_ACCELERATION.store(!chk_bridge->isChecked());
     Telemetry::instance().bridge_mode.store(chk_bridge->isChecked(), std::memory_order_relaxed);
 }
@@ -335,11 +331,9 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
 
 void QosPage::on_toggle_accel() {
     bool on = chk_acceleration->isChecked();
-    std::jthread([on](){
-        Config::ENABLE_ACCELERATION.store(on);
-        Telemetry::instance().bridge_mode.store(!on, std::memory_order_relaxed);
-        std::println("[GUI] 加速模式: {}", on ? "ON" : "OFF");
-    }).detach();
+    Config::ENABLE_ACCELERATION.store(on);
+    Telemetry::instance().bridge_mode.store(!on, std::memory_order_relaxed);
+    std::println("[GUI] 加速模式: {}", on ? "ON" : "OFF");
 }
 
 void QosPage::on_add_rule() {
