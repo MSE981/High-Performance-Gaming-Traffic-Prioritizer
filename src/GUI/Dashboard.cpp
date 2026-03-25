@@ -17,7 +17,7 @@
 namespace Scalpel::GUI {
 
 // ═════════════════════════════════════════════════════════════
-// RealTimePlot (保留 Phase 3 物理引擎)
+// RealTimePlot (retain Phase 3 physics engine)
 // ═════════════════════════════════════════════════════════════
 RealTimePlot::RealTimePlot(QWidget* parent) : QWidget(parent) {
     setMinimumSize(200, 120);
@@ -62,19 +62,19 @@ void RealTimePlot::paintEvent(QPaintEvent*) {
 }
 
 // ═════════════════════════════════════════════════════════════
-// OverviewPage: 总览页
+// OverviewPage: overview page
 // ═════════════════════════════════════════════════════════════
 OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
 
-    auto* title = new QLabel("系统总览");
+    auto* title = new QLabel("System Overview");
     title->setObjectName("section_title");
     layout->addWidget(title);
 
-    // 模式与性能标签
+    // Mode and performance labels
     auto* info_row = new QHBoxLayout();
-    lbl_mode = new QLabel("模式: 加速");
-    lbl_cpu_capacity = new QLabel("CPU 处理能力: --");
+    lbl_mode = new QLabel("Mode: Acceleration");
+    lbl_cpu_capacity = new QLabel("CPU Capacity: --");
     lbl_mode->setStyleSheet("color: #00cc66; font-weight: bold; font-size: 15px;");
     lbl_cpu_capacity->setStyleSheet("color: #ffaa00; font-weight: bold; font-size: 15px;");
     info_row->addWidget(lbl_mode);
@@ -82,25 +82,25 @@ OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
     info_row->addWidget(lbl_cpu_capacity);
     layout->addLayout(info_row);
 
-    // 双图表行
+    // Dual chart row
     auto* plot_row = new QHBoxLayout();
-    auto* pps_group = new QGroupBox("包速率 (PPS)");
+    auto* pps_group = new QGroupBox("Packet rate (PPS)");
     auto* pps_lay = new QVBoxLayout(pps_group);
     pps_plot = new RealTimePlot();
     pps_lay->addWidget(pps_plot);
     plot_row->addWidget(pps_group);
 
-    auto* bps_group = new QGroupBox("带宽 (Bytes/s)");
+    auto* bps_group = new QGroupBox("Bandwidth (Bytes/s)");
     auto* bps_lay = new QVBoxLayout(bps_group);
     bps_plot = new RealTimePlot();
     bps_lay->addWidget(bps_plot);
     plot_row->addWidget(bps_group);
     layout->addLayout(plot_row);
 
-    // 四核心状态行
+    // 4-core status row
     auto* cores_row = new QHBoxLayout();
     for (int i = 0; i < 4; ++i) {
-        core_labels[i] = new QLabel(QString("Core %1: 空闲").arg(i));
+        core_labels[i] = new QLabel(QString("Core %1: idle").arg(i));
         core_labels[i]->setStyleSheet("background-color: #22223a; border: 1px solid #2a2a4a; border-radius: 6px; padding: 10px; font-size: 13px;");
         core_labels[i]->setAlignment(Qt::AlignCenter);
         cores_row->addWidget(core_labels[i]);
@@ -127,23 +127,23 @@ void OverviewPage::refresh(const Telemetry& tel, uint64_t last_p[4], uint64_t la
     pps_plot->update();
     bps_plot->update();
 
-    lbl_mode->setText(tel.bridge_mode.load() ? "模式: 桥接透传" : "模式: 加速转发");
+    lbl_mode->setText(tel.bridge_mode.load() ? "Mode: Bridge" : "Mode: Acceleration");
     double cap = tel.internal_limit_mbps.load();
-    if (cap > 0) lbl_cpu_capacity->setText(QString("CPU 处理能力: %1 Mbps").arg(cap, 0, 'f', 1));
+    if (cap > 0) lbl_cpu_capacity->setText(QString("CPU Capacity: %1 Mbps").arg(cap, 0, 'f', 1));
 }
 
 // ═════════════════════════════════════════════════════════════
-// InterfacePage: 接口配置页
+// InterfacePage: interface config page
 // ═════════════════════════════════════════════════════════════
 InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
-    auto* title = new QLabel("接口配置");
+    auto* title = new QLabel("Interface Configuration");
     title->setObjectName("section_title");
     layout->addWidget(title);
 
     tab_widget = new QTabWidget();
 
-    // === WAN 标签页 ===
+    // === WAN tab ===
     auto* wan_page = new QWidget();
     auto* wan_form = new QFormLayout(wan_page);
     wan_form->setSpacing(12);
