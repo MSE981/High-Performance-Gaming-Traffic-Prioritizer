@@ -1,6 +1,7 @@
 #include "GUI/Dashboard.hpp"
 #include "GUI/StyleSheet.hpp"
 #include "Config.hpp"
+#include <QApplication>
 #include <QPainter>
 #include <QPainterPath>
 #include <QLinearGradient>
