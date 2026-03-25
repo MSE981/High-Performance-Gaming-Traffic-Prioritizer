@@ -187,6 +187,7 @@ namespace Scalpel::GUI {
 
     private slots:
         void on_nav_changed(int index);
+        void on_shutdown_clicked();
     };
 
 } // namespace Scalpel::GUI
