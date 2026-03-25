@@ -24,6 +24,7 @@ namespace Scalpel::Config {
     // 接口配置 (允许运行时由 Web 端或配置文件覆盖)
     inline std::string IFACE_WAN = "eth0";
     inline std::string IFACE_LAN = "eth1"; // 局域网/USB网卡接口
+    inline std::string ROUTER_IP = "192.168.1.100"; // 路由器自身 LAN IP
     inline std::atomic<bool> ENABLE_ACCELERATION{true}; // 加速/透明网桥开关
 
     // 桥接深度配置
