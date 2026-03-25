@@ -23,7 +23,7 @@
 namespace Scalpel::GUI {
 
     // ═══════════════════════════════════════════
-    // 实时绘图组件（从 Phase 3 继承，保留 RK4 物理引擎）
+    // Real-time plot component (inherited from Phase 3, retains RK4 physics engine)
     // ═══════════════════════════════════════════
     class RealTimePlot : public QWidget {
         Q_OBJECT
@@ -42,7 +42,7 @@ namespace Scalpel::GUI {
     };
 
     // ═══════════════════════════════════════════
-    // 总览页：实时图表 + 核心指标卡
+    // Overview page: real-time charts + core metrics
     // ═══════════════════════════════════════════
     class OverviewPage : public QWidget {
         Q_OBJECT
@@ -58,7 +58,7 @@ namespace Scalpel::GUI {
     };
 
     // ═══════════════════════════════════════════
-    // 接口配置页：WAN/LAN 表单编辑
+    // Interface config page: WAN/LAN form editing
     // ═══════════════════════════════════════════
     class InterfacePage : public QWidget {
         Q_OBJECT
@@ -70,9 +70,9 @@ namespace Scalpel::GUI {
         void on_reset_clicked();
     private:
         QTabWidget* tab_widget;
-        // WAN 表单
+        // WAN form
         QLineEdit* wan_iface_edit;
-        // LAN 表单
+        // LAN form
         QLineEdit* lan_iface_edit;
         QCheckBox* chk_bridge;
         QCheckBox* chk_stp;
@@ -82,7 +82,7 @@ namespace Scalpel::GUI {
     };
 
     // ═══════════════════════════════════════════
-    // QoS 流量控制页
+    // QoS traffic control page
     // ═══════════════════════════════════════════
     class QosPage : public QWidget {
         Q_OBJECT
@@ -101,7 +101,7 @@ namespace Scalpel::GUI {
     };
 
     // ═══════════════════════════════════════════
-    // 服务开关页：NAT / DHCP / DNS / 防火墙 / UPnP
+    // Service control page: NAT / DHCP / DNS / Firewall / UPnP
     // ═══════════════════════════════════════════
     class ServicePage : public QWidget {
         Q_OBJECT
@@ -117,7 +117,7 @@ namespace Scalpel::GUI {
     };
 
     // ═══════════════════════════════════════════
-    // 系统管理页
+    // System management page
     // ═══════════════════════════════════════════
     class SystemPage : public QWidget {
         Q_OBJECT
@@ -137,7 +137,7 @@ namespace Scalpel::GUI {
     };
 
     // ═══════════════════════════════════════════
-    // 占位页：Docker / VPN 等
+    // Placeholder pages: Docker / VPN, etc.
     // ═══════════════════════════════════════════
     class PlaceholderPage : public QWidget {
         Q_OBJECT
@@ -146,7 +146,7 @@ namespace Scalpel::GUI {
     };
 
     // ═══════════════════════════════════════════
-    // 主控面板：导航 + 堆栈 + 状态栏
+    // Main control panel: navigation + stack + status bar
     // ═══════════════════════════════════════════
     class Dashboard : public QMainWindow {
         Q_OBJECT
@@ -159,11 +159,11 @@ namespace Scalpel::GUI {
         void setup_nav();
         void setup_statusbar();
 
-        // 导航与页面
+        // Navigation and pages
         QListWidget*    nav_list;
         QStackedWidget* page_stack;
 
-        // 各功能页面
+        // Feature pages
         OverviewPage*    page_overview;
         InterfacePage*   page_interfaces;
         QosPage*         page_qos;
@@ -172,14 +172,14 @@ namespace Scalpel::GUI {
         PlaceholderPage* page_vpn;
         SystemPage*      page_system;
 
-        // 状态栏标签
+        // Status bar labels
         QLabel* status_cpu;
         QLabel* status_ram;
         QLabel* status_uptime;
         QLabel* status_dl;
         QLabel* status_ul;
 
-        // 40ms 心跳
+        // 40ms heartbeat
         int refresh_timer_id;
         uint64_t last_pkts[4] = {};
         uint64_t last_bytes[4] = {};
