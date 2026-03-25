@@ -8,7 +8,7 @@
 #include <sched.h>
 
 namespace Scalpel::System::Optimizer {
-    // 锁定 CPU 频率为 Performance 模式
+    // Lock CPU frequency to performance mode
     inline void lock_cpu_frequency() {
         for (int i = 0; i < 4; ++i) {
             std::string path = std::format("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor", i);
@@ -18,19 +18,19 @@ namespace Scalpel::System::Optimizer {
         std::println("[System] CPU governor set to PERFORMANCE.");
     }
 
-    // 设置当前线程的亲和性
+    // Set current thread affinity
     inline void set_current_thread_affinity(int core_id) {
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
         CPU_SET(core_id, &cpuset);
         if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0) {
-            std::println(stderr, "[System] Warning: Failed to bind thread to Core {}", core_id);
+            std::println(stderr, "[System] Warning: Failed to bind thread to core {}", core_id);
         }
     }
 
-    // 设置当前线程为实时调度 (SCHED_FIFO)
+    // Set current thread to real-time scheduling (SCHED_FIFO)
     inline void set_realtime_priority() {
-        sched_param param{ .sched_priority = 50 }; // 中等实时优先级
+        sched_param param{ .sched_priority = 50 }; // Medium real-time priority
         if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0) {
             std::println(stderr, "[System] Warning: Failed to set SCHED_FIFO. Run with sudo/setcap?");
         }
