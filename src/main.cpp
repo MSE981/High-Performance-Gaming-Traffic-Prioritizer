@@ -22,6 +22,7 @@ extern "C" void signal_handler(int signal) {
 #include <QMetaObject>
 #include <thread>
 #include "GUI/Dashboard.hpp"
+#include "SystemOptimizer.hpp"
 
 int main(int argc, char* argv[]) {
     // 忽略 SIGPIPE
@@ -46,9 +47,10 @@ int main(int argc, char* argv[]) {
     try {
         if (Scalpel::Config::global_state.enable_gui) {
             // [阶段 3] 启动 Qt GUI 模式
+            Scalpel::System::Optimizer::set_current_thread_affinity(0); // Core 0: UI/Graphics
             QApplication qapp(argc, argv);
             Scalpel::GUI::Dashboard gui;
-            
+
             app.start(); // 异步启动底层网络引擎
             gui.show();
             
