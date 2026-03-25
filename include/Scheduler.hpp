@@ -173,16 +173,13 @@ namespace Scalpel::Traffic {
         // 普通流量入队逻辑
         void enqueue_normal(std::span<const uint8_t> pkt) {
             if (!normal_queue.push(pkt)) {
-                
-                static time_t last_log = 0;
-                time_t now = time(nullptr);
-                if (now != last_log) {
-                    if (pkt.size() > 2048) {
-                        std::println(stderr, "\n[Alert] 丢包: 包过大 ({} bytes)，硬件卸载可能未完全关闭！", pkt.size());
-                    } else {
-                        std::println(stderr, "\n[Alert] 丢包: 队列溢出 (Cap: 8192)，并发过载。");
-                    }
-                    last_log = now;
+                static std::atomic<uint64_t> drop_count{0};
+                uint64_t c = drop_count.fetch_add(1, std::memory_order_relaxed);
+                if (c % 1000 == 0) {
+                    if (pkt.size() > 2048)
+                        std::println(stderr, "[Alert] Drop: oversized packet ({} bytes), hw offload may be active.", pkt.size());
+                    else
+                        std::println(stderr, "[Alert] Drop: queue overflow (Cap: 8192), total drops: {}.", c);
                 }
             }
         }
