@@ -681,10 +681,9 @@ void Dashboard::timerEvent(QTimerEvent* event) {
 
     // 每 1 秒 (25 ticks) 刷新状态栏
     if (tick_counter % 25 == 0) {
-        // 带宽统计
-        double dl = 0, ul = 0;
-        dl = tel.core_metrics[2].bytes.load(std::memory_order_relaxed) * 8.0 / 1e6;
-        ul = tel.core_metrics[3].bytes.load(std::memory_order_relaxed) * 8.0 / 1e6;
+        // 带宽统计：使用与上次 tick 的差值计算实时速率 (25 ticks/s * 8 bits)
+        double dl = (tel.core_metrics[2].bytes.load(std::memory_order_relaxed) - last_bytes[2]) * 8.0 * 25.0 / 1e6;
+        double ul = (tel.core_metrics[3].bytes.load(std::memory_order_relaxed) - last_bytes[3]) * 8.0 * 25.0 / 1e6;
         status_dl->setText(QString("↓ %1 Mbps").arg(dl, 0, 'f', 2));
         status_ul->setText(QString("↑ %1 Mbps").arg(ul, 0, 'f', 2));
 
