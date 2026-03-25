@@ -92,24 +92,88 @@ libfcgi-dev & nginx: For the web server backend.
 
 ## 🔨 Build & Run Instructions
 
-### 1. Install Dependencies ( Raspberry Pi OS ):
+### 1. Install Dependencies (Raspberry Pi OS)
 
+```bash
 sudo apt update
+sudo apt install build-essential cmake gcc-14 g++-14 \
+    libgpiod-dev libgpiod2 \
+    qt6-base-dev qt6-base-dev-tools \
+    ethtool speedtest-cli
+```
 
-sudo apt install build-essential cmake gcc-14 g++-14 ethtool speedtest-cli libgpiod-dev qt6-base-dev
+### 2. Identify Your Network Interfaces
 
-### 2. Compile the Project:
+The program requires two separate Ethernet interfaces: one connected to your router (WAN) and one connected to your devices (LAN).
 
+```bash
+ip link show
+```
 
+Note the interface names (e.g. `eth0` for WAN, `eth1` for LAN). You will need them in the next step.
+
+### 3. Create a Configuration File
+
+Create a `config.txt` file in the same directory as the binary. All fields are optional — the program runs on defaults if the file is absent.
+
+```ini
+# Network interfaces
+IFACE_WAN=eth0            # Interface connected to your upstream router
+IFACE_LAN=eth1            # Interface connected to your LAN / devices
+
+# Router's own LAN IP address (used by NAT, DHCP, UPnP)
+ROUTER_IP=192.168.1.100
+
+# Set to false to run in headless CLI mode (no Qt window)
+enable_gui=true
+
+# Acceleration mode: true = heuristic QoS active, false = transparent bridge
+ENABLE_ACCELERATION=true
+
+# Heuristic detection thresholds
+LARGE_PACKET_THRESHOLD=1000   # Bytes; packets above this count as "large"
+PUNISH_TRIGGER_COUNT=30       # Large-packet hits before a flow is deprioritised
+CLEANUP_INTERVAL=10000        # Flow-table cleanup interval (packets)
+
+# Per-device download rate caps (optional, one line per device)
+# Format: IP_LIMIT=<IP>:<Mbps>
+# IP_LIMIT=192.168.1.50:20
+# IP_LIMIT=192.168.1.51:10
+```
+
+### 4. Build
+
+```bash
 mkdir build && cd build
-
 cmake ..
+cmake --build . -j4
+```
 
-make -j4
+The compiled binary `GamingTrafficPrioritizer` will be placed inside the `build/` directory.
 
-### 3. Run the Engine:
+### 5. Run
 
-Because the program needs to control physical network cards and manipulate hardware registers, it must be run with administrator privileges:
+The program must run with root privileges because it opens raw AF_PACKET sockets and modifies hardware NIC registers directly.
 
+**GUI mode** (default, requires a connected display):
 
+```bash
 sudo ./GamingTrafficPrioritizer
+```
+
+**Headless / CLI mode** (no display required, e.g. SSH):
+
+```bash
+# Set enable_gui=false in config.txt, then:
+sudo ./GamingTrafficPrioritizer
+```
+
+### 6. Shutdown
+
+| Method | Description |
+|--------|-------------|
+| GUI — "关闭程序" button | Red button in the top header bar. Triggers a clean shutdown: all worker threads are stopped and joined before the process exits. |
+| GUI — Window X button | Same clean shutdown path as above. |
+| CLI — `Ctrl+C` | Sends `SIGINT`. The signal handler calls `app.stop()`, unblocking all threads for a graceful exit. |
+
+> All three paths converge on the same shutdown sequence: `app.stop()` sets the internal promise, `std::jthread` destructors request stop tokens and join each worker thread, then the process exits cleanly.
