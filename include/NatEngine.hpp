@@ -8,8 +8,8 @@
 #include "Processor.hpp"
 
 namespace Scalpel::Logic {
-    // 渐进式校验和更新 (RFC 1624): HC' = ~(~HC + ~m + m')
-    // 在用户态极速完成 IP/Port 转换时的必备算法，免除全量重新校验的性能消耗
+    // Incremental checksum update (RFC 1624): HC' = ~(~HC + ~m + m')
+    // Essential algorithm for ultra-fast IP/port conversion in user space, avoids full recomputation overhead
     static inline void update_checksum_16(uint16_t& check, uint16_t old_val, uint16_t new_val) {
         uint32_t sum = (~ntohs(check) & 0xFFFF) + (~ntohs(old_val) & 0xFFFF) + ntohs(new_val);
         sum = (sum & 0xFFFF) + (sum >> 16);
@@ -21,7 +21,7 @@ namespace Scalpel::Logic {
         update_checksum_16(check, old_val >> 16, new_val >> 16);
     }
 
-    // 真正的零拷贝应用态 NAT 引擎
+    // True zero-copy user-space NAT engine
     class NatEngine {
         struct NatSession {
             FlowKey internal_key; // saddr=LAN_IP, sport=LAN_Port, daddr=WAN_DEST, dport=WAN_DEST_PORT
@@ -35,17 +35,17 @@ namespace Scalpel::Logic {
             uint16_t internal_port = 0;
             uint16_t external_port = 0;
             uint8_t protocol = 0;
-            alignas(64) std::atomic<bool> active{false}; 
+            alignas(64) std::atomic<bool> active{false};
         };
 
-        // 准则 3.1: 零动态分配。所有表项在构造时定死在内存中，杜绝使用 std::unordered_map
+        // Principle 3.1: Zero dynamic allocation. All table entries fixed at construction, no std::unordered_map
         static constexpr size_t MAX_SESSIONS = 65536;
-        
-        // 正向散列表：LAN -> WAN (出网时查表掩盖私网 IP)
+
+        // Forward hash table: LAN -> WAN (mask private IP on outbound lookup)
         std::array<NatSession, MAX_SESSIONS> sessions{};
-        // 反向映射表：External Port -> Session Index (入网时 O(1) 极速查找，直接数组寻址！)
+        // Reverse mapping: external port -> session index (O(1) ultra-fast inbound lookup via direct array indexing!)
         std::array<int32_t, 65536> port_to_index{};
-        
+
         std::array<UpnpMapping, 256> upnp_rules{};
         alignas(64) std::atomic<size_t> upnp_cursor{0};
 
@@ -70,7 +70,7 @@ namespace Scalpel::Logic {
 
         void set_wan_ip(uint32_t ip) { wan_ip = ip; }
         
-        // Core 1 (Control Plane) Call: 添加或覆盖 UPnP 规则
+        // Core 1 (control plane): add or override UPnP rule
         void add_upnp_rule(uint16_t ext_port, uint32_t int_ip, uint16_t int_port, uint8_t proto) {
             uint16_t net_ext_port = htons(ext_port);
             uint16_t net_int_port = htons(int_port);
@@ -92,10 +92,10 @@ namespace Scalpel::Logic {
             upnp_rules[idx].active.store(true, std::memory_order_release);
         }
 
-        // 低频调用的 Tick 驱动器 (接驳 Watchdog 解耦高频系统调用)
+        // Low-frequency tick driver (interfaces watchdog, decouples high-frequency syscalls)
         void tick() { current_tick++; }
 
-        // Outbound (WAN_TX): LAN -> WAN 替换源 IP/端口 (SNAT)
+        // Outbound (WAN_TX): LAN -> WAN, replace source IP/port (SNAT)
         bool process_outbound(Net::ParsedPacket& pkt) {
             if (!pkt.is_valid_ipv4()) return false;
             if (wan_ip == 0) return false;
