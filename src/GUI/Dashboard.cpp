@@ -594,6 +594,12 @@ void Dashboard::setup_ui() {
     auto* status_dot = new QLabel("● 运行中");
     status_dot->setStyleSheet("color: #00cc66; font-weight: bold; font-size: 14px;");
     header_lay->addWidget(status_dot);
+
+    auto* btn_shutdown = new QPushButton("关闭程序");
+    btn_shutdown->setObjectName("btn_danger");
+    connect(btn_shutdown, &QPushButton::clicked, this, &Dashboard::on_shutdown_clicked);
+    header_lay->addWidget(btn_shutdown);
+
     root_layout->addWidget(header);
 
     // ── 中央区域：导航 + 堆栈 ──
@@ -660,6 +666,12 @@ void Dashboard::on_nav_changed(int index) {
     page_stack->setCurrentIndex(index);
     // 切换到系统页时刷新信息
     if (index == 6) page_system->refresh_info();
+}
+
+void Dashboard::on_shutdown_clicked() {
+    // QApplication::quit() 使 qapp.exec() 返回，main.cpp 中的关闭流程
+    // 负责调用 app.stop() 并等待所有 jthread 安全退出。
+    QApplication::quit();
 }
 
 void Dashboard::timerEvent(QTimerEvent* event) {
