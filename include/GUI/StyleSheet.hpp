@@ -3,11 +3,11 @@
 
 namespace Scalpel::GUI {
 
-    // 全局暗色主题 QSS 样式表
-    // 针对 800x1280 DSI 触摸屏优化：大按钮(48px)、大字体、高对比度
+    // Global dark theme QSS stylesheet
+    // Optimized for 800x1280 DSI touchscreen: large buttons (48px), big fonts, high contrast
     inline const QString DARK_STYLESHEET = R"QSS(
 
-    /* ===== 全局基础 ===== */
+    /* ===== Global Basics ===== */
     QWidget {
         background-color: #1a1a2e;
         color: #e0e0e0;
@@ -19,7 +19,7 @@ namespace Scalpel::GUI {
         background-color: #0f0f1a;
     }
 
-    /* ===== 左侧导航栏 ===== */
+    /* ===== Left Navigation ===== */
     QListWidget#nav_list {
         background-color: #12122a;
         border: none;
@@ -47,7 +47,7 @@ namespace Scalpel::GUI {
         color: #c0c0e0;
     }
 
-    /* ===== 标题栏 ===== */
+    /* ===== Header Bar ===== */
     QFrame#header_frame {
         background-color: #12122a;
         border-bottom: 1px solid #2a2a4a;
@@ -60,7 +60,7 @@ namespace Scalpel::GUI {
         font-weight: bold;
     }
 
-    /* ===== 状态栏 ===== */
+    /* ===== Status Bar ===== */
     QStatusBar {
         background-color: #12122a;
         border-top: 1px solid #2a2a4a;
@@ -68,7 +68,7 @@ namespace Scalpel::GUI {
         font-size: 12px;
     }
 
-    /* ===== 表单控件 ===== */
+    /* ===== Form Controls ===== */
     QLabel {
         color: #c0c0d0;
         padding: 2px 0px;
@@ -108,7 +108,7 @@ namespace Scalpel::GUI {
         color: #606070;
     }
 
-    /* ===== 复选框 (触控友好 48px) ===== */
+    /* ===== Checkboxes (touchscreen-friendly 48px) ===== */
     QCheckBox {
         spacing: 10px;
         color: #c0c0d0;
@@ -133,7 +133,7 @@ namespace Scalpel::GUI {
         border-color: #0077ff;
     }
 
-    /* ===== 按钮 (触控友好) ===== */
+    /* ===== Buttons (touchscreen-friendly) ===== */
     QPushButton {
         background-color: #2a2a4a;
         border: 1px solid #3a3a5a;
@@ -178,7 +178,7 @@ namespace Scalpel::GUI {
         background-color: #dd4444;
     }
 
-    /* ===== Tab 组件 ===== */
+    /* ===== Tab Component ===== */
     QTabWidget::pane {
         border: 1px solid #2a2a4a;
         border-radius: 4px;
@@ -209,7 +209,7 @@ namespace Scalpel::GUI {
         color: #c0c0d0;
     }
 
-    /* ===== 表格 ===== */
+    /* ===== Tables ===== */
     QTableWidget {
         background-color: #1a1a2e;
         border: 1px solid #2a2a4a;
@@ -235,7 +235,7 @@ namespace Scalpel::GUI {
         font-size: 13px;
     }
 
-    /* ===== 滚动条 (触控友好加宽) ===== */
+    /* ===== Scrollbars (touchscreen-friendly, wide) ===== */
     QScrollBar:vertical {
         background-color: #12122a;
         width: 12px;
@@ -256,7 +256,7 @@ namespace Scalpel::GUI {
         height: 0px;
     }
 
-    /* ===== 分组框 ===== */
+    /* ===== GroupBox ===== */
     QGroupBox {
         border: 1px solid #2a2a4a;
         border-radius: 6px;
