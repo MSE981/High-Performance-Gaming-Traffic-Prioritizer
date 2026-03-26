@@ -29,6 +29,8 @@
 #include <map>
 #include <sys/timerfd.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <cstring>
 
 namespace Scalpel {
 
@@ -441,12 +443,14 @@ namespace Scalpel {
 
                 if (read(tfd, &expirations, sizeof(expirations)) <= 0) continue;
 
-                // Read CPU temperature from sysfs here (Core 1, 1Hz) so the Qt UI callback never does file I/O
+                // Read CPU temperature via raw fd (Core 1, 1Hz) — no heap allocation, no ifstream overhead
                 {
-                    std::ifstream tf("/sys/class/thermal/thermal_zone0/temp");
-                    if (tf.is_open()) {
-                        double t; tf >> t;
-                        tel.cpu_temp_celsius.store(t / 1000.0, std::memory_order_relaxed);
+                    char tbuf[16]{};
+                    int thermal_fd = ::open("/sys/class/thermal/thermal_zone0/temp", O_RDONLY);
+                    if (thermal_fd >= 0) {
+                        ssize_t n = ::read(thermal_fd, tbuf, sizeof(tbuf) - 1);
+                        ::close(thermal_fd);
+                        if (n > 0) tel.cpu_temp_celsius.store(atof(tbuf) / 1000.0, std::memory_order_relaxed);
                     }
                 }
 
