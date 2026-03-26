@@ -1,6 +1,5 @@
 ﻿#pragma once
 #include <span>
-#include <chrono>
 #include <cstdint>
 #include <netinet/in.h>
 #include <bit>
@@ -21,8 +20,8 @@ namespace Scalpel::Logic {
     struct FlowStats {
         uint32_t total_pkts = 0;
         uint32_t large_pkts = 0;
+        uint32_t last_pkt   = 0;   // processor-local packet count at last observation
         bool is_disguised = false;
-        std::chrono::steady_clock::time_point last_seen;
     };
 
     // Static flow table based on FNV-1a algorithm (zero dynamic allocation)
@@ -69,11 +68,10 @@ namespace Scalpel::Logic {
             return nullptr;
         }
 
-        // Periodically clean up expired flows
-        void cleanup(std::chrono::seconds timeout) {
-            auto now = std::chrono::steady_clock::now();
+        // Periodically clean up flows idle for more than timeout_pkts packets
+        void cleanup(uint32_t current_pkt, uint32_t timeout_pkts) {
             for (auto& entry : table) {
-                if (entry.occupied && (now - entry.stats.last_seen > timeout)) {
+                if (entry.occupied && (current_pkt - entry.stats.last_pkt) > timeout_pkts) {
                     entry.occupied = false;
                 }
             }
@@ -84,6 +82,7 @@ namespace Scalpel::Logic {
     class HeuristicProcessor {
         StaticFlowMap<4096> flows;
         uint32_t process_counter = 0;
+        uint32_t pkt_count = 0;   // monotonic packet counter — lightweight logical clock
 
         using ProtocolHandler = Net::Priority(*)(HeuristicProcessor*, const Net::ParsedPacket&);
         std::array<ProtocolHandler, 256> protocol_handlers;
@@ -104,7 +103,7 @@ namespace Scalpel::Logic {
 
             if (stats) {
                 stats->total_pkts++;
-                stats->last_seen = std::chrono::steady_clock::now();
+                stats->last_pkt = self->pkt_count;   // free integer store, no syscall
                 if (parsed.raw_span.size() > Config::LARGE_PACKET_THRESHOLD) stats->large_pkts++;
 
                 // Disguised traffic detection (e.g., UDP-Ping flood)
@@ -114,9 +113,11 @@ namespace Scalpel::Logic {
                 if (stats->is_disguised) return Net::Priority::Normal;
             }
 
-            // Periodic cleanup
+            ++self->pkt_count;
+
+            // Periodic cleanup: expire flows not seen in 3 × CLEANUP_INTERVAL packets
             if (++self->process_counter > Config::CLEANUP_INTERVAL) {
-                self->flows.cleanup(std::chrono::seconds(30));
+                self->flows.cleanup(self->pkt_count, Config::CLEANUP_INTERVAL * 3);
                 self->process_counter = 0;
             }
 
