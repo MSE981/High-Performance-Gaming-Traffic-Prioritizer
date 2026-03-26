@@ -179,7 +179,7 @@ namespace Scalpel::Logic {
                                     uint32_t cIP = inet_addr(ip_buf);
 
                                     nat_engine->add_upnp_rule(eP, cIP, iP, proto);
-                                    std::println("[UPnP] 游戏主机开放端口申请: {} [{}] -> {}:{} 已放行至 Data Plane.", ext_port, protocol, int_client, iP);
+                                    std::println("[UPnP] Port mapping accepted: {} [{}] -> {}:{} forwarded to data plane.", ext_port, protocol, int_client, iP);
                                     
                                     const char* resp_xml = "<?xml version=\"1.0\"?><s:Envelope s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\" xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><u:AddPortMappingResponse xmlns:u=\"urn:schemas-upnp-org:service:WANIPConnection:1\"/></s:Body></s:Envelope>";
                                     char resp_buf[512];
