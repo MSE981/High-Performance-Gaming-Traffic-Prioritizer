@@ -141,10 +141,10 @@ namespace Scalpel::Logic {
             
             uint16_t ext_port = 0;
 
-            for (size_t i = 0; i < 32; ++i) { // 限制最大线性探测避免死锁
+            for (size_t i = 0; i < 32; ++i) { // Cap linear probe to 32 slots to avoid livelock
                 size_t idx = (h + i) % MAX_SESSIONS;
                 if (!sessions[idx].active || (current_tick - sessions[idx].last_active_tick > 300)) {
-                    // 腾出旧端口
+                    // Evict stale session, reclaim port
                     if (sessions[idx].active) port_to_index[ntohs(sessions[idx].external_port)] = -1;
                     
                     sessions[idx].internal_key = key;
@@ -165,7 +165,7 @@ namespace Scalpel::Logic {
 
             if (!ext_port) return false; // NAT TABLE FULL
 
-            // 直接在内存 span 视图上执行零拷贝 O(1) 覆写
+            // Zero-copy O(1) in-place rewrite on the memory span
             update_checksum_32(ip->check, ip->saddr, wan_ip);
             if (check_ptr && *check_ptr != 0) {
                 update_checksum_32(*check_ptr, ip->saddr, wan_ip);
@@ -178,13 +178,13 @@ namespace Scalpel::Logic {
             return true;
         }
 
-        // Inbound (WAN_RX): WAN -> LAN 替换目的 IP/端口 (DNAT)
+        // Inbound (WAN_RX): WAN -> LAN, replace destination IP/port (DNAT)
         bool process_inbound(Net::ParsedPacket& pkt) {
             if (!pkt.is_valid_ipv4()) return false;
             auto ip = pkt.ipv4;
 
             if (ip->protocol != 6 && ip->protocol != 17) return false;
-            if (ip->daddr != wan_ip) return false; // 只有发给公网口的包才做转换
+            if (ip->daddr != wan_ip) return false; // Only translate packets destined for the WAN IP
 
             uint16_t* dport_ptr = nullptr;
             uint16_t* check_ptr = nullptr;
@@ -219,7 +219,7 @@ namespace Scalpel::Logic {
             }
 
             // Standard DNAT Processing
-            // O(1) 绝对定址查找反向映射
+            // O(1) direct-index reverse lookup
             int32_t idx = port_to_index[ntohs(*dport_ptr)];
             if (idx == -1 || !sessions[idx].active || 
                 sessions[idx].internal_key.daddr != ip->saddr || 
@@ -231,7 +231,7 @@ namespace Scalpel::Logic {
             uint32_t internal_ip = sessions[idx].internal_key.saddr;
             uint16_t internal_port = sessions[idx].internal_key.sport;
 
-            // O(1) 修改并校准
+            // O(1) rewrite and checksum update
             update_checksum_32(ip->check, ip->daddr, internal_ip);
             if (check_ptr && *check_ptr != 0) {
                 update_checksum_32(*check_ptr, ip->daddr, internal_ip);

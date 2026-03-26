@@ -113,12 +113,12 @@ namespace Scalpel {
         }
     };
 
-    // 数据面：事件消费者模型 (PacketConsumer) - 处理核心逻辑
+    // Data plane: event-consumer model — core packet processing
     class PacketConsumer {
     public:
-        int rx_fd; // Socket FD for reading/bouncing
-        int tx_fd; // Socket FD for writing upstream
-        int core_id; // 具有核心身份
+        int rx_fd; // socket FD for reading (RX ring)
+        int tx_fd; // socket FD for writing (TX)
+        int core_id; // CPU core this consumer is pinned to
         Telemetry::BatchStats stats;
         Logic::HeuristicProcessor processor;
         
@@ -131,7 +131,7 @@ namespace Scalpel {
 
         std::array<std::array<RouteFunc, 3>, 2> routes;
 
-        // 核心解耦：拦截器流水线机制 (Callback-based Pipeline)
+        // Callback-based pipeline — eliminates all runtime if-else branching
         using PipelineStep = bool (*)(PacketConsumer& self, Net::ParsedPacket& pkt);
         std::array<PipelineStep, 7> pipeline;
 
@@ -139,8 +139,8 @@ namespace Scalpel {
             : rx_fd(rx_fd), tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat), dns_engine(dns), qos_config(qos), dhcp_engine(dhcp), gateway_ip(gw_ip) {
 
             routes = {{
-                { fast_path_handler, fast_path_handler, shaper_handler }, // 加速模式
-                { fast_path_handler, fast_path_handler, fast_path_handler } // 透明网桥模式
+                { fast_path_handler, fast_path_handler, shaper_handler }, // acceleration mode
+                { fast_path_handler, fast_path_handler, fast_path_handler } // transparent bridge mode
             }};
 
             // Pipeline assembled at construction time — eliminates all runtime if-else branching.
@@ -151,20 +151,20 @@ namespace Scalpel {
             } else {
                 pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_local_delivery_blocker, step_nat_downstream, step_nat_upstream, step_ip_shaper_upstream, step_qos_routing };
             }
-        } // 补充闭合 PacketConsumer 构造函数
+        } // end PacketConsumer constructor
 
-        // --- 回调流水线处理模块 (Pipeline Handlers) ---
+        // --- Pipeline step handlers ---
         
         static bool step_local_delivery_blocker(PacketConsumer& self, Net::ParsedPacket& pkt) {
             if (!pkt.is_valid_ipv4()) return false;
-            if (self.core_id == 3) { // Only checking LAN -> WAN (Upstream)
+            if (self.core_id == 3) { // LAN -> WAN upstream only
                 uint32_t daddr = pkt.ipv4->daddr;
-                if (daddr == self.gateway_ip || 
-                    daddr == 0xFAFFFFEF || // 239.255.255.250 SSDP 组播 (Little Endian)
-                    daddr == 0xFFFFFFFF) { // 广播
-                    // 返回 true 截断用户面转发流水线。
-                    // 效果：包未通过 `tx_fd` (WAN) 发送，自然落入 Linux 本地协议栈处理（如 SSDP, SSH, Nginx 等）
-                    return true; 
+                if (daddr == self.gateway_ip ||
+                    daddr == 0xFAFFFFEF || // 239.255.255.250 SSDP multicast (little-endian)
+                    daddr == 0xFFFFFFFF) { // broadcast
+                    // Return true to cut the forwarding pipeline.
+                    // Effect: packet is not sent via tx_fd (WAN); falls through to the Linux local stack (SSDP, SSH, etc.)
+                    return true;
                 }
             }
             return false;
@@ -172,13 +172,13 @@ namespace Scalpel {
         
         static bool step_dhcp_interceptor(PacketConsumer& self, Net::ParsedPacket& pkt) {
             if (!Config::global_state.enable_dhcp.load(std::memory_order_relaxed)) return false;
-            
-            // Core 3 (LAN -> WAN) 负责拦截向网关获取 IP 的 DHCP 请求包
+
+            // Core 3 (LAN -> WAN) intercepts DHCP requests before they reach the WAN
             if (self.core_id == 3 && pkt.is_valid_ipv4() && pkt.l4_protocol == 17) {
                 auto udp = pkt.udp();
                 if (udp && (ntohs(udp->dest) == 67 || ntohs(udp->dest) == 68)) {
                     if (self.dhcp_engine) self.dhcp_engine->intercept_request(pkt);
-                    return true; // 拦截成功，阻塞转发到公网
+                    return true; // intercepted — block forwarding to WAN
                 }
             }
             return false;
@@ -186,19 +186,18 @@ namespace Scalpel {
 
         static bool step_dns_interceptor(PacketConsumer& self, Net::ParsedPacket& pkt) {
             if (!Config::global_state.enable_dns_cache.load(std::memory_order_relaxed)) return false;
-            
+
             if (self.core_id == 3) {
-                // Core 3 (Upstream: LAN -> WAN): 截取用户的 Query
+                // Core 3 (upstream: LAN -> WAN): intercept outbound DNS query
                 if (self.dns_engine && self.dns_engine->process_query(pkt, self.rx_fd)) {
-                    return true; // 缓存命中且已原地弹回 LAN 口 (rx_fd)，即刻阻断流水线
+                    return true; // cache hit — reply sent back on rx_fd, stop pipeline
                 }
             } else if (self.core_id == 2) {
-                // Core 2 (Downstream: WAN -> LAN): 监视公网回馈的 Response
-                if (self.dns_engine) {
-                    self.dns_engine->intercept_response(pkt);
-                } // 从不阻断 Response 放行给玩家
+                // Core 2 (downstream: WAN -> LAN): observe inbound DNS response for caching
+                if (self.dns_engine) self.dns_engine->intercept_response(pkt);
+                // Never block the response — always forward to the client
             }
-            return false; 
+            return false;
         }
 
         static bool step_nat_downstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
@@ -216,14 +215,14 @@ namespace Scalpel {
         static bool step_ip_shaper_downstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
             if (pkt.is_valid_ipv4() && self.qos_config) {
                 uint32_t target_ip = pkt.ipv4->daddr;
-                
+
                 size_t active_idx = self.qos_config->active_idx.load(std::memory_order_acquire);
                 auto target_shaper = self.qos_config->buffers[active_idx].find(target_ip);
 
                 if (target_shaper) {
                     RouteContext ip_ctx{self.tx_fd, target_shaper};
                     shaper_handler(ip_ctx, pkt.raw_span, 2, self.core_id);
-                    return true; // 拦截成功，终止流水线
+                    return true; // per-IP shaper claimed the packet — stop pipeline
                 }
             }
             return false;
@@ -256,13 +255,12 @@ namespace Scalpel {
 
             size_t mode_idx = Telemetry::instance().bridge_mode.load(std::memory_order_relaxed);
             self.routes[mode_idx][p_idx](self.ctx, pkt.raw_span, p_idx, self.core_id);
-            return true; // 数据包已进入路由发送，生命周期结束
+            return true; // packet handed to route handler — end of pipeline
         }
 
         // --- Main packet entry point ---
         void on_packet_event(Net::ParsedPacket& pkt) {
-            // Callback-based pipeline: step array replaces all runtime if-else branches.
-            // Null-check guards against partially-filled pipeline arrays (e.g. core 2 uses 5 of 6 slots).
+            // Step array replaces all runtime if-else branches; null-check handles partially-filled arrays.
             for (auto step : pipeline) {
                 if (step && step(*this, pkt)) break;
             }
@@ -275,7 +273,7 @@ namespace Scalpel {
         }
     };
 
-    // 主框架：App 类
+    // Main application class
     class App {
         std::unique_ptr<Engine::RawSocketManager> iface_wan;
         std::unique_ptr<Engine::RawSocketManager> iface_lan;
@@ -286,8 +284,8 @@ namespace Scalpel {
         std::shared_ptr<Logic::UpnpEngine> upnp_engine;
         std::shared_ptr<QoSConfig> qos_config;
         HW::RGBLed led;
-        int lan_fd_ = -1;
-        
+        int lan_fd_ = -1; // cached LAN fd for use by watchdog_loop
+
         std::jthread worker_downstream;
         std::jthread worker_upstream;
         std::jthread watchdog;
@@ -343,7 +341,7 @@ namespace Scalpel {
 
             int fd_wan = iface_wan->get_fd();
             int fd_lan = iface_lan->get_fd();
-            lan_fd_ = fd_lan; // 缓存 fd，防止 move 后 use-after-move
+            lan_fd_ = fd_lan; // cache before iface_lan is moved into the worker thread
 
             auto& tel = Telemetry::instance();
             double dl = tel.isp_down_limit_mbps.load() > 1.0 ? tel.isp_down_limit_mbps.load() : 500.0;
@@ -362,7 +360,7 @@ namespace Scalpel {
                     worker_event_loop(std::move(st), std::move(iface), tx, c, sh, ne, de, qc, d);
                 }, std::move(iface_lan), fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config, dhcp_engine);
 
-            std::println("[App] 核心数据平面与控制平面已启动完成.");
+            std::println("[App] Data plane and control plane started.");
         }
 
         void stop() { shutdown_promise.set_value(); }
@@ -400,7 +398,7 @@ namespace Scalpel {
                     }
                 }
                 
-                // 无锁无调用的心跳滴答 (Tick-based Heartbeat)：底层汇编的单周期单指令，0 系统调用！
+                // Lock-free heartbeat tick: single atomic add, zero syscalls
                 Telemetry::instance().core_metrics[core].last_heartbeat.fetch_add(1, std::memory_order_relaxed);
             }
         }
@@ -453,29 +451,26 @@ namespace Scalpel {
 
                 double dl_mbps = (total_bytes_down - last_bytes[2]) * 8.0 / 1e6;
                 double ul_mbps = (total_bytes_up - last_bytes[3]) * 8.0 / 1e6;
-                
-                std::println("[Monitor] DL: {:.2f} Mbps | UL: {:.2f} Mbps | Mode: {}", 
+
+                std::println("[Monitor] DL: {:.2f} Mbps | UL: {:.2f} Mbps | Mode: {}",
                     dl_mbps, ul_mbps, tel.bridge_mode.load() ? "Bridge" : "Accel");
 
                 last_bytes[2] = total_bytes_down;
                 last_bytes[3] = total_bytes_up;
 
-                // 喂给 Watchdog 各大控制面引擎运行（低频异步运算池）
-                // The original code had `app->nat_engine` etc. but `app` is not defined here.
-                // Assuming `this->nat_engine` is intended.
+                // Drive control-plane engines at 1Hz (low-frequency async work pool)
                 if (nat_engine) nat_engine->tick();
                 if (dns_engine) {
                     dns_engine->tick();
-                    dns_engine->process_background_tasks(); // 异步分解 DNS
+                    dns_engine->process_background_tasks();
                 }
                 if (dhcp_engine) {
-                    // 回答下发向 LAN 口
-                    dhcp_engine->process_background_tasks(lan_fd_);
+                    dhcp_engine->process_background_tasks(lan_fd_); // send replies out the LAN port
                 }
 
-                // 基于核心心跳滴答的故障检测 (高低频解耦哲学)
+                // Heartbeat-based fault detection (high/low frequency decoupling)
                 uint64_t current_tick = tel.core_metrics[2].last_heartbeat.load(std::memory_order_relaxed);
-                if (current_tick == last_ticks[2]) led.set_red(); // 1 秒内滴答值毫无变化，说明线程绝地卡死
+                if (current_tick == last_ticks[2]) led.set_red(); // no tick increment in 1s — thread stalled
                 else led.set_green();
                 last_ticks[2] = current_tick;
             }
