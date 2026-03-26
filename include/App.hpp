@@ -133,7 +133,7 @@ namespace Scalpel {
 
         // 核心解耦：拦截器流水线机制 (Callback-based Pipeline)
         using PipelineStep = bool (*)(PacketConsumer& self, Net::ParsedPacket& pkt);
-        std::array<PipelineStep, 6> pipeline;
+        std::array<PipelineStep, 7> pipeline;
 
         PacketConsumer(int rx_fd, int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp, uint32_t gw_ip)
             : rx_fd(rx_fd), tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat), dns_engine(dns), qos_config(qos), dhcp_engine(dhcp), gateway_ip(gw_ip) {
@@ -143,19 +143,14 @@ namespace Scalpel {
                 { fast_path_handler, fast_path_handler, fast_path_handler } // 透明网桥模式
             }};
 
-            // 编译期决断组装流水线：彻底消灭运行时的 if-else 嵌套
+            // Pipeline assembled at construction time — eliminates all runtime if-else branching.
+            // Core 2 (WAN -> LAN, downstream): apply per-IP download shaper before QoS routing.
+            // Core 3 (LAN -> WAN, upstream):   apply per-IP upload shaper before QoS routing.
             if (core_id == 2) {
                 pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_nat_downstream, step_ip_shaper_downstream, step_qos_routing };
             } else {
-                pipeline = {
-                step_dhcp_interceptor,
-                step_dns_interceptor,
-                step_local_delivery_blocker,
-                step_nat_downstream,
-                step_nat_upstream,
-                step_qos_routing
-            };
-        }
+                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_local_delivery_blocker, step_nat_downstream, step_nat_upstream, step_ip_shaper_upstream, step_qos_routing };
+            }
         } // 补充闭合 PacketConsumer 构造函数
 
         // --- 回调流水线处理模块 (Pipeline Handlers) ---
