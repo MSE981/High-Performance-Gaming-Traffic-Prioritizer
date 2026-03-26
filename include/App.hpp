@@ -431,6 +431,7 @@ namespace Scalpel {
             uint64_t expirations;
             uint64_t last_bytes[4] = {0, 0, 0, 0};
             uint64_t last_ticks[4] = {0, 0, 0, 0};
+            uint64_t watchdog_tick = 0;
 
             struct pollfd pfd{};
             pfd.fd = tfd;
@@ -451,6 +452,51 @@ namespace Scalpel {
                         ssize_t n = ::read(thermal_fd, tbuf, sizeof(tbuf) - 1);
                         ::close(thermal_fd);
                         if (n > 0) tel.cpu_temp_celsius.store(atof(tbuf) / 1000.0, std::memory_order_relaxed);
+                    }
+                }
+
+                // Refresh system info every 5 ticks (5 seconds) for UI display — Core 1 only
+                ++watchdog_tick;
+                if (watchdog_tick % 5 == 0) {
+                    // Helper: read a sysfs/proc file into a fixed-size buffer via raw fd
+                    auto read_sysfd = [](const char* path, std::span<char> out) {
+                        int fd = ::open(path, O_RDONLY);
+                        if (fd < 0) { out[0] = '\0'; return; }
+                        ssize_t n = ::read(fd, out.data(), out.size() - 1);
+                        ::close(fd);
+                        if (n > 0) {
+                            out[n] = '\0';
+                            if (out[n - 1] == '\n') out[n - 1] = '\0'; // strip trailing newline
+                        } else {
+                            out[0] = '\0';
+                        }
+                    };
+
+                    auto& si = tel.sys_info;
+                    read_sysfd("/etc/hostname", std::span<char>(si.hostname));
+                    read_sysfd("/proc/version", std::span<char>(si.kernel_short));
+
+                    // Uptime: parse first numeric field from /proc/uptime
+                    char ubuf[32]{};
+                    read_sysfd("/proc/uptime", std::span<char>(ubuf));
+                    if (ubuf[0]) si.uptime_seconds.store(
+                        static_cast<uint64_t>(atof(ubuf)), std::memory_order_relaxed);
+
+                    // Memory: scan /proc/meminfo for MemTotal and MemAvailable
+                    char mbuf[512]{};
+                    int mfd = ::open("/proc/meminfo", O_RDONLY);
+                    if (mfd >= 0) {
+                        ssize_t nr = ::read(mfd, mbuf, sizeof(mbuf) - 1);
+                        ::close(mfd);
+                        if (nr > 0) {
+                            uint64_t total = 0, avail = 0;
+                            const char* mt = strstr(mbuf, "MemTotal:");
+                            const char* ma = strstr(mbuf, "MemAvailable:");
+                            if (mt) sscanf(mt, "MemTotal: %lu", &total);
+                            if (ma) sscanf(ma, "MemAvailable: %lu", &avail);
+                            si.mem_total_kb.store(total, std::memory_order_relaxed);
+                            si.mem_avail_kb.store(avail, std::memory_order_relaxed);
+                        }
                     }
                 }
 

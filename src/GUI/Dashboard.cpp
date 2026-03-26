@@ -519,44 +519,32 @@ SystemPage::SystemPage(QWidget* parent) : QWidget(parent) {
 }
 
 void SystemPage::refresh_info() {
-    // 读取 /proc 信息 (Linux only)
-    auto read_file = [](const char* path) -> std::string {
-        std::ifstream f(path);
-        if (!f.is_open()) return "--";
-        std::string s; std::getline(f, s); return s;
-    };
+    // All system info is pre-fetched by Core 1 watchdog_loop every 5 seconds into Telemetry::sys_info.
+    // This UI callback only reads from atomics and pre-allocated char arrays — no file I/O on Core 0.
+    auto& tel = Telemetry::instance();
+    auto& si  = tel.sys_info;
 
-    lbl_hostname->setText(QString::fromStdString(read_file("/etc/hostname")));
-    
-    std::string kver = read_file("/proc/version");
-    if (kver.size() > 60) kver = kver.substr(0, 60) + "...";
-    lbl_kernel->setText(QString::fromStdString(kver));
+    lbl_hostname->setText(si.hostname[0] ? QString(si.hostname.data()) : "--");
+    lbl_kernel->setText(si.kernel_short[0] ? QString(si.kernel_short.data()) : "--");
 
-    std::string temp_str = read_file("/sys/class/thermal/thermal_zone0/temp");
-    if (temp_str != "--") {
-        double t = std::stod(temp_str) / 1000.0;
+    double t = tel.cpu_temp_celsius.load(std::memory_order_relaxed);
+    if (t > 0) {
         lbl_cpu_temp->setText(QString("%1 °C").arg(t, 0, 'f', 1));
-        if (t > 70) lbl_cpu_temp->setStyleSheet("color: #ff4444; font-weight: bold;");
-        else lbl_cpu_temp->setStyleSheet("color: #00cc66;");
+        lbl_cpu_temp->setStyleSheet(t > 70 ? "color: #ff4444; font-weight: bold;" : "color: #00cc66;");
     }
 
-    std::string up = read_file("/proc/uptime");
-    if (up != "--") {
-        double secs = std::stod(up);
-        int h = (int)(secs / 3600), m = (int)((secs - h*3600) / 60);
+    uint64_t secs = si.uptime_seconds.load(std::memory_order_relaxed);
+    if (secs > 0) {
+        int h = static_cast<int>(secs / 3600);
+        int m = static_cast<int>((secs % 3600) / 60);
         lbl_uptime->setText(QString("%1 小时 %2 分钟").arg(h).arg(m));
     }
 
-    std::ifstream memf("/proc/meminfo");
-    if (memf.is_open()) {
-        std::string line; uint64_t total = 0, avail = 0;
-        while (std::getline(memf, line)) {
-            if (line.starts_with("MemTotal:")) sscanf(line.c_str(), "MemTotal: %lu", &total);
-            if (line.starts_with("MemAvailable:")) sscanf(line.c_str(), "MemAvailable: %lu", &avail);
-        }
-        if (total > 0) lbl_memory->setText(QString("已用 %1 MB / 共 %2 MB")
+    uint64_t total = si.mem_total_kb.load(std::memory_order_relaxed);
+    uint64_t avail = si.mem_avail_kb.load(std::memory_order_relaxed);
+    if (total > 0)
+        lbl_memory->setText(QString("已用 %1 MB / 共 %2 MB")
             .arg((total - avail) / 1024).arg(total / 1024));
-    }
 }
 
 void SystemPage::on_save_config() {

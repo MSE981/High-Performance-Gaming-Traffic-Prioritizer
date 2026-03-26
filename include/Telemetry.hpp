@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cstdint>
 #include <array>
+#include <cstring>
 
 namespace Scalpel {
 
@@ -29,6 +30,17 @@ namespace Scalpel {
         std::atomic<bool> is_probing{ false };
         std::atomic<bool> bridge_mode{ false };
         std::atomic<double> cpu_temp_celsius{ 0.0 };  // updated by Core 1 watchdog via timerfd, read by Qt UI
+
+        // System info: updated by Core 1 watchdog every 5 seconds, read by UI thread on-demand.
+        // char arrays are plain (not atomic) — display-only data, torn reads are acceptable.
+        struct SystemInfo {
+            std::array<char, 64>  hostname{};
+            std::array<char, 128> kernel_short{};
+            std::atomic<uint64_t> uptime_seconds{0};
+            std::atomic<uint64_t> mem_total_kb{0};
+            std::atomic<uint64_t> mem_avail_kb{0};
+        };
+        alignas(64) SystemInfo sys_info{};
 
         static Telemetry& instance() {
             static Telemetry inst;
