@@ -262,11 +262,12 @@ namespace Scalpel {
             return true; // 数据包已进入路由发送，生命周期结束
         }
 
-        // --- 主入口事作 ---
+        // --- Main packet entry point ---
         void on_packet_event(Net::ParsedPacket& pkt) {
-            // Callback-based Pipeline: 以数组步进取代所有的运行态条件分支
+            // Callback-based pipeline: step array replaces all runtime if-else branches.
+            // Null-check guards against partially-filled pipeline arrays (e.g. core 2 uses 5 of 6 slots).
             for (auto step : pipeline) {
-                if (step(*this, pkt)) break;
+                if (step && step(*this, pkt)) break;
             }
 
             // 批量提交至当前 core 的专有槽位
