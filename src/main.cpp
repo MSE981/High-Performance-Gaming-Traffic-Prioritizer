@@ -59,6 +59,7 @@ int main(int argc, char* argv[]) {
             // safely notify Qt to exit GUI. Fixes bug where signal_handler alone couldn't interrupt
             // Qt exec(), causing terminal to hang completely!
             std::jthread qt_stopper([&app, &qapp]() {
+                Scalpel::System::Optimizer::set_current_thread_affinity(1); // Core 1: Watchdog
                 app.wait_for_shutdown();
                 QMetaObject::invokeMethod(&qapp, "quit", Qt::QueuedConnection);
             });
