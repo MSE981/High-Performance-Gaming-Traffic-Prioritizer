@@ -35,6 +35,8 @@ We have built a local desktop application to display real-time network statistic
 
 **Technology Stack**: Qt 6 (C++).
 
+**Interface Role Assignment**: The interfaces page auto-detects all network adapters from `/sys/class/net` and presents each in a table with a role dropdown: 外网 (WAN) / 内网 (LAN) / 默认网关 (Default Gateway) / 禁用 (Disabled). Exactly one interface must hold the default gateway role; selecting it automatically demotes any previous gateway to WAN. On save, `IFACE_WAN`, `IFACE_LAN`, and `BRIDGED_INTERFACES` are derived from the role map and persisted to `config.txt`.
+
 **Strict Real-Time Adherence**:
 - **Pure C++ Layouts**: Zero reliance on XML or `.ui` files. The layout is explicitly declared using nested `QVBoxLayout` and `QHBoxLayout` arrays to ensure memory transparency and comply with modern declarative design.
 - **Signals and Slots**: All callbacks execute instantly via pointer-based `connect()` functions. Heavy background operations are detached to independent `std::jthread` contexts, guaranteeing zero latency spikes in the GUI.
@@ -118,7 +120,9 @@ Create a `config.txt` file in the same directory as the binary. All fields are o
 
 ```ini
 # Network interfaces
-IFACE_WAN=eth0            # Interface connected to your upstream router
+# These are derived automatically from IFACE_ROLE lines when present.
+# You can still set them manually for CLI/headless mode.
+IFACE_WAN=eth0            # Interface connected to your upstream router (primary WAN / default gateway)
 IFACE_LAN=eth1            # Interface connected to your LAN / devices
 
 # Router's own LAN IP address (used by NAT, DHCP, UPnP)
@@ -134,6 +138,13 @@ ENABLE_ACCELERATION=true
 LARGE_PACKET_THRESHOLD=1000   # Bytes; packets above this count as "large"
 PUNISH_TRIGGER_COUNT=30       # Large-packet hits before a flow is deprioritised
 CLEANUP_INTERVAL=10000        # Flow-table cleanup interval (packets)
+
+# Per-interface role assignment (written by the GUI; overrides IFACE_WAN/LAN/BRIDGE_IFACE)
+# Roles: gateway (primary WAN/default route), wan (additional WAN), lan (LAN/bridged), disabled
+IFACE_GATEWAY=eth0            # Primary uplink interface (derived from IFACE_ROLE lines)
+# IFACE_ROLE=eth0:gateway     # Exactly one interface must hold the gateway role
+# IFACE_ROLE=eth1:lan         # Multiple LAN interfaces are bridged together
+# IFACE_ROLE=eth2:disabled    # Unused interfaces
 
 # Bridge / Layer-2 options
 ENABLE_STP=false              # Enable Spanning Tree Protocol on the bridge
