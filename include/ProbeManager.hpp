@@ -108,7 +108,7 @@ namespace Scalpel::Probe {
             std::println("[Probe C] Spawning asynchronous speedtest thread. Realtime engine will NOT block.");
 
             // Spawn background thread for blocking task; fire-and-forget, no stop-token needed
-            std::thread([cb = std::move(on_complete)]() {
+            std::jthread([cb = std::move(on_complete)]() {
                 std::array<char, 128> buffer{};
                 std::string result;
 
