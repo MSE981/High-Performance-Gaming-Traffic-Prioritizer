@@ -298,22 +298,20 @@ namespace Scalpel {
 
     public:
         App() {
-            shutdown_future = shutdown_promise.get_future(); // get_future() 只能调用一次，在此处初始化
+            shutdown_future = shutdown_promise.get_future();
 
-            global_shaper = std::make_shared<Traffic::Shaper>(100.0); // 默认全局限速 100Mbps
+            global_shaper = std::make_shared<Traffic::Shaper>(100.0);
 
-            Config::global_state.enable_nat.store(true);
-            Config::global_state.enable_dns_cache.store(true);
-            Config::global_state.enable_dhcp.store(true);
-            Config::global_state.enable_upnp.store(true);
-            
+            // Do NOT override service flags here — they are loaded from config.txt
+            // before App is constructed (see main.cpp: Config::load_config() precedes App app).
+
             nat_engine = std::make_shared<Logic::NatEngine>();
             dns_engine = std::make_shared<Logic::DnsEngine>();
             dhcp_engine = std::make_shared<Logic::DhcpEngine>(Config::ROUTER_IP);
             upnp_engine = std::make_shared<Logic::UpnpEngine>(nat_engine, Config::ROUTER_IP);
             qos_config = std::make_shared<QoSConfig>();
 
-            // 初始化 QoS 无锁双缓冲表
+            // Initialize QoS lock-free double-buffer table
             qos_config->update(Config::IP_LIMIT_MAP);
             nat_engine->set_wan_ip(Config::parse_ip_str(Config::ROUTER_IP));
         }
