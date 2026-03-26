@@ -34,7 +34,7 @@ namespace Scalpel::Probe {
         // Mode A: internal compute stress test
         static void run_internal_stress() {
             auto& tel = Telemetry::instance();
-            tel.is_probing = true;
+            tel.is_probing.store(true, std::memory_order_relaxed);
             std::println("[Probe A] Benchmarking internal logic...");
 
             Logic::HeuristicProcessor temp_proc;
@@ -53,15 +53,15 @@ namespace Scalpel::Probe {
             }
 
             double pps = count / 5.0;
-            tel.internal_limit_mbps = (pps * 64 * 8) / 1e6;
+            tel.internal_limit_mbps.store((pps * 64 * 8) / 1e6, std::memory_order_relaxed);
             std::println("[Probe A] CPU capacity: {:.2f} Mbps ({} PPS)", tel.internal_limit_mbps.load(), pps);
-            tel.is_probing = false;
+            tel.is_probing.store(false, std::memory_order_relaxed);
         }
 
         // Mode B: ISP PPS probing (deterministic precise rate limiting via timerfd)
         static void run_isp_probe(int socket_fd) {
             auto& tel = Telemetry::instance();
-            tel.is_probing = true;
+            tel.is_probing.store(true, std::memory_order_relaxed);
             std::println("[Probe B] Probing ISP limits...");
             uint8_t pkt[64] = { 0 };
             std::memset(pkt, 0xEE, 64);
@@ -98,7 +98,7 @@ namespace Scalpel::Probe {
             double pps = sent / 5.0;
             double hw_mbps = (sent * 64.0 * 8.0) / (5.0 * 1e6);
             std::println("[Probe B] Local Hardware Tx Limit: {:.2f} Mbps ({} PPS)", hw_mbps, pps);
-            tel.is_probing = false;
+            tel.is_probing.store(false, std::memory_order_relaxed);
         }
 
 
