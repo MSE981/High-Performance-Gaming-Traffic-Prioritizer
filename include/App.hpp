@@ -270,8 +270,8 @@ namespace Scalpel {
                 if (step && step(*this, pkt)) break;
             }
 
-            // 批量提交至当前 core 的专有槽位
-            if (stats.pkts % 32 == 0) {
+            // Batch-commit to this core's telemetry slot every 32 packets (& 31 avoids division)
+            if ((stats.pkts & 31) == 0) {
                 Telemetry::instance().commit_batch(stats, core_id);
                 stats.reset();
             }
