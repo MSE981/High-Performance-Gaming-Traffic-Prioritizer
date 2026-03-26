@@ -376,3 +376,4 @@ _agents/
 #special files
 *.md
 *.pdf
+web/node_modules/
