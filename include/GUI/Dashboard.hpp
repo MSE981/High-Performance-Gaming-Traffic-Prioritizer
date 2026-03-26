@@ -16,8 +16,11 @@
 #include <QGroupBox>
 #include <QScrollArea>
 #include <QHeaderView>
+#include <QComboBox>
 #include <deque>
 #include <array>
+#include <map>
+#include <string>
 #include "Telemetry.hpp"
 
 namespace Scalpel::GUI {
@@ -58,7 +61,7 @@ namespace Scalpel::GUI {
     };
 
     // ═══════════════════════════════════════════
-    // Interface config page: WAN/LAN form editing
+    // Interface config page: per-port role assignment
     // ═══════════════════════════════════════════
     class InterfacePage : public QWidget {
         Q_OBJECT
@@ -69,16 +72,11 @@ namespace Scalpel::GUI {
         void on_save_clicked();
         void on_reset_clicked();
     private:
-        QTabWidget* tab_widget;
-        // WAN form
-        QLineEdit* wan_iface_edit;
-        // LAN form
-        QLineEdit* lan_iface_edit;
-        QCheckBox* chk_bridge;
+        void on_role_changed(const QString& iface, int index);
+        QTableWidget* iface_table;
+        std::map<std::string, QComboBox*> role_combos;
         QCheckBox* chk_stp;
         QCheckBox* chk_igmp;
-        QVBoxLayout* iface_list_layout;
-        QList<QCheckBox*> iface_checkboxes;
     };
 
     // ═══════════════════════════════════════════
