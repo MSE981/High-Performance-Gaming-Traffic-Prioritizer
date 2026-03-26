@@ -437,8 +437,17 @@ namespace Scalpel {
                 if (pret <= 0) continue;
 
                 if (read(tfd, &expirations, sizeof(expirations)) <= 0) continue;
-                
-                // Map-Reduce 聚合逻辑
+
+                // Read CPU temperature from sysfs here (Core 1, 1Hz) so the Qt UI callback never does file I/O
+                {
+                    std::ifstream tf("/sys/class/thermal/thermal_zone0/temp");
+                    if (tf.is_open()) {
+                        double t; tf >> t;
+                        tel.cpu_temp_celsius.store(t / 1000.0, std::memory_order_relaxed);
+                    }
+                }
+
+                // Map-reduce bandwidth aggregation
                 uint64_t total_bytes_down = tel.core_metrics[2].bytes.load(std::memory_order_relaxed);
                 uint64_t total_bytes_up = tel.core_metrics[3].bytes.load(std::memory_order_relaxed);
 

@@ -719,12 +719,9 @@ void Dashboard::timerEvent(QTimerEvent* event) {
         status_dl->setText(QString("↓ %1 Mbps").arg(dl, 0, 'f', 2));
         status_ul->setText(QString("↑ %1 Mbps").arg(ul, 0, 'f', 2));
 
-        // CPU 温度
-        std::ifstream tf("/sys/class/thermal/thermal_zone0/temp");
-        if (tf.is_open()) {
-            double t; tf >> t; t /= 1000.0;
-            status_cpu->setText(QString("CPU: %1°C").arg(t, 0, 'f', 0));
-        }
+        // CPU temperature: read the atomic updated by watchdog_loop — no file I/O on UI thread
+        double t = Telemetry::instance().cpu_temp_celsius.load(std::memory_order_relaxed);
+        if (t > 0) status_cpu->setText(QString("CPU: %1°C").arg(t, 0, 'f', 0));
 
         // 服务页同步
         if (page_stack->currentIndex() == 3) page_services->refresh_status();

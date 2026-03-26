@@ -28,6 +28,7 @@ namespace Scalpel {
         std::atomic<double> isp_pps{ 0.0 };
         std::atomic<bool> is_probing{ false };
         std::atomic<bool> bridge_mode{ false };
+        std::atomic<double> cpu_temp_celsius{ 0.0 };  // updated by Core 1 watchdog via timerfd, read by Qt UI
 
         static Telemetry& instance() {
             static Telemetry inst;
