@@ -387,11 +387,13 @@ namespace Scalpel {
                     consumer.on_packet_event(pkt_ctx);
                 }, 1);
 
-                // QoS 队列周期性派发与硬件解堵塞
+                // Periodic QoS queue drain and hardware TX unblock
                 if (shpr) shpr->process_queue(tx_fd);
-                if (consumer.qos_config) {
+                // Only scan per-IP shaper table when at least one IP limit is configured,
+                // avoiding 256 empty-slot iterations per poll cycle when no limits are active.
+                if (consumer.qos_config && !Config::IP_LIMIT_MAP.empty()) {
                     size_t active_idx = consumer.qos_config->active_idx.load(std::memory_order_relaxed);
-                    for (auto& entry : consumer.qos_config->buffers[active_idx].table) { // Assuming table is accessible or find is used
+                    for (auto& entry : consumer.qos_config->buffers[active_idx].table) {
                         if (entry.occupied && entry.value) {
                             entry.value->process_queue(tx_fd);
                         }
