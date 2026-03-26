@@ -35,7 +35,9 @@ namespace Scalpel::Engine {
         static constexpr uint32_t FRAME_NR = (BLOCK_SIZE * BLOCK_NR) / FRAME_SIZE;
 
     public:
-        explicit RawSocketManager(std::string_view iface_name) : iface(iface_name) {}
+        explicit RawSocketManager(std::string_view iface_name) {
+            iface_name.copy(iface.data(), IFNAMSIZ - 1);
+        }
 
         ~RawSocketManager() {
             if (ring && ring != MAP_FAILED) munmap(ring, ring_size);
@@ -49,7 +51,7 @@ namespace Scalpel::Engine {
 
             // 2. Get interface index
             struct ifreq ifr {};
-            iface.copy(ifr.ifr_name, IFNAMSIZ - 1);
+            std::strncpy(ifr.ifr_name, iface.data(), IFNAMSIZ - 1);
             if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) return std::unexpected("Interface lookup failed");
 
             // Auto-enable promiscuous mode
@@ -64,7 +66,7 @@ namespace Scalpel::Engine {
             if (ioctl(fd, SIOCSIFFLAGS, &ifr_p) < 0) {
                 return std::unexpected("Failed to set IFF_PROMISC. Check permissions.");
             }
-            std::println("[Engine] Interface {} set to promiscuous mode", iface);
+            std::println("[Engine] Interface {} set to promiscuous mode", iface.data());
 
             // 3. Configure PACKET_RX_RING
             tpacket_req req{
@@ -124,6 +126,6 @@ namespace Scalpel::Engine {
         }
 
     private:
-        std::string iface;
+        std::array<char, IFNAMSIZ> iface{};
     };
 }
