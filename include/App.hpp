@@ -60,9 +60,9 @@ namespace Scalpel {
             T value = nullptr;
             bool occupied = false;
         };
-        std::array<Entry, Capacity> table{};
-        
+
     private:
+        std::array<Entry, Capacity> table{};
         static uint32_t fnv1a_hash(uint32_t val) {
             uint32_t h = 2166136261U;
             h ^= (val & 0xFF); h *= 16777619U;
@@ -73,6 +73,13 @@ namespace Scalpel {
         }
 
     public:
+        // Iterate over all occupied entries; cb receives each non-null value.
+        template<typename Callback>
+        void for_each_occupied(Callback&& cb) {
+            for (auto& e : table)
+                if (e.occupied && e.value) cb(e.value);
+        }
+
         void insert(uint32_t ip, T val) {
             uint32_t h = fnv1a_hash(ip) % Capacity;
             for (size_t i = 0; i < Capacity; ++i) {
@@ -391,11 +398,9 @@ namespace Scalpel {
                 // avoiding 256 empty-slot iterations per poll cycle when no limits are active.
                 if (consumer.qos_config && !Config::IP_LIMIT_MAP.empty()) {
                     size_t active_idx = consumer.qos_config->active_idx.load(std::memory_order_relaxed);
-                    for (auto& entry : consumer.qos_config->buffers[active_idx].table) {
-                        if (entry.occupied && entry.value) {
-                            entry.value->process_queue(tx_fd);
-                        }
-                    }
+                    consumer.qos_config->buffers[active_idx].for_each_occupied([&](auto& shaper) {
+                        shaper->process_queue(tx_fd);
+                    });
                 }
                 
                 // Lock-free heartbeat tick: single atomic add, zero syscalls
