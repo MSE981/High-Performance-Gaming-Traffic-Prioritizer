@@ -526,26 +526,11 @@ void SystemPage::refresh_info() {
 
 void SystemPage::on_save_config() {
     std::string path = edit_config_path->text().toStdString();
-    std::jthread([path](){
-        std::ofstream f(path);
-        if (!f.is_open()) { std::println(stderr, "[GUI] 无法写入配置文件: {}", path); return; }
-        f << "IFACE_WAN=" << Config::IFACE_WAN << "\n";
-        f << "IFACE_LAN=" << Config::IFACE_LAN << "\n";
-        f << "ENABLE_ACCELERATION=" << (Config::ENABLE_ACCELERATION.load() ? "true" : "false") << "\n";
-        f << "enable_gui=true\n";
-        f << "LARGE_PACKET_THRESHOLD=" << Config::LARGE_PACKET_THRESHOLD << "\n";
-        f << "PUNISH_TRIGGER_COUNT=" << Config::PUNISH_TRIGGER_COUNT << "\n";
-        f << "CLEANUP_INTERVAL=" << Config::CLEANUP_INTERVAL << "\n";
-        for (auto& [ip, rate] : Config::IP_LIMIT_MAP) {
-            const uint8_t* b = reinterpret_cast<const uint8_t*>(&ip);
-            f << "IP_LIMIT=" << (int)b[0] << "." << (int)b[1] << "." << (int)b[2] << "." << (int)b[3] << ":" << rate << "\n";
-        }
-        std::println("[GUI] 配置已保存至: {}", path);
-    }).detach();
+    std::jthread([path](){ Config::save_config(path); }).detach();
 }
 
 void SystemPage::on_restart_engine() {
-    std::println("[GUI] 重启引擎操作已触发 (需手动执行)");
+    std::println("[GUI] Engine restart triggered (requires manual execution)");
 }
 
 // ═════════════════════════════════════════════════════════════
