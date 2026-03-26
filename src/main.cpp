@@ -44,6 +44,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    int ret = 0;
     try {
         if (Scalpel::Config::global_state.enable_gui) {
             // Phase 3: Start Qt GUI mode
@@ -62,14 +63,13 @@ int main(int argc, char* argv[]) {
                 QMetaObject::invokeMethod(&qapp, "quit", Qt::QueuedConnection);
             });
 
-            int ret = qapp.exec(); // Block on main event loop
+            ret = qapp.exec(); // Block on main event loop
 
             // If user clicked window X button to close GUI, no UNIX signal generated,
             // must notify underlying engine to stop
             if (!signal_received.exchange(true)) {
                 app.stop();
             }
-            return ret;
         } else {
             // Pure CLI mode, block waiting for exit
             app.start();
@@ -81,7 +81,8 @@ int main(int argc, char* argv[]) {
     }
 
     global_app = nullptr;
+    Scalpel::Config::save_config();
     std::println("[System] Application cleanly exited. Kernel resources fully released.");
 
-    return 0;
+    return ret;
 }
