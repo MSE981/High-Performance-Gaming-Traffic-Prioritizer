@@ -14,6 +14,8 @@
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include <algorithm>
+#include <QSignalBlocker>
 
 namespace Scalpel::GUI {
 
@@ -134,65 +136,45 @@ void OverviewPage::refresh(const Telemetry& tel, uint64_t last_p[4], uint64_t la
 }
 
 // ═════════════════════════════════════════════════════════════
-// InterfacePage: interface config page
+// InterfacePage: per-port role assignment
 // ═════════════════════════════════════════════════════════════
 InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
-    auto* title = new QLabel("Interface Configuration");
+
+    auto* title = new QLabel("网络接口角色分配");
     title->setObjectName("section_title");
     layout->addWidget(title);
 
-    tab_widget = new QTabWidget();
+    auto* desc = new QLabel("为每个检测到的网络接口分配角色。恰好一个接口须设置为「默认网关」。");
+    desc->setStyleSheet("color: #707080; font-size: 12px;");
+    desc->setWordWrap(true);
+    layout->addWidget(desc);
 
-    // === WAN tab ===
-    auto* wan_page = new QWidget();
-    auto* wan_form = new QFormLayout(wan_page);
-    wan_form->setSpacing(12);
-    wan_iface_edit = new QLineEdit(QString::fromStdString(Config::IFACE_WAN));
-    wan_form->addRow("WAN 接口名称:", wan_iface_edit);
-    auto* wan_desc = new QLabel("上游广域网接口 (连接互联网)");
-    wan_desc->setStyleSheet("color: #707080; font-size: 12px;");
-    wan_form->addRow("", wan_desc);
-    tab_widget->addTab(wan_page, "WAN (eth0)");
+    // Role table: Interface | Role | Link state
+    iface_table = new QTableWidget(0, 3);
+    iface_table->setHorizontalHeaderLabels({"接口", "角色", "链路状态"});
+    iface_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    iface_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    iface_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    iface_table->verticalHeader()->setVisible(false);
+    iface_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    iface_table->setSelectionMode(QAbstractItemView::NoSelection);
+    layout->addWidget(iface_table);
 
-    // === LAN 标签页 ===
-    auto* lan_page = new QWidget();
-    auto* lan_main_lay = new QVBoxLayout(lan_page);
-    
-    auto* lan_tabs = new QTabWidget();
-    
-    // --- 基本内容 (General Settings) ---
-    auto* general_settings = new QWidget();
-    auto* general_form = new QFormLayout(general_settings);
-    chk_bridge = new QCheckBox("桥接接口");
-    chk_bridge->setChecked(true); // 默认开启网桥
-    general_form->addRow(new QLabel("建立网桥:"), chk_bridge);
-    
+    scan_interfaces();
+
+    // Advanced options
+    auto* adv_group = new QGroupBox("高级选项");
+    auto* adv_form = new QFormLayout(adv_group);
     chk_stp = new QCheckBox("开启 STP");
     chk_stp->setChecked(Config::ENABLE_STP.load());
-    general_form->addRow(new QLabel("生成树协议:"), chk_stp);
-    
+    adv_form->addRow("生成树协议:", chk_stp);
     chk_igmp = new QCheckBox("启用 IGMP 嗅探");
     chk_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load());
-    general_form->addRow(new QLabel("IGMP Snooping:"), chk_igmp);
-    
-    // 物理设置区域 (Physical Settings)
-    auto* physical_group = new QGroupBox("物理接口列表");
-    iface_list_layout = new QVBoxLayout(physical_group);
-    scan_interfaces(); // 填充列表
-    general_form->addRow(physical_group);
-    
-    lan_tabs->addTab(general_settings, "一般配置");
-    lan_tabs->addTab(new QWidget(), "高级设置");
-    lan_tabs->addTab(new QWidget(), "物理设置");
-    lan_tabs->addTab(new QWidget(), "防火墙设置");
-    
-    lan_main_lay->addWidget(lan_tabs);
-    tab_widget->addTab(lan_page, "LAN (br-lan)");
+    adv_form->addRow("IGMP Snooping:", chk_igmp);
+    layout->addWidget(adv_group);
 
-    layout->addWidget(tab_widget);
-
-    // 按钮行
+    // Button row
     auto* btn_row = new QHBoxLayout();
     btn_row->addStretch();
     auto* btn_reset = new QPushButton("重置");
@@ -203,70 +185,120 @@ InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
     connect(btn_save, &QPushButton::clicked, this, &InterfacePage::on_save_clicked);
     btn_row->addWidget(btn_save);
     layout->addLayout(btn_row);
-    layout->addStretch();
 }
 
 void InterfacePage::scan_interfaces() {
-    // 清理旧列表
-    qDeleteAll(iface_checkboxes);
-    iface_checkboxes.clear();
+    iface_table->setRowCount(0);
+    role_combos.clear();
 
-    // 扫描 /sys/class/net
-    try {
-        for (const auto& entry : std::filesystem::directory_iterator("/sys/class/net")) {
-            std::string name = entry.path().filename().string();
-            if (name == "lo") continue; // 忽略回环
-            
-            auto* cb = new QCheckBox(QString::fromStdString(name));
-            // 默认勾选 eth1, eth2, eth3 等 LAN 常用口
-            if (name.find("eth") != std::string::npos && name != "eth0") {
-                cb->setChecked(true);
+    auto populate = [this](std::vector<std::string> names) {
+        std::sort(names.begin(), names.end());
+        for (const auto& name : names) {
+            // Read link state from sysfs
+            std::string state = "未知";
+            std::ifstream sf("/sys/class/net/" + name + "/operstate");
+            if (sf.is_open()) std::getline(sf, state);
+
+            // Determine initial role: stored config takes priority, then defaults
+            Config::IfaceRole role = Config::IfaceRole::DISABLED;
+            if (Config::IFACE_ROLES.count(name)) {
+                role = Config::IFACE_ROLES.at(name);
+            } else if (name == "eth0") {
+                role = Config::IfaceRole::GATEWAY;
+            } else if (name == "eth1") {
+                role = Config::IfaceRole::LAN;
             }
-            iface_checkboxes.append(cb);
-            iface_list_layout->addWidget(cb);
+
+            int row = iface_table->rowCount();
+            iface_table->insertRow(row);
+
+            // Col 0: interface name (read-only)
+            auto* name_item = new QTableWidgetItem(QString::fromStdString(name));
+            name_item->setTextAlignment(Qt::AlignCenter);
+            iface_table->setItem(row, 0, name_item);
+
+            // Col 1: role combo — set index BEFORE connecting signal
+            auto* combo = new QComboBox();
+            combo->addItems({"外网 (WAN)", "内网 (LAN)", "默认网关", "禁用"});
+            combo->setCurrentIndex(static_cast<int>(role));
+            role_combos[name] = combo;
+            iface_table->setCellWidget(row, 1, combo);
+
+            // Col 2: link state indicator
+            bool is_up = (state == "up");
+            auto* state_lbl = new QLabel(is_up ? "● 已连接" : "○ 断开");
+            state_lbl->setAlignment(Qt::AlignCenter);
+            state_lbl->setStyleSheet(is_up ? "color: #00cc66;" : "color: #888888;");
+            iface_table->setCellWidget(row, 2, state_lbl);
+
+            // Connect after setCurrentIndex to avoid spurious on_role_changed calls
+            connect(combo, &QComboBox::currentIndexChanged, this, [this, name](int index) {
+                on_role_changed(QString::fromStdString(name), index);
+            });
         }
+    };
+
+    try {
+        std::vector<std::string> names;
+        for (const auto& entry : std::filesystem::directory_iterator("/sys/class/net")) {
+            std::string n = entry.path().filename().string();
+            if (n != "lo") names.push_back(n);
+        }
+        populate(std::move(names));
     } catch (...) {
-        // Fallback for non-Linux or permission issues
-        for (int i = 0; i < 4; ++i) {
-            auto* cb = new QCheckBox(QString("eth%1").arg(i));
-            iface_checkboxes.append(cb);
-            iface_list_layout->addWidget(cb);
+        populate({"eth0", "eth1", "eth2", "eth3"});
+    }
+}
+
+void InterfacePage::on_role_changed(const QString& iface, int index) {
+    if (index != 2) return; // Only enforce when a combo is set to GATEWAY
+    // Demote any other gateway combo to WAN to maintain single-gateway invariant
+    for (auto& [name, combo] : role_combos) {
+        if (name != iface.toStdString() && combo->currentIndex() == 2) {
+            QSignalBlocker blocker(combo);
+            combo->setCurrentIndex(0); // demote to WAN
         }
     }
 }
 
 void InterfacePage::on_save_clicked() {
-    Config::IFACE_WAN = wan_iface_edit->text().toStdString();
-    Config::ENABLE_STP.store(chk_stp->isChecked());
-    Config::ENABLE_IGMP_SNOOPING.store(chk_igmp->isChecked());
-    
-    // 收集选中的接口
-    Config::BRIDGED_INTERFACES.clear();
-    for (auto* cb : iface_checkboxes) {
-        if (cb->isChecked()) {
-            Config::BRIDGED_INTERFACES.push_back(cb->text().toStdString());
-        }
+    // Validate: exactly one gateway must be assigned
+    int gw_count = 0;
+    std::string gw_iface;
+    for (const auto& [name, combo] : role_combos) {
+        if (combo->currentIndex() == 2) { ++gw_count; gw_iface = name; }
+    }
+    if (gw_count == 0) {
+        QMessageBox::warning(this, "配置错误", "请指定一个默认网关接口。");
+        return;
     }
 
-    std::println("[GUI] 已保存网桥配置。包含接口: {}", Config::BRIDGED_INTERFACES.size());
-    Config::ENABLE_ACCELERATION.store(!chk_bridge->isChecked());
-    Telemetry::instance().bridge_mode.store(chk_bridge->isChecked(), std::memory_order_relaxed);
+    // Persist role map
+    Config::IFACE_ROLES.clear();
+    for (const auto& [name, combo] : role_combos)
+        Config::IFACE_ROLES[name] = static_cast<Config::IfaceRole>(combo->currentIndex());
+
+    // Derive legacy variables consumed by App
+    Config::IFACE_GATEWAY = gw_iface;
+    Config::IFACE_WAN = gw_iface;
+    Config::BRIDGED_INTERFACES.clear();
+    for (const auto& [name, combo] : role_combos)
+        if (combo->currentIndex() == 1) Config::BRIDGED_INTERFACES.push_back(name);
+    Config::IFACE_LAN = Config::BRIDGED_INTERFACES.empty() ? "" : Config::BRIDGED_INTERFACES[0];
+
+    Config::ENABLE_STP.store(chk_stp->isChecked(), std::memory_order_relaxed);
+    Config::ENABLE_IGMP_SNOOPING.store(chk_igmp->isChecked(), std::memory_order_relaxed);
+    Config::ENABLE_ACCELERATION.store(true);
+    Telemetry::instance().bridge_mode.store(true, std::memory_order_relaxed);
+
+    std::println("[GUI] Interface roles saved. Gateway: {}, LAN interfaces: {}",
+        Config::IFACE_GATEWAY, Config::BRIDGED_INTERFACES.size());
 }
 
 void InterfacePage::on_reset_clicked() {
-    wan_iface_edit->setText(QString::fromStdString(Config::IFACE_WAN));
+    scan_interfaces(); // Rebuilds table from Config::IFACE_ROLES
     chk_stp->setChecked(Config::ENABLE_STP.load());
     chk_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load());
-    
-    // 根据 Config::BRIDGED_INTERFACES 重置勾选状态
-    for (auto* cb : iface_checkboxes) {
-        std::string name = cb->text().toStdString();
-        bool found = false;
-        for (const auto& iface : Config::BRIDGED_INTERFACES) {
-            if (iface == name) { found = true; break; }
-        }
-        cb->setChecked(found);
-    }
 }
 
 // ═════════════════════════════════════════════════════════════
