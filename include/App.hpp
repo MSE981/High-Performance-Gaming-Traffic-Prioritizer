@@ -301,10 +301,13 @@ namespace Scalpel {
             // Do NOT override service flags here — they are loaded from config.txt
             // before App is constructed (see main.cpp: Config::load_config() precedes App app).
 
-            nat_engine = std::make_shared<Logic::NatEngine>();
-            dns_engine = std::make_shared<Logic::DnsEngine>();
+            nat_engine  = std::make_shared<Logic::NatEngine>();
+            dns_engine  = std::make_shared<Logic::DnsEngine>();
             dhcp_engine = std::make_shared<Logic::DhcpEngine>(Config::ROUTER_IP);
-            upnp_engine = std::make_shared<Logic::UpnpEngine>(nat_engine, Config::ROUTER_IP);
+            // UpnpEngine constructor starts threads immediately; only create it when the
+            // service is enabled so that enable_upnp=false actually suppresses the daemon.
+            if (Config::global_state.enable_upnp.load(std::memory_order_relaxed))
+                upnp_engine = std::make_shared<Logic::UpnpEngine>(nat_engine, Config::ROUTER_IP);
             qos_config = std::make_shared<QoSConfig>();
 
             // Initialize QoS lock-free double-buffer table
