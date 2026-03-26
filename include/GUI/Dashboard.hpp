@@ -17,7 +17,6 @@
 #include <QScrollArea>
 #include <QHeaderView>
 #include <QComboBox>
-#include <deque>
 #include <array>
 #include <map>
 #include <string>
@@ -38,7 +37,8 @@ namespace Scalpel::GUI {
         void paintEvent(QPaintEvent* event) override;
     private:
         static constexpr int SHIFT_BUFFER_SIZE = 100;
-        std::deque<double> shift_buffer;
+        std::array<double, SHIFT_BUFFER_SIZE> shift_buffer{};
+        size_t shift_head = 0;   // circular write index
         double current_max = 1.0;
         double target_max = 1.0;
         double current_velocity = 0.0;

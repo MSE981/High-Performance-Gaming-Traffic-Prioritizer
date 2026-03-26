@@ -24,12 +24,12 @@ namespace Scalpel::GUI {
 // ═════════════════════════════════════════════════════════════
 RealTimePlot::RealTimePlot(QWidget* parent) : QWidget(parent) {
     setMinimumSize(200, 120);
-    shift_buffer.resize(SHIFT_BUFFER_SIZE, 0.0);
+    shift_buffer.fill(0.0);
 }
 
 void RealTimePlot::add_sample(double val) {
-    shift_buffer.pop_front();
-    shift_buffer.push_back(val);
+    shift_buffer[shift_head] = val;
+    shift_head = (shift_head + 1) % SHIFT_BUFFER_SIZE;
     if (val > target_max) target_max = val * 1.2;
     else target_max = std::max(1.0, target_max * 0.99);
 }
@@ -55,7 +55,9 @@ void RealTimePlot::paintEvent(QPaintEvent*) {
     double x_step = (double)width() / (SHIFT_BUFFER_SIZE - 1);
     double h = height();
     for (int i = 0; i < SHIFT_BUFFER_SIZE; ++i) {
-        double y = h - (shift_buffer[i] / (current_max + 1.0) * h * 0.8) - 10;
+        // Read oldest-to-newest: shift_head points to the next write slot (= oldest unread sample)
+        double sample = shift_buffer[(shift_head + i) % SHIFT_BUFFER_SIZE];
+        double y = h - (sample / (current_max + 1.0) * h * 0.8) - 10;
         if (i == 0) path.moveTo(0, y); else path.lineTo(i * x_step, y);
     }
     painter.setPen(QPen(QColor(0, 150, 255, 40), 8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
