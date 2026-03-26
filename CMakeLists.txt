@@ -14,7 +14,7 @@ include_directories(include)
 find_package(Threads REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL)
 
-# 启用 Qt 自动元对象编译器 (MOC) 以支持信号与槽
+# Enable Qt Meta-Object Compiler (MOC) for signals and slots
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
@@ -35,7 +35,7 @@ target_compile_definitions(GamingTrafficPrioritizer PRIVATE _GNU_SOURCE)
 
 
 
-# 针对树莓派 5 (Cortex-A76) 的极限优化
+# Raspberry Pi 5 (Cortex-A76) peak optimization flags
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     target_compile_options(GamingTrafficPrioritizer PRIVATE 
         -std=c++23
@@ -53,5 +53,5 @@ elseif(MSVC)
     )
 endif()
 
-# 自动化授权：此步骤暂时由于 SSH 密码无终端交互而禁用。
-# 手动运行时请使用 sudo ./GamingTrafficPrioritizer
+# Auto-privilege: disabled due to SSH non-interactive password.
+# Run manually with: sudo ./GamingTrafficPrioritizer
