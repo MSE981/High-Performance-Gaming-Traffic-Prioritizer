@@ -1,15 +1,39 @@
 const express = require('express');
+const path = require('path');
 const app = express();
 
-// Set the server port to 5000, matching the original Python configuration
 const PORT = 5000;
 
-// Root route to test if the server is running correctly
+// Configure EJS as the template engine
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
+
+// Middleware to parse form data from the login page
+app.use(express.urlencoded({ extended: true }));
+
+// Redirect root URL to the login page
 app.get('/', (req, res) => {
-    res.send('Raspberry Pi Node.js server successfully started!');
+    res.redirect('/login');
 });
 
-// Start the server and listen on the specified port
+// Serve the login page
+app.get('/login', (req, res) => {
+    res.render('login');
+});
+
+// Handle the login form submission
+app.post('/api/login', (req, res) => {
+    const { password } = req.body;
+
+    // Simple password check matching the original logic
+    if (password === 'admin123') {
+        res.send('Login successful! Dashboard coming soon.');
+    } else {
+        res.send('Access Denied: Incorrect password.');
+    }
+});
+
+// Start the server
 app.listen(PORT, () => {
     console.log(`Server is running at http://localhost:${PORT}`);
 });
