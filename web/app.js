@@ -8,7 +8,7 @@ const app = express();
 
 const PORT = 5000;
 
-// NEW: Global Configuration Object (Acts as our central brain for settings)
+// Global Configuration
 let systemConfig = {
     traffic_mode: "gaming",
     bandwidth_limit: 100,
@@ -101,25 +101,65 @@ app.post('/api/ping', requireAuth, (req, res) => {
     });
 });
 
-// NEW: Render the QoS page, passing the current global configuration
 app.get('/qos', requireAuth, (req, res) => {
     res.render('qos', { config: systemConfig });
 });
 
-// NEW: Handle POST request to update QoS settings
 app.post('/update_qos_settings', requireAuth, (req, res) => {
-    // Update the global settings based on user input
     systemConfig.traffic_mode = req.body.mode;
     systemConfig.bandwidth_limit = parseInt(req.body.limit, 10);
-
     if (req.body.target_port) {
         systemConfig.target_port = parseInt(req.body.target_port, 10);
     }
-
     console.log("QoS Settings Updated:", systemConfig);
-
-    // Redirect back to the QoS page to show updated values
     res.redirect('/qos');
+});
+
+// NEW: Devices Route
+app.get('/devices', requireAuth, (req, res) => {
+    const connectedDevices = [
+        { ip: "192.168.1.100", mac: "00:1A:2B:3C:4D:5E", name: "My-Gaming-PC", status: "Optimized" },
+        { ip: "192.168.1.101", mac: "A1:B2:C3:D4:E5:F6", name: "Living-Room-TV", status: "Streaming" },
+        { ip: "192.168.1.105", mac: "11:22:33:44:55:66", name: "Unknown-Mobile", status: "High Traffic" }
+    ];
+    res.render('devices', { devices: connectedDevices });
+});
+
+// NEW: Logs Route
+app.get('/logs', requireAuth, (req, res) => {
+    const systemLogs = [
+        { timestamp: "2026-03-10 09:15:22", level: "INFO", message: "System booted successfully. Engine version 1.0.4." },
+        { timestamp: "2026-03-10 09:16:05", level: "WARNING", message: "High background traffic detected on IP 192.168.1.105." },
+        { timestamp: "2026-03-10 09:20:12", level: "INFO", message: "Admin user logged in from 127.0.0.1." },
+        { timestamp: "2026-03-10 09:35:00", level: "ERROR", message: "Failed to connect to primary DNS server. Retrying..." },
+        { timestamp: "2026-03-10 10:05:45", level: "INFO", message: "QoS settings updated: Mode set to Gaming, Limit 100Mbps." }
+    ];
+    res.render('logs', { logs: systemLogs });
+});
+
+// NEW: Developer Terminal Route
+app.get('/dev', requireAuth, (req, res) => {
+    res.render('dev');
+});
+
+// NEW: Developer Terminal API (Executes system commands)
+app.post('/api/terminal', requireAuth, (req, res) => {
+    const command = req.body.command || '';
+    if (!command) {
+        return res.json({ status: "error", output: "No command provided." });
+    }
+
+    // Execute command with a 15-second timeout
+    exec(command, { timeout: 15000 }, (error, stdout, stderr) => {
+        let output = stdout || stderr;
+        if (error && !output) {
+            output = "System error: " + error.message;
+        }
+        if (!output) {
+            output = "[Command executed successfully with no output]";
+        }
+        res.json({ status: "success", output: output });
+    });
 });
 
 app.listen(PORT, () => {
