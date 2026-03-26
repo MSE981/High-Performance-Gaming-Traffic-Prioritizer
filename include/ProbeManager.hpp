@@ -82,9 +82,9 @@ namespace Scalpel::Probe {
             uint64_t expirations = 0;
 
             while (std::chrono::steady_clock::now() - start < std::chrono::seconds(5)) {
-                // 陷入内核阻塞沉睡，醒来时返回期间错过的滴答数
+                // Block in kernel; returns number of ticks missed since last wakeup
                 if (read(tfd, &expirations, sizeof(expirations)) > 0) {
-                    // 确定性批处理：错过多少滴答就补发多少包，彻底消灭忙等空转
+                    // Deterministic burst: send one packet per missed tick, eliminates busy-spin
                     for (uint64_t i = 0; i < expirations; ++i) {
                         if (send(socket_fd, pkt, 64, MSG_DONTWAIT) >= 0) {
                             sent++;
@@ -102,8 +102,8 @@ namespace Scalpel::Probe {
         }
 
 
-        // 模式 C：异步调用 Ookla Speedtest
-        // 传入一个回调函数，测速完成后自动触发
+        // Mode C: async Ookla Speedtest
+        // Accepts a callback; fires when the test completes
         static void run_async_real_isp_probe(std::function<void(double, double)> on_complete) {
             std::println("[Probe C] Spawning asynchronous speedtest thread. Realtime engine will NOT block.");
 
@@ -112,7 +112,7 @@ namespace Scalpel::Probe {
                 std::array<char, 128> buffer{};
                 std::string result;
 
-                // 在纯后台线程中执行 popen，绝对不会影响网络抓包和转发的实时性
+                // popen runs in background thread only — never blocks packet forwarding
                 std::unique_ptr<FILE, decltype(&pclose)> pipe(popen("speedtest-cli --simple 2>/dev/null", "r"), pclose);
                 if (!pipe) {
                     std::println(stderr, "[Probe C Error] Speedtest process failed to start.");
@@ -140,7 +140,7 @@ namespace Scalpel::Probe {
 
                 if (download_mbps > 0.0 && upload_mbps > 0.0) {
                     std::println("\n[Probe C] Async Speedtest Success! Down: {:.2f} Mbps | Up: {:.2f} Mbps", download_mbps, upload_mbps);
-                    // 任务完成，触发回调函数通知主程序！
+                    // Task complete: fire callback to notify main program
                     if (cb) cb(download_mbps, upload_mbps);
                 }
                 else {
