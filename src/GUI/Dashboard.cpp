@@ -549,7 +549,7 @@ void SystemPage::refresh_info() {
 
 void SystemPage::on_save_config() {
     std::string path = edit_config_path->text().toStdString();
-    std::jthread([path](){
+    std::thread([path](){
         Scalpel::System::Optimizer::set_current_thread_affinity(1); // Core 1: Control Plane
         Config::save_config(path);
     }).detach();
