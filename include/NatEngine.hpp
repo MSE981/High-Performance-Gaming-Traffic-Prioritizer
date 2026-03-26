@@ -117,8 +117,8 @@ namespace Scalpel::Logic {
                 sport_ptr = &tcp->source; dport = tcp->dest; check_ptr = &tcp->check;
             }
 
-            // UPnP Fast-Path Outbound Check: Full Cone 锥形穿越保持源端口不变
-            for (auto& rule : upnp_rules) {
+            // UPnP fast-path outbound: skip entirely when no rules have ever been added
+            if (upnp_cursor.load(std::memory_order_relaxed) > 0) for (auto& rule : upnp_rules) {
                 if (rule.active.load(std::memory_order_acquire)) {
                     if (rule.protocol == ip->protocol && rule.internal_ip == ip->saddr && rule.internal_port == *sport_ptr) {
                         // Update IP checksum for saddr change
@@ -200,8 +200,8 @@ namespace Scalpel::Logic {
                 dport_ptr = &tcp->dest; sport = tcp->source; check_ptr = &tcp->check;
             }
 
-            // UPnP Fast-Path Inbound Check: DNAT based on UPnP Mapping (Open NAT 打洞)
-            for (auto& rule : upnp_rules) {
+            // UPnP fast-path inbound: skip entirely when no rules have ever been added
+            if (upnp_cursor.load(std::memory_order_relaxed) > 0) for (auto& rule : upnp_rules) {
                 if (rule.active.load(std::memory_order_acquire)) {
                     if (rule.protocol == ip->protocol && rule.external_port == *dport_ptr) {
                         // Update IP checksum for daddr change
