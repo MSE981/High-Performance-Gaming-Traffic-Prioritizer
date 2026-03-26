@@ -135,11 +135,27 @@ LARGE_PACKET_THRESHOLD=1000   # Bytes; packets above this count as "large"
 PUNISH_TRIGGER_COUNT=30       # Large-packet hits before a flow is deprioritised
 CLEANUP_INTERVAL=10000        # Flow-table cleanup interval (packets)
 
+# Bridge / Layer-2 options
+ENABLE_STP=false              # Enable Spanning Tree Protocol on the bridge
+ENABLE_IGMP_SNOOPING=false    # Enable IGMP snooping for multicast filtering
+# BRIDGE_IFACE=eth0           # Interfaces to add to the bridge (repeat for each)
+# BRIDGE_IFACE=eth1
+
+# Feature toggles (persisted across restarts by the GUI settings page)
+enable_nat=true               # Network Address Translation
+enable_dhcp=true              # Built-in DHCP server
+enable_dns_cache=true         # In-process DNS cache
+enable_upnp=true              # UPnP/IGD port-mapping daemon
+enable_firewall=true          # Stateful packet filter
+enable_pppoe=false            # PPPoE client (for direct ISP connections)
+
 # Per-device download rate caps (optional, one line per device)
 # Format: IP_LIMIT=<IP>:<Mbps>
 # IP_LIMIT=192.168.1.50:20
 # IP_LIMIT=192.168.1.51:10
 ```
+
+> **Auto-save**: On every clean exit (GUI close button, window X, or `Ctrl+C`), the program automatically overwrites `config.txt` with the current runtime state. Any changes made through the GUI settings page are therefore persisted automatically — no manual editing required.
 
 ### 4. Build
 
@@ -176,4 +192,4 @@ sudo ./GamingTrafficPrioritizer
 | GUI — Window X button | Same clean shutdown path as above. |
 | CLI — `Ctrl+C` | Sends `SIGINT`. The signal handler calls `app.stop()`, unblocking all threads for a graceful exit. |
 
-> All three paths converge on the same shutdown sequence: `app.stop()` sets the internal promise, `std::jthread` destructors request stop tokens and join each worker thread, then the process exits cleanly.
+> All three paths converge on the same shutdown sequence: `app.stop()` sets the internal promise, `std::jthread` destructors request stop tokens and join each worker thread, `Config::save_config()` persists the current runtime state to `config.txt`, then the process exits cleanly.
