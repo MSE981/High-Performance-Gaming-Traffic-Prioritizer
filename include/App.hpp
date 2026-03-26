@@ -202,11 +202,13 @@ namespace Scalpel {
         }
 
         static bool step_nat_downstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (!Config::global_state.enable_nat.load(std::memory_order_relaxed)) return false;
             if (self.nat_engine) self.nat_engine->process_inbound(pkt);
-            return false; // 继续流水线
+            return false;
         }
-        
+
         static bool step_nat_upstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (!Config::global_state.enable_nat.load(std::memory_order_relaxed)) return false;
             if (self.nat_engine) self.nat_engine->process_outbound(pkt);
             return false;
         }
