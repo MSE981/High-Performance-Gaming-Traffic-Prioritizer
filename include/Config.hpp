@@ -10,6 +10,11 @@
 #include <ranges>
 
 namespace Scalpel::Config {
+    // Per-interface role assignment
+    enum class IfaceRole : uint8_t { WAN = 0, LAN = 1, GATEWAY = 2, DISABLED = 3 };
+    inline std::map<std::string, IfaceRole> IFACE_ROLES;  // populated by GUI or loaded from config
+    inline std::string IFACE_GATEWAY = "eth0";            // primary uplink (default gateway interface)
+
     // Dynamic runtime switch states (follow RCU/lock barrier concept for data plane O(1) feature state access)
     struct DynamicState {
         std::atomic<bool> enable_nat{true};
@@ -108,6 +113,19 @@ namespace Scalpel::Config {
                 else if (key == "enable_upnp") global_state.enable_upnp.store(val == "true" || val == "1", std::memory_order_relaxed);
                 else if (key == "enable_firewall") global_state.enable_firewall.store(val == "true" || val == "1", std::memory_order_relaxed);
                 else if (key == "enable_pppoe") global_state.enable_pppoe.store(val == "true" || val == "1", std::memory_order_relaxed);
+                else if (key == "IFACE_GATEWAY") IFACE_GATEWAY = val;
+                else if (key == "IFACE_ROLE") {
+                    auto colon = val.find(':');
+                    if (colon != std::string::npos) {
+                        std::string iface_name = val.substr(0, colon);
+                        std::string role_str   = val.substr(colon + 1);
+                        IfaceRole role = IfaceRole::DISABLED;
+                        if      (role_str == "wan")     role = IfaceRole::WAN;
+                        else if (role_str == "lan")     role = IfaceRole::LAN;
+                        else if (role_str == "gateway") role = IfaceRole::GATEWAY;
+                        IFACE_ROLES[iface_name] = role;
+                    }
+                }
                 else if (key == "IP_LIMIT") {
                     auto dash = val.find(':');
                     if (dash != std::string::npos) {
@@ -119,6 +137,20 @@ namespace Scalpel::Config {
             } catch (...) {
                 std::println(stderr, "[Config] Error: cannot parse config line: {}", line);
             }
+        }
+        // If role map was loaded, derive legacy variables from it (overrides direct IFACE_WAN/LAN keys)
+        if (!IFACE_ROLES.empty()) {
+            bool bridge_from_roles = false;
+            for (const auto& [name, role] : IFACE_ROLES) {
+                if (role == IfaceRole::GATEWAY) {
+                    IFACE_GATEWAY = name;
+                    IFACE_WAN = name;
+                } else if (role == IfaceRole::LAN) {
+                    if (!bridge_from_roles) { BRIDGED_INTERFACES.clear(); bridge_from_roles = true; }
+                    BRIDGED_INTERFACES.push_back(name);
+                }
+            }
+            if (!BRIDGED_INTERFACES.empty()) IFACE_LAN = BRIDGED_INTERFACES[0];
         }
         std::println("[Config] Config loaded: {}", path);
     }
@@ -153,6 +185,17 @@ namespace Scalpel::Config {
         file << "enable_pppoe=" << b(global_state.enable_pppoe.load()) << "\n";
         for (const auto& [ip, rate] : IP_LIMIT_MAP)
             file << "IP_LIMIT=" << ip_to_str(ip) << ":" << rate << "\n";
+        file << "IFACE_GATEWAY=" << IFACE_GATEWAY << "\n";
+        for (const auto& [name, role] : IFACE_ROLES) {
+            std::string_view rs;
+            switch (role) {
+                case IfaceRole::GATEWAY:  rs = "gateway"; break;
+                case IfaceRole::LAN:      rs = "lan";     break;
+                case IfaceRole::WAN:      rs = "wan";     break;
+                default:                  rs = "disabled"; break;
+            }
+            file << "IFACE_ROLE=" << name << ":" << rs << "\n";
+        }
 
         std::println("[Config] Config saved: {}", path);
     }
