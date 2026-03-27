@@ -52,6 +52,11 @@ enable_nat=true
 enable_dhcp=true
 enable_dns_cache=true
 enable_upnp=true
+# enable_firewall : Stateful inbound default-deny firewall.
+#   LAN-initiated connections and their return traffic are always allowed.
+#   Unsolicited inbound TCP/UDP packets from the WAN are silently dropped.
+#   ICMP (ping replies, unreachable, TTL-exceeded) is always allowed through.
+#   Set to false only if you need unsolicited inbound connections (e.g. self-hosted servers).
 enable_firewall=true
 enable_pppoe=false
 
