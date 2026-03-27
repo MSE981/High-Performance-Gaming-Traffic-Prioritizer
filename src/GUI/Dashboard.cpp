@@ -583,7 +583,8 @@ Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Scalpel Gaming Router");
     setStyleSheet(DARK_STYLESHEET);
     setup_ui();
-    refresh_timer_id = startTimer(40); // 25Hz
+    // Data timer: 1Hz, always on — updates router stats labels
+    data_timer_id_ = startTimer(1000, Qt::CoarseTimer);
 }
 
 void Dashboard::setup_ui() {
@@ -686,37 +687,59 @@ void Dashboard::on_shutdown_clicked() {
     QApplication::quit();
 }
 
-void Dashboard::timerEvent(QTimerEvent* event) {
-    if (event->timerId() != refresh_timer_id) return;
-    tick_counter++;
+void Dashboard::enter_anim_mode() {
+    if (anim_timer_id_ != -1) return;
+    // 60Hz animation timer: vsync-synced by Qt Wayland compositor
+    anim_timer_id_ = startTimer(16, Qt::PreciseTimer);
+}
 
+void Dashboard::exit_anim_mode() {
+    if (anim_timer_id_ == -1) return;
+    killTimer(anim_timer_id_);
+    anim_timer_id_ = -1;
+}
+
+void Dashboard::timerEvent(QTimerEvent* event) {
+    const int id = event->timerId();
+
+    if (id == anim_timer_id_) {
+        // Animation frame: advance spring physics, repaint if still moving
+        notif_panel_->advance_spring();
+        notif_panel_->update();
+        if (notif_panel_->is_settled()) exit_anim_mode();
+        return;
+    }
+
+    if (id != data_timer_id_) return;
+
+    // Data tick (1Hz): update router stats labels
+    data_tick_++;
     auto& tel = Telemetry::instance();
 
-    // 每 40ms 刷新总览页 (如果可见)
-    if (page_stack->currentIndex() == 0) {
+    // Bandwidth: delta since last tick (1s interval)
+    uint64_t cur_b2 = tel.core_metrics[2].bytes.load(std::memory_order_relaxed);
+    uint64_t cur_b3 = tel.core_metrics[3].bytes.load(std::memory_order_relaxed);
+    double dl = (cur_b2 - last_bytes[2]) * 8.0 / 1e6;
+    double ul = (cur_b3 - last_bytes[3]) * 8.0 / 1e6;
+    status_dl->setText(QString("↓ %1 Mbps").arg(dl, 0, 'f', 2));
+    status_ul->setText(QString("↑ %1 Mbps").arg(ul, 0, 'f', 2));
+
+    // CPU temperature from watchdog atomic — no file I/O on UI thread
+    double t = tel.cpu_temp_celsius.load(std::memory_order_relaxed);
+    if (t > 0) status_cpu->setText(QString("CPU: %1°C").arg(t, 0, 'f', 0));
+
+    // Refresh overview plots if visible
+    if (page_stack->currentIndex() == 0)
         page_overview->refresh(tel, last_pkts, last_bytes);
-    }
 
-    // 保存当前统计快照
+    // Sync service page status indicators if visible
+    if (page_stack->currentIndex() == 3)
+        page_services->refresh_status();
+
+    // Snapshot current counters for next delta
     for (int i = 0; i < 4; ++i) {
-        last_pkts[i] = tel.core_metrics[i].pkts.load(std::memory_order_relaxed);
+        last_pkts[i]  = tel.core_metrics[i].pkts.load(std::memory_order_relaxed);
         last_bytes[i] = tel.core_metrics[i].bytes.load(std::memory_order_relaxed);
-    }
-
-    // 每 1 秒 (25 ticks) 刷新状态栏
-    if (tick_counter % 25 == 0) {
-        // 带宽统计：使用与上次 tick 的差值计算实时速率 (25 ticks/s * 8 bits)
-        double dl = (tel.core_metrics[2].bytes.load(std::memory_order_relaxed) - last_bytes[2]) * 8.0 * 25.0 / 1e6;
-        double ul = (tel.core_metrics[3].bytes.load(std::memory_order_relaxed) - last_bytes[3]) * 8.0 * 25.0 / 1e6;
-        status_dl->setText(QString("↓ %1 Mbps").arg(dl, 0, 'f', 2));
-        status_ul->setText(QString("↑ %1 Mbps").arg(ul, 0, 'f', 2));
-
-        // CPU temperature: read the atomic updated by watchdog_loop — no file I/O on UI thread
-        double t = Telemetry::instance().cpu_temp_celsius.load(std::memory_order_relaxed);
-        if (t > 0) status_cpu->setText(QString("CPU: %1°C").arg(t, 0, 'f', 0));
-
-        // 服务页同步
-        if (page_stack->currentIndex() == 3) page_services->refresh_status();
     }
 }
 
