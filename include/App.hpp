@@ -18,6 +18,7 @@
 #include "ProbeManager.hpp"
 #include "Indicator.hpp"
 #include "Scheduler.hpp"
+#include "FirewallEngine.hpp"
 #include <print>
 #include <iostream>
 #include <cstdio>
@@ -136,16 +137,17 @@ namespace Scalpel {
         std::shared_ptr<Logic::DnsEngine> dns_engine;
         std::shared_ptr<QoSConfig> qos_config;
         std::shared_ptr<Logic::DhcpEngine> dhcp_engine;
+        std::shared_ptr<Logic::FirewallEngine> firewall_engine;
         uint32_t gateway_ip = 0;
 
         std::array<std::array<RouteFunc, 3>, 2> routes;
 
         // Callback-based pipeline — eliminates all runtime if-else branching
         using PipelineStep = bool (*)(PacketConsumer& self, Net::ParsedPacket& pkt);
-        std::array<PipelineStep, 7> pipeline;
+        std::array<PipelineStep, 8> pipeline;
 
-        PacketConsumer(int rx_fd, int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp, uint32_t gw_ip)
-            : rx_fd(rx_fd), tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat), dns_engine(dns), qos_config(qos), dhcp_engine(dhcp), gateway_ip(gw_ip) {
+        PacketConsumer(int rx_fd, int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp, std::shared_ptr<Logic::FirewallEngine> fw, uint32_t gw_ip)
+            : rx_fd(rx_fd), tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat), dns_engine(dns), qos_config(qos), dhcp_engine(dhcp), firewall_engine(fw), gateway_ip(gw_ip) {
 
             routes = {{
                 { fast_path_handler, fast_path_handler, shaper_handler }, // acceleration mode
@@ -156,9 +158,11 @@ namespace Scalpel {
             // Core 2 (WAN -> LAN, downstream): apply per-IP download shaper before QoS routing.
             // Core 3 (LAN -> WAN, upstream):   apply per-IP upload shaper before QoS routing.
             if (core_id == 2) {
-                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_nat_downstream, step_ip_shaper_downstream, step_qos_routing };
+                // Firewall inbound check runs before DNAT so we see the original WAN source IP/port
+                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_firewall_inbound, step_nat_downstream, step_ip_shaper_downstream, step_qos_routing };
             } else {
-                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_local_delivery_blocker, step_nat_downstream, step_nat_upstream, step_ip_shaper_upstream, step_qos_routing };
+                // Firewall track runs before SNAT so we record the original LAN destination IP/port
+                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_local_delivery_blocker, step_firewall_track_outbound, step_nat_downstream, step_nat_upstream, step_ip_shaper_upstream, step_qos_routing };
             }
         } // end PacketConsumer constructor
 
@@ -253,6 +257,24 @@ namespace Scalpel {
             return false;
         }
 
+        // Core 2 (WAN→LAN): drop unsolicited inbound packets when firewall is enabled
+        static bool step_firewall_inbound(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (!Config::global_state.enable_firewall.load(std::memory_order_relaxed)) return false;
+            if (!self.firewall_engine) return false;
+            // check_inbound returns true=allow, false=block; negate to decide whether to cut pipeline
+            if (!self.firewall_engine->check_inbound(pkt)) {
+                return true; // drop — cut pipeline, packet is not forwarded
+            }
+            return false; // established session — continue pipeline
+        }
+
+        // Core 3 (LAN→WAN): register outbound flow in conntrack table BEFORE SNAT
+        static bool step_firewall_track_outbound(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (!Config::global_state.enable_firewall.load(std::memory_order_relaxed)) return false;
+            if (self.firewall_engine) self.firewall_engine->track_outbound(pkt);
+            return false; // never blocks forwarding
+        }
+
         static bool step_qos_routing(PacketConsumer& self, Net::ParsedPacket& pkt) {
             auto prio = self.processor.process(pkt);
             const size_t p_idx = static_cast<size_t>(prio);
@@ -290,6 +312,7 @@ namespace Scalpel {
         std::shared_ptr<Logic::NatEngine> nat_engine;
         std::shared_ptr<Logic::DnsEngine> dns_engine;
         std::shared_ptr<Logic::DhcpEngine> dhcp_engine;
+        std::shared_ptr<Logic::FirewallEngine> firewall_engine;
         std::shared_ptr<Logic::UpnpEngine> upnp_engine;
         std::shared_ptr<QoSConfig> qos_config;
         HW::RGBLed led;
@@ -310,9 +333,10 @@ namespace Scalpel {
             // Do NOT override service flags here — they are loaded from config.txt
             // before App is constructed (see main.cpp: Config::load_config() precedes App app).
 
-            nat_engine  = std::make_shared<Logic::NatEngine>();
-            dns_engine  = std::make_shared<Logic::DnsEngine>();
-            dhcp_engine = std::make_shared<Logic::DhcpEngine>(Config::ROUTER_IP);
+            nat_engine      = std::make_shared<Logic::NatEngine>();
+            dns_engine      = std::make_shared<Logic::DnsEngine>();
+            dhcp_engine     = std::make_shared<Logic::DhcpEngine>(Config::ROUTER_IP);
+            firewall_engine = std::make_shared<Logic::FirewallEngine>();
             // UpnpEngine constructor starts threads immediately; only create it when the
             // service is enabled so that enable_upnp=false actually suppresses the daemon.
             if (Config::global_state.enable_upnp.load(std::memory_order_relaxed))
@@ -360,14 +384,14 @@ namespace Scalpel {
             auto shaper_ul = std::make_shared<Traffic::Shaper>(ul * 0.85);
 
             worker_downstream = std::jthread(
-                [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, int tx, int c, std::shared_ptr<Traffic::Shaper> sh, std::shared_ptr<Logic::NatEngine> ne, std::shared_ptr<Logic::DnsEngine> de, std::shared_ptr<QoSConfig> qc, std::shared_ptr<Logic::DhcpEngine> d) {
-                    worker_event_loop(std::move(st), std::move(iface), tx, c, sh, ne, de, qc, d);
-                }, std::move(iface_wan), fd_lan, 2, shaper_dl, nat_engine, dns_engine, qos_config, dhcp_engine);
+                [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, int tx, int c, std::shared_ptr<Traffic::Shaper> sh, std::shared_ptr<Logic::NatEngine> ne, std::shared_ptr<Logic::DnsEngine> de, std::shared_ptr<QoSConfig> qc, std::shared_ptr<Logic::DhcpEngine> d, std::shared_ptr<Logic::FirewallEngine> fw) {
+                    worker_event_loop(std::move(st), std::move(iface), tx, c, sh, ne, de, qc, d, fw);
+                }, std::move(iface_wan), fd_lan, 2, shaper_dl, nat_engine, dns_engine, qos_config, dhcp_engine, firewall_engine);
 
             worker_upstream = std::jthread(
-                [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, int tx, int c, std::shared_ptr<Traffic::Shaper> sh, std::shared_ptr<Logic::NatEngine> ne, std::shared_ptr<Logic::DnsEngine> de, std::shared_ptr<QoSConfig> qc, std::shared_ptr<Logic::DhcpEngine> d) {
-                    worker_event_loop(std::move(st), std::move(iface), tx, c, sh, ne, de, qc, d);
-                }, std::move(iface_lan), fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config, dhcp_engine);
+                [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, int tx, int c, std::shared_ptr<Traffic::Shaper> sh, std::shared_ptr<Logic::NatEngine> ne, std::shared_ptr<Logic::DnsEngine> de, std::shared_ptr<QoSConfig> qc, std::shared_ptr<Logic::DhcpEngine> d, std::shared_ptr<Logic::FirewallEngine> fw) {
+                    worker_event_loop(std::move(st), std::move(iface), tx, c, sh, ne, de, qc, d, fw);
+                }, std::move(iface_lan), fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config, dhcp_engine, firewall_engine);
 
             std::println("[App] Data plane and control plane started.");
         }
@@ -380,13 +404,13 @@ namespace Scalpel {
         }
 
     private:
-        void worker_event_loop(std::stop_token st, std::unique_ptr<Engine::RawSocketManager> rx_mgr, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp) {
+        void worker_event_loop(std::stop_token st, std::unique_ptr<Engine::RawSocketManager> rx_mgr, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp, std::shared_ptr<Logic::FirewallEngine> fw) {
             Scalpel::System::Optimizer::set_current_thread_affinity(core);
             Scalpel::System::Optimizer::set_realtime_priority();
             std::println("[App] Core {} Pipeline 挂载就绪.", core);
 
             int rx_fd = rx_mgr->get_fd();
-            PacketConsumer consumer(rx_fd, tx_fd, core, shpr, nat, dns, qos, dhcp, Config::parse_ip_str(Config::ROUTER_IP));
+            PacketConsumer consumer(rx_fd, tx_fd, core, shpr, nat, dns, qos, dhcp, fw, Config::parse_ip_str(Config::ROUTER_IP));
 
             while (!st.stop_requested()) {
                 rx_mgr->poll_and_dispatch([&consumer](std::span<uint8_t> raw_span) {
@@ -521,6 +545,10 @@ namespace Scalpel {
                 }
                 if (dhcp_engine) {
                     dhcp_engine->process_background_tasks(lan_fd_); // send replies out the LAN port
+                }
+                if (firewall_engine) {
+                    firewall_engine->tick();
+                    firewall_engine->cleanup();
                 }
 
                 // Heartbeat-based fault detection (high/low frequency decoupling)
