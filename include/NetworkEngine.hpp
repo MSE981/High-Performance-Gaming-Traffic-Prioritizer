@@ -56,7 +56,7 @@ namespace Scalpel::Engine {
 
             // Auto-enable promiscuous mode
             struct ifreq ifr_p {};
-            iface.copy(ifr_p.ifr_name, IFNAMSIZ - 1);
+            std::strncpy(ifr_p.ifr_name, iface.data(), IFNAMSIZ - 1);
 
             if (ioctl(fd, SIOCGIFFLAGS, &ifr_p) < 0) {
                 return std::unexpected("Failed to get interface flags");
