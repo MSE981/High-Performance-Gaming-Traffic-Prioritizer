@@ -49,7 +49,9 @@ The classifier is heuristic — it watches flow sizes and packet frequencies to 
 - **Real-time timing** — `timerfd` + blocking `read()` drives all periodic work; no `sleep_for` anywhere in the forwarding path
 - **Per-device bandwidth caps** — token-bucket rate limiter per IP, updated lock-free via RCU double-buffer swap
 - **Full service stack** — NAT (SNAT/DNAT), DHCP server, DNS cache, UPnP/IGD, stateful firewall; each togglable at runtime
-- **Qt6 live dashboard** — real-time packet rate / bandwidth charts, per-core stats, interface roles, QoS rules, service controls
+- **Qt6 live dashboard** — real-time packet rate / bandwidth charts, per-core stats, interface roles, QoS rules, service controls; rendered via cage (Wayland kiosk) on a DSI display with GPU acceleration
+- **Adaptive-rate GUI** — 60 Hz vsync-locked animation during interactions (notification pull-down, transitions), dropping to 1 Hz data-only refresh when idle; zero GPU work when the screen is static
+- **iOS-style notification centre** — pull-down panel with spring-physics animation; engine alerts surface here without interrupting the forwarding path
 - **Headless / SSH mode** — `enable_gui=false` and you never need a monitor
 
 ---
@@ -63,7 +65,7 @@ The classifier is heuristic — it watches flow sizes and packet frequencies to 
 | Raspberry Pi 5 | Any RAM variant; 4 GB recommended |
 | Second Ethernet adapter | USB 3.0 GbE adapter works great as LAN port |
 | RGB LED (optional) | GPIO pins 17 & 27 — green = healthy, red = thread stall |
-| Display (optional) | Only needed for GUI mode |
+| DSI display (optional) | Waveshare 8.0" 1280×800 or compatible; needed for GUI mode |
 
 Plug it in like this:
 
@@ -79,6 +81,8 @@ If you only have one device, plug it directly into `eth1`. Done.
 |---------|-----|
 | GCC 14 + CMake 3.20+ | C++23 required (`std::expected`, `std::jthread`, `std::print`) |
 | `qt6-base-dev` | Local dashboard |
+| `qt6-wayland` | Qt6 Wayland platform plugin (GPU-accelerated rendering via cage) |
+| `cage` | Wayland kiosk compositor — runs the GUI fullscreen without a desktop environment |
 | `libgpiod-dev` ≥ v2 | LED status indicator |
 | `ethtool` | Strips hardware offloads that break raw-socket packet lengths |
 | `speedtest-cli` | Optional ISP bandwidth auto-measurement (Probe C) |
@@ -92,7 +96,8 @@ If you only have one device, plug it directly into `eth1`. Done.
 sudo apt update
 sudo apt install build-essential cmake gcc-14 g++-14 \
     libgpiod-dev libgpiod2 \
-    qt6-base-dev qt6-base-dev-tools \
+    qt6-base-dev qt6-base-dev-tools qt6-wayland \
+    cage \
     ethtool speedtest-cli
 
 # 2. Clone and build
@@ -102,8 +107,11 @@ mkdir build && cd build
 cmake ..
 cmake --build . -j4
 
-# 3. Run (root required for raw sockets + realtime scheduling)
-sudo ./GamingTrafficPrioritizer
+# 3. Run via cage (GPU-accelerated, DSI fullscreen, no desktop required)
+sudo /home/<user>/start_router.sh
+
+# Or headless (no display needed)
+sudo ./GamingTrafficPrioritizer   # with enable_gui=false in config.txt
 ```
 
 The binary lands in `build/`. No install step needed — just copy it wherever you want alongside `config.txt`.
@@ -158,12 +166,15 @@ ENABLE_IGMP_SNOOPING=false
 ## Running
 
 ```bash
-# GUI mode (default)
-cd build && sudo ./GamingTrafficPrioritizer
+# GUI mode — cage launches the dashboard fullscreen on the DSI display
+# lightdm must be disabled (sudo systemctl disable lightdm)
+sudo ~/start_router.sh
 
-# Headless / SSH — set enable_gui=false in config.txt first
+# Headless / SSH — set enable_gui=false in config.txt
 cd build && sudo ./GamingTrafficPrioritizer
 ```
+
+The startup script (`~/start_router.sh`) handles process cleanup and launches the binary under `cage` with the correct Wayland environment. The GUI renders at 60 Hz during animations and drops to 1 Hz while idle, keeping Core 0 free for OS scheduling.
 
 ### Stopping cleanly
 
@@ -212,6 +223,9 @@ The per-IP rate-limit table uses a lock-free double-buffer: the control plane wr
 - [x] Built-in NAT, DHCP, DNS cache, UPnP, firewall
 - [x] Qt6 local dashboard — live charts, role assignment, service toggles
 - [x] Headless CLI mode
+- [x] cage/Wayland kiosk mode — GPU-accelerated fullscreen GUI on DSI, no desktop environment
+- [x] Adaptive frame rate — 60 Hz animations, 1 Hz idle; compositor-driven vsync via Qt Wayland
+- [x] iOS-style notification centre with spring-physics pull-down panel
 - [ ] Remote web management (NGINX + C++ FastCGI REST API)
 - [ ] IPv6 forwarding support
 - [ ] WireGuard VPN integration
