@@ -21,6 +21,86 @@
 namespace Scalpel::GUI {
 
 // ═════════════════════════════════════════════════════════════
+// NotificationPanel: iOS-style pull-down overlay
+// Spring constants tuned for a snappy-but-not-bouncy feel
+// ═════════════════════════════════════════════════════════════
+NotificationPanel::NotificationPanel(QWidget* parent) : QFrame(parent) {
+    setFixedHeight(260);
+    setStyleSheet(
+        "NotificationPanel {"
+        "  background: rgba(20,20,32,220);"
+        "  border-bottom-left-radius: 20px;"
+        "  border-bottom-right-radius: 20px;"
+        "}"
+    );
+
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(20, 16, 20, 16);
+    root->setSpacing(8);
+
+    auto* handle = new QFrame();
+    handle->setFixedSize(40, 4);
+    handle->setStyleSheet("background: rgba(255,255,255,60); border-radius: 2px;");
+    auto* handle_row = new QHBoxLayout();
+    handle_row->addStretch();
+    handle_row->addWidget(handle);
+    handle_row->addStretch();
+    root->addLayout(handle_row);
+
+    auto* header_lbl = new QLabel("通知中心");
+    header_lbl->setStyleSheet("color: rgba(255,255,255,180); font-size: 13px; font-weight: bold;");
+    root->addWidget(header_lbl);
+
+    notif_list_ = new QVBoxLayout();
+    notif_list_->setSpacing(6);
+    root->addLayout(notif_list_);
+    root->addStretch();
+
+    // Start hidden above screen
+    move(0, -height());
+}
+
+void NotificationPanel::push_notification(const QString& title, const QString& body) {
+    auto* card = new QFrame();
+    card->setStyleSheet(
+        "QFrame {"
+        "  background: rgba(255,255,255,12);"
+        "  border-radius: 12px;"
+        "  padding: 8px;"
+        "}"
+    );
+    auto* lay = new QVBoxLayout(card);
+    lay->setContentsMargins(10, 8, 10, 8);
+    lay->setSpacing(2);
+    auto* t = new QLabel(title);
+    t->setStyleSheet("color: #ffffff; font-size: 13px; font-weight: bold;");
+    auto* b = new QLabel(body);
+    b->setStyleSheet("color: rgba(255,255,255,160); font-size: 12px;");
+    b->setWordWrap(true);
+    lay->addWidget(t);
+    lay->addWidget(b);
+    notif_list_->addWidget(card);
+}
+
+void NotificationPanel::set_expanded(bool expanded) {
+    expanded_ = expanded;
+}
+
+void NotificationPanel::advance_spring() {
+    constexpr double k    = 0.18;   // spring stiffness
+    constexpr double damp = 0.12;   // damping ratio
+    double target = expanded_ ? 0.0 : -(double)height();
+    double force  = k * (target - pos_y_);
+    vel_y_ = (vel_y_ + force) * (1.0 - damp);
+    pos_y_ += vel_y_;
+    move(0, (int)pos_y_);
+}
+
+bool NotificationPanel::is_settled() const {
+    return std::abs(vel_y_) < 0.5 && std::abs(pos_y_ - (expanded_ ? 0.0 : -(double)height())) < 1.0;
+}
+
+// ═════════════════════════════════════════════════════════════
 // RealTimePlot (retain Phase 3 physics engine)
 // ═════════════════════════════════════════════════════════════
 RealTimePlot::RealTimePlot(QWidget* parent) : QWidget(parent) {
@@ -608,6 +688,12 @@ void Dashboard::setup_ui() {
     status_dot->setStyleSheet("color: #00cc66; font-weight: bold; font-size: 14px;");
     header_lay->addWidget(status_dot);
 
+    auto* btn_notif = new QPushButton("🔔");
+    btn_notif->setFixedSize(36, 36);
+    btn_notif->setStyleSheet("QPushButton { background: transparent; font-size: 18px; border: none; }");
+    connect(btn_notif, &QPushButton::clicked, this, &Dashboard::on_notif_toggle_clicked);
+    header_lay->addWidget(btn_notif);
+
     auto* btn_shutdown = new QPushButton("关闭程序");
     btn_shutdown->setObjectName("btn_danger");
     connect(btn_shutdown, &QPushButton::clicked, this, &Dashboard::on_shutdown_clicked);
@@ -645,6 +731,12 @@ void Dashboard::setup_ui() {
 
     // ── 底部状态栏 ──
     setup_statusbar();
+
+    // ── 通知面板：浮动在所有内容之上，初始隐藏于屏幕顶部外侧 ──
+    notif_panel_ = new NotificationPanel(centralWidget());
+    notif_panel_->setFixedWidth(centralWidget()->width());
+    notif_panel_->raise();
+    notif_panel_->push_notification("路由器已就绪", "数据平面 Core 2/3 挂载完成，转发引擎运行中。");
 }
 
 void Dashboard::setup_nav() {
@@ -685,6 +777,11 @@ void Dashboard::on_shutdown_clicked() {
     // QApplication::quit() 使 qapp.exec() 返回，main.cpp 中的关闭流程
     // 负责调用 app.stop() 并等待所有 jthread 安全退出。
     QApplication::quit();
+}
+
+void Dashboard::on_notif_toggle_clicked() {
+    notif_panel_->set_expanded(!notif_panel_->is_expanded());
+    enter_anim_mode();
 }
 
 void Dashboard::enter_anim_mode() {
