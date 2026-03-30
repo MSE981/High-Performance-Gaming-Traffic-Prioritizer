@@ -49,6 +49,12 @@ namespace Scalpel {
             };
             std::array<IfaceEntry, MAX_IFACES> ifaces{};
             std::atomic<uint8_t> iface_count{0};  // written last (release), read first (acquire)
+
+            // eventfd pair for on-demand rescan signalling — created in main() before threads start.
+            // rescan_fd: UI writes 1 → watchdog wakes immediately via poll()
+            // done_fd:   watchdog writes 1 → QSocketNotifier fires on Core 0
+            int rescan_fd = -1;
+            int done_fd   = -1;
         };
         alignas(64) SystemInfo sys_info{};
 

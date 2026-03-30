@@ -17,6 +17,7 @@
 #include <QScrollArea>
 #include <QHeaderView>
 #include <QComboBox>
+#include <QSocketNotifier>
 #include <array>
 #include <map>
 #include <string>
@@ -92,12 +93,15 @@ public:
 private slots:
     void on_save_clicked();
     void on_reset_clicked();
+    void on_refresh_clicked();
+    void on_scan_done();
 private:
     void on_role_changed(const QString& iface, int index);
     QTableWidget* iface_table;
     std::map<std::string, QComboBox*> role_combos;
     QCheckBox* chk_stp;
     QCheckBox* chk_igmp;
+    QPushButton* btn_refresh = nullptr;
 };
 
 // ═══════════════════════════════════════════

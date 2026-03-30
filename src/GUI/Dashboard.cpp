@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/eventfd.h>
 #include <QSignalBlocker>
 
 namespace Scalpel::GUI {
@@ -259,6 +260,9 @@ InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
 
     // Button row
     auto* btn_row = new QHBoxLayout();
+    btn_refresh = new QPushButton("刷新网口");
+    connect(btn_refresh, &QPushButton::clicked, this, &InterfacePage::on_refresh_clicked);
+    btn_row->addWidget(btn_refresh);
     btn_row->addStretch();
     auto* btn_reset = new QPushButton("重置");
     connect(btn_reset, &QPushButton::clicked, this, &InterfacePage::on_reset_clicked);
@@ -268,6 +272,13 @@ InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
     connect(btn_save, &QPushButton::clicked, this, &InterfacePage::on_save_clicked);
     btn_row->addWidget(btn_save);
     layout->addLayout(btn_row);
+
+    // Register QSocketNotifier for done_fd — wakes Qt event loop when watchdog completes rescan
+    int done_fd = Telemetry::instance().sys_info.done_fd;
+    if (done_fd >= 0) {
+        auto* notifier = new QSocketNotifier(done_fd, QSocketNotifier::Read, this);
+        connect(notifier, &QSocketNotifier::activated, this, &InterfacePage::on_scan_done);
+    }
 }
 
 void InterfacePage::scan_interfaces() {
@@ -379,6 +390,23 @@ void InterfacePage::on_reset_clicked() {
     scan_interfaces(); // Rebuilds table from Config::IFACE_ROLES
     chk_stp->setChecked(Config::ENABLE_STP.load());
     chk_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load());
+}
+
+void InterfacePage::on_refresh_clicked() {
+    int rescan_fd = Telemetry::instance().sys_info.rescan_fd;
+    if (rescan_fd < 0) return;
+    ::eventfd_write(rescan_fd, 1);   // wake Core 1 watchdog immediately
+    btn_refresh->setEnabled(false);
+    btn_refresh->setText("扫描中…");
+}
+
+void InterfacePage::on_scan_done() {
+    // Drain the eventfd counter before reading Telemetry cache
+    uint64_t val;
+    ::eventfd_read(Telemetry::instance().sys_info.done_fd, &val);
+    scan_interfaces();
+    btn_refresh->setEnabled(true);
+    btn_refresh->setText("刷新网口");
 }
 
 // ═════════════════════════════════════════════════════════════

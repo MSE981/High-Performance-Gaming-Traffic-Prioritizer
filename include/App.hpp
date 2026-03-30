@@ -33,6 +33,7 @@
 #include <fcntl.h>
 #include <cstring>
 #include <dirent.h>
+#include <sys/eventfd.h>
 
 namespace Scalpel {
 
@@ -458,16 +459,69 @@ namespace Scalpel {
             uint64_t last_ticks[4] = {0, 0, 0, 0};
             uint64_t watchdog_tick = 0;
 
-            struct pollfd pfd{};
-            pfd.fd = tfd;
-            pfd.events = POLLIN;
+            auto& si = tel.sys_info;
+            struct pollfd pfds[2]{};
+            pfds[0] = { tfd, POLLIN, 0 };
+            pfds[1] = { si.rescan_fd, POLLIN, 0 };
+
+            // iface scan lambda — shared by 5-tick refresh and on-demand rescan paths
+            auto scan_ifaces = [&]() {
+                uint8_t cnt = 0;
+                DIR* d = opendir("/sys/class/net");
+                if (d) {
+                    struct dirent* de;
+                    while ((de = readdir(d)) != nullptr &&
+                           cnt < Telemetry::SystemInfo::MAX_IFACES) {
+                        if (de->d_name[0] == '.' ||
+                            strncmp(de->d_name, "lo", 3) == 0) continue;
+                        strncpy(si.ifaces[cnt].name.data(), de->d_name, 15);
+                        si.ifaces[cnt].name[15] = '\0';
+                        char path[64];
+                        snprintf(path, sizeof(path),
+                            "/sys/class/net/%s/operstate", de->d_name);
+                        char sbuf[8]{};
+                        int sfd = ::open(path, O_RDONLY);
+                        if (sfd >= 0) {
+                            ssize_t n = ::read(sfd, sbuf, sizeof(sbuf) - 1);
+                            ::close(sfd);
+                            if (n > 0 && sbuf[n - 1] == '\n') sbuf[n - 1] = '\0';
+                        }
+                        strncpy(si.ifaces[cnt].operstate.data(),
+                            sbuf[0] ? sbuf : "unknown", 7);
+                        si.ifaces[cnt].operstate[7] = '\0';
+                        ++cnt;
+                    }
+                    closedir(d);
+                }
+                // Release store: Qt acquire-load in scan_interfaces() sees completed writes
+                si.iface_count.store(cnt, std::memory_order_release);
+            };
 
             while (!st.stop_requested()) {
-                // 使用 poll 防止 fd 失效或者意外 O_NONBLOCK 导致的 CPU 空转 Spin Lock 死循环
-                int pret = poll(&pfd, 1, 1000); 
+                // poll on timerfd (1Hz) + rescan_fd (on-demand UI request)
+                int nfds = (si.rescan_fd >= 0) ? 2 : 1;
+                int pret = poll(pfds, nfds, 1000);
                 if (pret <= 0) continue;
 
-                if (read(tfd, &expirations, sizeof(expirations)) <= 0) continue;
+                bool timer_fired = (pfds[0].revents & POLLIN) != 0;
+                bool force_scan  = false;
+
+                if (timer_fired && ::read(tfd, &expirations, sizeof(expirations)) <= 0)
+                    timer_fired = false;
+                if (nfds == 2 && (pfds[1].revents & POLLIN)) {
+                    uint64_t val;
+                    ::eventfd_read(si.rescan_fd, &val);
+                    force_scan = true;
+                }
+
+                // On-demand rescan only: iface scan + signal UI, skip all 1Hz work
+                if (force_scan && !timer_fired) {
+                    scan_ifaces();
+                    if (si.done_fd >= 0) ::eventfd_write(si.done_fd, 1);
+                    continue;
+                }
+
+                if (!timer_fired) continue;
 
                 // Read CPU temperature via raw fd (Core 1, 1Hz) — no heap allocation, no ifstream overhead
                 {
@@ -481,6 +535,7 @@ namespace Scalpel {
                 }
 
                 // Refresh system info every 5 ticks (5 seconds) for UI display — Core 1 only
+                bool did_iface_scan = false;
                 ++watchdog_tick;
                 if (watchdog_tick % 5 == 0) {
                     // Helper: read a sysfs/proc file into a fixed-size buffer via raw fd
@@ -497,7 +552,6 @@ namespace Scalpel {
                         }
                     };
 
-                    auto& si = tel.sys_info;
                     read_sysfd("/etc/hostname", std::span<char>(si.hostname));
                     read_sysfd("/proc/version", std::span<char>(si.kernel_short));
 
@@ -524,39 +578,14 @@ namespace Scalpel {
                         }
                     }
 
-                    // Scan /sys/class/net — raw fd + POSIX readdir, Core 1 only
-                    {
-                        uint8_t cnt = 0;
-                        DIR* d = opendir("/sys/class/net");
-                        if (d) {
-                            struct dirent* de;
-                            while ((de = readdir(d)) != nullptr &&
-                                   cnt < Telemetry::SystemInfo::MAX_IFACES) {
-                                if (de->d_name[0] == '.' ||
-                                    strncmp(de->d_name, "lo", 3) == 0) continue;
-                                strncpy(si.ifaces[cnt].name.data(), de->d_name, 15);
-                                si.ifaces[cnt].name[15] = '\0';
-                                char path[64];
-                                snprintf(path, sizeof(path),
-                                    "/sys/class/net/%s/operstate", de->d_name);
-                                char sbuf[8]{};
-                                int sfd = ::open(path, O_RDONLY);
-                                if (sfd >= 0) {
-                                    ssize_t n = ::read(sfd, sbuf, sizeof(sbuf) - 1);
-                                    ::close(sfd);
-                                    if (n > 0 && sbuf[n - 1] == '\n') sbuf[n - 1] = '\0';
-                                }
-                                strncpy(si.ifaces[cnt].operstate.data(),
-                                    sbuf[0] ? sbuf : "unknown", 7);
-                                si.ifaces[cnt].operstate[7] = '\0';
-                                ++cnt;
-                            }
-                            closedir(d);
-                        }
-                        // Release store: Qt acquire-load in scan_interfaces() sees completed writes
-                        si.iface_count.store(cnt, std::memory_order_release);
-                    }
+                    // Scan /sys/class/net via lambda — raw fd + POSIX readdir, Core 1 only
+                    scan_ifaces();
+                    did_iface_scan = true;
                 }
+
+                // If on-demand rescan was requested in same tick but 5-tick block didn't run, do it now
+                if (force_scan && !did_iface_scan) scan_ifaces();
+                if (force_scan && si.done_fd >= 0) ::eventfd_write(si.done_fd, 1);
 
                 // Map-reduce bandwidth aggregation
                 uint64_t total_bytes_down = tel.core_metrics[2].bytes.load(std::memory_order_relaxed);

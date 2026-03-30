@@ -1,7 +1,9 @@
 #include "App.hpp"
 #include "Config.hpp"
+#include "Telemetry.hpp"
 #include <csignal>
 #include <print>
+#include <sys/eventfd.h>
 
 // Global pointer and signal debounce flag
 Scalpel::App* global_app = nullptr;
@@ -30,6 +32,15 @@ int main(int argc, char* argv[]) {
 
     // 1. Load router and system config
     Scalpel::Config::load_config();
+
+    // Create eventfd pair for iface rescan signalling — must happen before watchdog thread starts
+    {
+        auto& si = Scalpel::Telemetry::instance().sys_info;
+        si.rescan_fd = ::eventfd(0, EFD_CLOEXEC);
+        si.done_fd   = ::eventfd(0, EFD_CLOEXEC);
+        if (si.rescan_fd < 0 || si.done_fd < 0)
+            std::println(stderr, "[Warn] eventfd creation failed — iface refresh button disabled");
+    }
 
     Scalpel::App app;
     global_app = &app;
