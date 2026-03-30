@@ -7,21 +7,23 @@
 # IFACE_WAN  : Ethernet interface facing your router (internet side).
 # IFACE_LAN  : Ethernet interface facing your local devices.
 # ROUTER_IP  : The Pi's own IP on the LAN side, used by DHCP and NAT.
-IFACE_WAN=eth0
-IFACE_LAN=eth1
-ROUTER_IP=192.168.1.100
+#              Must be on a different subnet from the upstream router.
+IFACE_WAN=eth1
+IFACE_LAN=eth0
+ROUTER_IP=192.168.9.1
 
 # ── Interface role map ────────────────────────────────────────────────
-# The GUI Interfaces page writes IFACE_ROLE lines automatically and they
-# take priority over the simple IFACE_WAN / IFACE_LAN keys above.
+# These lines take priority over the simple IFACE_WAN / IFACE_LAN keys above.
 # Roles: gateway  — primary WAN / default route (exactly one required)
 #        wan      — additional WAN interface
 #        lan      — LAN-side interface; multiple LAN ports are bridged
 #        disabled — interface is ignored by the forwarding engine
-IFACE_GATEWAY=eth0
-# IFACE_ROLE=eth0:gateway
-# IFACE_ROLE=eth1:lan
-# IFACE_ROLE=eth2:disabled
+#
+# eth0 : Pi 5 built-in GbE — LAN side (connects to gaming devices)
+# eth1 : USB Ethernet adapter  — WAN side (connects to upstream router)
+IFACE_GATEWAY=eth1
+IFACE_ROLE=eth1:gateway
+IFACE_ROLE=eth0:lan
 
 # ── Display mode ──────────────────────────────────────────────────────
 # Set to false for headless / SSH operation (no Qt dependency at runtime).
@@ -51,7 +53,7 @@ ENABLE_IGMP_SNOOPING=false
 enable_nat=true
 enable_dhcp=true
 enable_dns_cache=true
-enable_upnp=true
+enable_upnp=false
 # enable_firewall : Stateful inbound default-deny firewall.
 #   LAN-initiated connections and their return traffic are always allowed.
 #   Unsolicited inbound TCP/UDP packets from the WAN are silently dropped.
@@ -65,5 +67,5 @@ enable_pppoe=false
 # The token-bucket shaper is applied per-packet in the forwarding hot path.
 # Format: IP_LIMIT=<device-IP>:<limit-in-Mbps>
 # Example:
-# IP_LIMIT=192.168.1.50:20
-# IP_LIMIT=192.168.1.51:10
+# IP_LIMIT=192.168.9.50:20
+# IP_LIMIT=192.168.9.51:10
