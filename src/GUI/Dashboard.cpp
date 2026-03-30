@@ -201,8 +201,8 @@ void OverviewPage::refresh(const Telemetry& tel, uint64_t last_p[4], uint64_t la
         uint64_t cp = tel.core_metrics[i].pkts.load(std::memory_order_relaxed);
         uint64_t cb = tel.core_metrics[i].bytes.load(std::memory_order_relaxed);
         uint64_t dp = cp - last_p[i], db = cb - last_b[i];
-        total_pps += dp * 25.0;
-        total_bps += db * 25.0;
+        total_pps += static_cast<double>(dp);   // 1Hz tick: delta is already per-second
+        total_bps += static_cast<double>(db);
         core_labels[i]->setText(QString("Core %1\n%2 Pkts\n%3 KB")
             .arg(i).arg(cp).arg(cb / 1024));
     }
