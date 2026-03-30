@@ -832,6 +832,19 @@ void Dashboard::timerEvent(QTimerEvent* event) {
     double t = tel.cpu_temp_celsius.load(std::memory_order_relaxed);
     if (t > 0) status_cpu->setText(QString("CPU: %1°C").arg(t, 0, 'f', 0));
 
+    // RAM usage — read from Core 1 watchdog pre-cache
+    uint64_t mem_total = tel.sys_info.mem_total_kb.load(std::memory_order_relaxed);
+    uint64_t mem_avail = tel.sys_info.mem_avail_kb.load(std::memory_order_relaxed);
+    if (mem_total > 0)
+        status_ram->setText(QString("RAM: %1/%2 MB")
+            .arg((mem_total - mem_avail) / 1024).arg(mem_total / 1024));
+
+    // Uptime — read from Core 1 watchdog pre-cache
+    uint64_t secs = tel.sys_info.uptime_seconds.load(std::memory_order_relaxed);
+    if (secs > 0)
+        status_uptime->setText(QString("Up: %1h %2m")
+            .arg(secs / 3600).arg((secs % 3600) / 60));
+
     // Refresh overview plots if visible
     if (page_stack->currentIndex() == 0)
         page_overview->refresh(tel, last_pkts, last_bytes);
