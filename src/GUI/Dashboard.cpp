@@ -202,8 +202,8 @@ void OverviewPage::refresh(const Telemetry& tel, uint64_t last_p[4], uint64_t la
         uint64_t cp = tel.core_metrics[i].pkts.load(std::memory_order_relaxed);
         uint64_t cb = tel.core_metrics[i].bytes.load(std::memory_order_relaxed);
         uint64_t dp = cp - last_p[i], db = cb - last_b[i];
-        total_pps += static_cast<double>(dp);   // 1Hz tick: delta is already per-second
-        total_bps += static_cast<double>(db);
+        total_pps += dp * 25.0;   // 25Hz tick: scale 40ms delta to per-second rate
+        total_bps += db * 25.0;
         core_labels[i]->setText(QString("Core %1\n%2 Pkts\n%3 KB")
             .arg(i).arg(cp).arg(cb / 1024));
     }
@@ -671,8 +671,8 @@ Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Scalpel Gaming Router");
     setStyleSheet(DARK_STYLESHEET);
     setup_ui();
-    // Data timer: 1Hz, always on — updates router stats labels
-    data_timer_id_ = startTimer(1000, Qt::CoarseTimer);
+    // Data timer: 25Hz (40ms), always on — feeds RealTimePlot and router stats labels
+    data_timer_id_ = startTimer(40, Qt::CoarseTimer);
 }
 
 void Dashboard::setup_ui() {
@@ -823,15 +823,15 @@ void Dashboard::timerEvent(QTimerEvent* event) {
 
     if (id != data_timer_id_) return;
 
-    // Data tick (1Hz): update router stats labels
+    // Data tick (25Hz / 40ms): feed plots and update router stats labels
     data_tick_++;
     auto& tel = Telemetry::instance();
 
-    // Bandwidth: delta since last tick (1s interval)
+    // Bandwidth: delta over 40ms tick, scaled to Mbps (×25 = per-second rate)
     uint64_t cur_b2 = tel.core_metrics[2].bytes.load(std::memory_order_relaxed);
     uint64_t cur_b3 = tel.core_metrics[3].bytes.load(std::memory_order_relaxed);
-    double dl = (cur_b2 - last_bytes[2]) * 8.0 / 1e6;
-    double ul = (cur_b3 - last_bytes[3]) * 8.0 / 1e6;
+    double dl = (cur_b2 - last_bytes[2]) * 8.0 * 25.0 / 1e6;
+    double ul = (cur_b3 - last_bytes[3]) * 8.0 * 25.0 / 1e6;
     status_dl->setText(QString("↓ %1 Mbps").arg(dl, 0, 'f', 2));
     status_ul->setText(QString("↑ %1 Mbps").arg(ul, 0, 'f', 2));
 
