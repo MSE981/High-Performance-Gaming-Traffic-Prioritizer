@@ -12,10 +12,10 @@
 #include <QMessageBox>
 #include <thread>
 #include <print>
-#include <fstream>
-#include <sstream>
 #include <filesystem>
 #include <algorithm>
+#include <fcntl.h>
+#include <unistd.h>
 #include <QSignalBlocker>
 
 namespace Scalpel::GUI {
@@ -277,10 +277,17 @@ void InterfacePage::scan_interfaces() {
     auto populate = [this](std::vector<std::string> names) {
         std::sort(names.begin(), names.end());
         for (const auto& name : names) {
-            // Read link state from sysfs
+            // Read link state from sysfs — raw fd, never std::ifstream on Core 0
             std::string state = "未知";
-            std::ifstream sf("/sys/class/net/" + name + "/operstate");
-            if (sf.is_open()) std::getline(sf, state);
+            {
+                char buf[16]{};
+                int fd = ::open(("/sys/class/net/" + name + "/operstate").c_str(), O_RDONLY);
+                if (fd >= 0) {
+                    ssize_t n = ::read(fd, buf, sizeof(buf) - 1);
+                    if (n > 0) { buf[n - 1] = '\0'; state = buf; } // strip trailing \n
+                    ::close(fd);
+                }
+            }
 
             // Determine initial role: stored config takes priority, then defaults
             Config::IfaceRole role = Config::IfaceRole::DISABLED;
