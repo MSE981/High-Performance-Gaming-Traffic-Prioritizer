@@ -7,6 +7,7 @@
 #include <QPainterPath>
 #include <QLinearGradient>
 #include <QTimerEvent>
+#include <QResizeEvent>
 #include <QFormLayout>
 #include <QScrollArea>
 #include <QMessageBox>
@@ -801,6 +802,12 @@ void Dashboard::exit_anim_mode() {
     if (anim_timer_id_ == -1) return;
     killTimer(anim_timer_id_);
     anim_timer_id_ = -1;
+}
+
+void Dashboard::resizeEvent(QResizeEvent* event) {
+    QMainWindow::resizeEvent(event);
+    if (notif_panel_)
+        notif_panel_->setFixedWidth(centralWidget()->width());
 }
 
 void Dashboard::timerEvent(QTimerEvent* event) {

@@ -173,6 +173,7 @@ public:
     explicit Dashboard(QWidget* parent = nullptr);
 protected:
     void timerEvent(QTimerEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 private:
     void setup_ui();
     void setup_nav();
