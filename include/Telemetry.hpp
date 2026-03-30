@@ -39,6 +39,16 @@ namespace Scalpel {
             std::atomic<uint64_t> uptime_seconds{0};
             std::atomic<uint64_t> mem_total_kb{0};
             std::atomic<uint64_t> mem_avail_kb{0};
+
+            // Network interface cache: Core 1 watchdog scans /sys/class/net every 5s.
+            // Qt UI reads iface_count + ifaces[] — zero file I/O on Core 0.
+            static constexpr uint8_t MAX_IFACES = 8;
+            struct IfaceEntry {
+                std::array<char, 16> name{};       // e.g. "eth0"
+                std::array<char, 8>  operstate{};  // "up", "down", "unknown"
+            };
+            std::array<IfaceEntry, MAX_IFACES> ifaces{};
+            std::atomic<uint8_t> iface_count{0};  // written last (release), read first (acquire)
         };
         alignas(64) SystemInfo sys_info{};
 

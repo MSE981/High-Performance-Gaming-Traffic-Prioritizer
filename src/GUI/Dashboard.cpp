@@ -13,7 +13,6 @@
 #include <QMessageBox>
 #include <thread>
 #include <print>
-#include <filesystem>
 #include <algorithm>
 #include <fcntl.h>
 #include <unistd.h>
@@ -275,69 +274,59 @@ void InterfacePage::scan_interfaces() {
     iface_table->setRowCount(0);
     role_combos.clear();
 
-    auto populate = [this](std::vector<std::string> names) {
-        std::sort(names.begin(), names.end());
-        for (const auto& name : names) {
-            // Read link state from sysfs — raw fd, never std::ifstream on Core 0
-            std::string state = "未知";
-            {
-                char buf[16]{};
-                int fd = ::open(("/sys/class/net/" + name + "/operstate").c_str(), O_RDONLY);
-                if (fd >= 0) {
-                    ssize_t n = ::read(fd, buf, sizeof(buf) - 1);
-                    if (n > 0) { buf[n - 1] = '\0'; state = buf; } // strip trailing \n
-                    ::close(fd);
-                }
-            }
+    // Read interface list from Core 1 watchdog pre-cache — zero file I/O on Core 0 (§7.7)
+    auto& si = Telemetry::instance().sys_info;
+    uint8_t cnt = si.iface_count.load(std::memory_order_acquire);
 
-            // Determine initial role: stored config takes priority, then defaults
-            Config::IfaceRole role = Config::IfaceRole::DISABLED;
-            if (Config::IFACE_ROLES.count(name)) {
-                role = Config::IFACE_ROLES.at(name);
-            } else if (name == "eth0") {
-                role = Config::IfaceRole::GATEWAY;
-            } else if (name == "eth1") {
-                role = Config::IfaceRole::LAN;
-            }
+    using IfacePair = std::pair<std::string, std::string>; // {name, operstate}
+    std::array<IfacePair, Telemetry::SystemInfo::MAX_IFACES> buf;
+    uint8_t valid = 0;
+    if (cnt > 0) {
+        for (uint8_t i = 0; i < cnt; ++i)
+            buf[valid++] = { si.ifaces[i].name.data(), si.ifaces[i].operstate.data() };
+    } else {
+        // Watchdog not yet populated (startup race): static fallback
+        buf[0] = {"eth0", "unknown"}; buf[1] = {"eth1", "unknown"};
+        buf[2] = {"eth2", "unknown"}; buf[3] = {"eth3", "unknown"};
+        valid = 4;
+    }
+    std::sort(buf.begin(), buf.begin() + valid,
+        [](const IfacePair& a, const IfacePair& b) { return a.first < b.first; });
 
-            int row = iface_table->rowCount();
-            iface_table->insertRow(row);
+    for (uint8_t i = 0; i < valid; ++i) {
+        const auto& [name, state] = buf[i];
 
-            // Col 0: interface name (read-only)
-            auto* name_item = new QTableWidgetItem(QString::fromStdString(name));
-            name_item->setTextAlignment(Qt::AlignCenter);
-            iface_table->setItem(row, 0, name_item);
-
-            // Col 1: role combo — set index BEFORE connecting signal
-            auto* combo = new QComboBox();
-            combo->addItems({"外网 (WAN)", "内网 (LAN)", "默认网关", "禁用"});
-            combo->setCurrentIndex(static_cast<int>(role));
-            role_combos[name] = combo;
-            iface_table->setCellWidget(row, 1, combo);
-
-            // Col 2: link state indicator
-            bool is_up = (state == "up");
-            auto* state_lbl = new QLabel(is_up ? "● 已连接" : "○ 断开");
-            state_lbl->setAlignment(Qt::AlignCenter);
-            state_lbl->setStyleSheet(is_up ? "color: #00cc66;" : "color: #888888;");
-            iface_table->setCellWidget(row, 2, state_lbl);
-
-            // Connect after setCurrentIndex to avoid spurious on_role_changed calls
-            connect(combo, &QComboBox::currentIndexChanged, this, [this, name](int index) {
-                on_role_changed(QString::fromStdString(name), index);
-            });
+        Config::IfaceRole role = Config::IfaceRole::DISABLED;
+        if (Config::IFACE_ROLES.count(name)) {
+            role = Config::IFACE_ROLES.at(name);
+        } else if (name == "eth0") {
+            role = Config::IfaceRole::GATEWAY;
+        } else if (name == "eth1") {
+            role = Config::IfaceRole::LAN;
         }
-    };
 
-    try {
-        std::vector<std::string> names;
-        for (const auto& entry : std::filesystem::directory_iterator("/sys/class/net")) {
-            std::string n = entry.path().filename().string();
-            if (n != "lo") names.push_back(n);
-        }
-        populate(std::move(names));
-    } catch (...) {
-        populate({"eth0", "eth1", "eth2", "eth3"});
+        int row = iface_table->rowCount();
+        iface_table->insertRow(row);
+
+        auto* name_item = new QTableWidgetItem(QString::fromStdString(name));
+        name_item->setTextAlignment(Qt::AlignCenter);
+        iface_table->setItem(row, 0, name_item);
+
+        auto* combo = new QComboBox();
+        combo->addItems({"外网 (WAN)", "内网 (LAN)", "默认网关", "禁用"});
+        combo->setCurrentIndex(static_cast<int>(role));
+        role_combos[name] = combo;
+        iface_table->setCellWidget(row, 1, combo);
+
+        bool is_up = (state == "up");
+        auto* state_lbl = new QLabel(is_up ? "● 已连接" : "○ 断开");
+        state_lbl->setAlignment(Qt::AlignCenter);
+        state_lbl->setStyleSheet(is_up ? "color: #00cc66;" : "color: #888888;");
+        iface_table->setCellWidget(row, 2, state_lbl);
+
+        connect(combo, &QComboBox::currentIndexChanged, this, [this, name](int index) {
+            on_role_changed(QString::fromStdString(name), index);
+        });
     }
 }
 

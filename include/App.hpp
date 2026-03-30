@@ -32,6 +32,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <cstring>
+#include <dirent.h>
 
 namespace Scalpel {
 
@@ -521,6 +522,39 @@ namespace Scalpel {
                             si.mem_total_kb.store(total, std::memory_order_relaxed);
                             si.mem_avail_kb.store(avail, std::memory_order_relaxed);
                         }
+                    }
+
+                    // Scan /sys/class/net — raw fd + POSIX readdir, Core 1 only
+                    {
+                        uint8_t cnt = 0;
+                        DIR* d = opendir("/sys/class/net");
+                        if (d) {
+                            struct dirent* de;
+                            while ((de = readdir(d)) != nullptr &&
+                                   cnt < Telemetry::SystemInfo::MAX_IFACES) {
+                                if (de->d_name[0] == '.' ||
+                                    strncmp(de->d_name, "lo", 3) == 0) continue;
+                                strncpy(si.ifaces[cnt].name.data(), de->d_name, 15);
+                                si.ifaces[cnt].name[15] = '\0';
+                                char path[64];
+                                snprintf(path, sizeof(path),
+                                    "/sys/class/net/%s/operstate", de->d_name);
+                                char sbuf[8]{};
+                                int sfd = ::open(path, O_RDONLY);
+                                if (sfd >= 0) {
+                                    ssize_t n = ::read(sfd, sbuf, sizeof(sbuf) - 1);
+                                    ::close(sfd);
+                                    if (n > 0 && sbuf[n - 1] == '\n') sbuf[n - 1] = '\0';
+                                }
+                                strncpy(si.ifaces[cnt].operstate.data(),
+                                    sbuf[0] ? sbuf : "unknown", 7);
+                                si.ifaces[cnt].operstate[7] = '\0';
+                                ++cnt;
+                            }
+                            closedir(d);
+                        }
+                        // Release store: Qt acquire-load in scan_interfaces() sees completed writes
+                        si.iface_count.store(cnt, std::memory_order_release);
                     }
                 }
 
