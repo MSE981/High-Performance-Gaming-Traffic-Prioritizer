@@ -422,7 +422,7 @@ namespace Scalpel {
                 if (shpr) shpr->process_queue(tx_fd);
                 // Only scan per-IP shaper table when at least one IP limit is configured,
                 // avoiding 256 empty-slot iterations per poll cycle when no limits are active.
-                if (consumer.qos_config && !Config::IP_LIMIT_MAP.empty()) {
+                if (consumer.qos_config && Config::IP_LIMIT_ACTIVE.load(std::memory_order_relaxed)) {
                     size_t active_idx = consumer.qos_config->active_idx.load(std::memory_order_relaxed);
                     consumer.qos_config->buffers[active_idx].for_each_occupied([&](auto& shaper) {
                         shaper->process_queue(tx_fd);

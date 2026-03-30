@@ -49,6 +49,10 @@ namespace Scalpel::Config {
 
     // Software router feature: per-device IP rate limit table
     inline std::map<uint32_t, double> IP_LIMIT_MAP;
+    // Atomic flag: true when IP_LIMIT_MAP has at least one entry.
+    // Hot forwarding loop reads this instead of IP_LIMIT_MAP.empty() to avoid
+    // cross-core access to the std::map internals on Core 2/3.
+    inline std::atomic<bool> IP_LIMIT_ACTIVE{false};
 
     // Helper: check if port is a game port
     inline bool is_game_port(uint16_t port) {
@@ -152,6 +156,7 @@ namespace Scalpel::Config {
             }
             if (!BRIDGED_INTERFACES.empty()) IFACE_LAN = BRIDGED_INTERFACES[0];
         }
+        IP_LIMIT_ACTIVE.store(!IP_LIMIT_MAP.empty(), std::memory_order_release);
         std::println("[Config] Config loaded: {}", path);
     }
 
