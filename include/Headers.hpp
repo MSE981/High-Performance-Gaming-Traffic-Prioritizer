@@ -1,5 +1,8 @@
 #pragma once
 #include <cstdint>
+#include <atomic>
+#include <array>
+#include <span>
 #include <netinet/in.h>
 
 namespace Scalpel::Net {
