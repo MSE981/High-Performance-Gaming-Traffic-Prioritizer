@@ -37,8 +37,7 @@ target_compile_definitions(GamingTrafficPrioritizer PRIVATE _GNU_SOURCE)
 
 # Raspberry Pi 5 (Cortex-A76) peak optimization flags
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(GamingTrafficPrioritizer PRIVATE 
-        -std=c++23
+    target_compile_options(GamingTrafficPrioritizer PRIVATE
         -O3
         -mcpu=cortex-a76
         -mtune=cortex-a76
