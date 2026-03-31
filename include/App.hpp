@@ -443,9 +443,9 @@ namespace Scalpel {
             if (tfd == -1) return;
 
             struct itimerspec its{};
-            its.it_value.tv_sec = 1;      // 1秒后启动
+            its.it_value.tv_sec = 1;      // first expiration after 1 second
             its.it_value.tv_nsec = 0;
-            its.it_interval.tv_sec = 1;   // 每隔1秒触发一次
+            its.it_interval.tv_sec = 1;   // fire every 1 second
             its.it_interval.tv_nsec = 0;
 
             if (timerfd_settime(tfd, 0, &its, NULL) == -1) {

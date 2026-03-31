@@ -407,7 +407,7 @@ void InterfacePage::on_scan_done() {
 }
 
 // ═════════════════════════════════════════════════════════════
-// QosPage: QoS 流量控制页
+// QosPage: QoS traffic control page
 // ═════════════════════════════════════════════════════════════
 QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
@@ -415,13 +415,13 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     title->setObjectName("section_title");
     layout->addWidget(title);
 
-    // 加速开关
+    // Acceleration toggle
     chk_acceleration = new QCheckBox("启用游戏流量加速 (启发式优先级调度)");
     chk_acceleration->setChecked(Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed));
     connect(chk_acceleration, &QCheckBox::toggled, this, &QosPage::on_toggle_accel);
     layout->addWidget(chk_acceleration);
 
-    // 带宽限制
+    // Bandwidth limit
     auto* bw_group = new QGroupBox("全局带宽限制");
     auto* bw_form = new QFormLayout(bw_group);
     edit_dl_limit = new QLineEdit("500");
@@ -430,7 +430,7 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     bw_form->addRow("上行限制 (Mbps):", edit_ul_limit);
     layout->addWidget(bw_group);
 
-    // IP 限速规则表
+    // Per-IP rate limit rules table
     auto* rules_group = new QGroupBox("IP 限速规则");
     auto* rules_lay = new QVBoxLayout(rules_group);
 
@@ -441,7 +441,7 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     rules_table->verticalHeader()->setVisible(false);
     rules_lay->addWidget(rules_table);
 
-    // 从当前配置加载
+    // Load from current config
     for (size_t idx = 0; idx < Config::IP_LIMIT_COUNT; ++idx) {
         uint32_t ip = Config::IP_LIMIT_TABLE[idx].ip;
         double rate = Config::IP_LIMIT_TABLE[idx].rate;
@@ -500,7 +500,7 @@ void QosPage::on_remove_rule() {
 }
 
 // ═════════════════════════════════════════════════════════════
-// ServicePage: 服务开关页
+// ServicePage: service toggle page
 // ═════════════════════════════════════════════════════════════
 ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
@@ -547,7 +547,7 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
         row_lay->addLayout(text_col, 1);
         row_lay->addWidget(rows[i].status_label);
 
-        // 连接信号
+        // Connect signal
         auto* state_ptr = defs[i].state;
         auto* status_lbl = rows[i].status_label;
         connect(rows[i].chk, &QCheckBox::toggled, [state_ptr, status_lbl](bool checked) {
@@ -578,7 +578,7 @@ void ServicePage::refresh_status() {
 }
 
 // ═════════════════════════════════════════════════════════════
-// SystemPage: 系统管理页
+// SystemPage: system management page
 // ═════════════════════════════════════════════════════════════
 SystemPage::SystemPage(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
@@ -664,7 +664,7 @@ void SystemPage::on_restart_engine() {
 }
 
 // ═════════════════════════════════════════════════════════════
-// PlaceholderPage: 占位页 (Docker / VPN)
+// PlaceholderPage: placeholder (Docker / VPN)
 // ═════════════════════════════════════════════════════════════
 PlaceholderPage::PlaceholderPage(const QString& name, QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
@@ -681,7 +681,7 @@ PlaceholderPage::PlaceholderPage(const QString& name, QWidget* parent) : QWidget
 }
 
 // ═════════════════════════════════════════════════════════════
-// Dashboard: 主控面板框架
+// Dashboard: main control panel frame
 // ═════════════════════════════════════════════════════════════
 Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Scalpel Gaming Router");
@@ -699,7 +699,7 @@ void Dashboard::setup_ui() {
     root_layout->setContentsMargins(0, 0, 0, 0);
     root_layout->setSpacing(0);
 
-    // ── 顶部标题栏 ──
+    // ── Header bar ──
     auto* header = new QFrame();
     header->setObjectName("header_frame");
     auto* header_lay = new QHBoxLayout(header);
@@ -725,7 +725,7 @@ void Dashboard::setup_ui() {
 
     root_layout->addWidget(header);
 
-    // ── 中央区域：导航 + 堆栈 ──
+    // ── Center area: navigation + stack ──
     auto* body_layout = new QHBoxLayout();
     body_layout->setContentsMargins(0, 0, 0, 0);
     body_layout->setSpacing(0);
@@ -753,10 +753,10 @@ void Dashboard::setup_ui() {
 
     root_layout->addLayout(body_layout, 1);
 
-    // ── 底部状态栏 ──
+    // ── Bottom status bar ──
     setup_statusbar();
 
-    // ── 通知面板：浮动在所有内容之上，初始隐藏于屏幕顶部外侧 ──
+    // ── Notification panel: floats above all content, initially hidden above screen ──
     notif_panel_ = new NotificationPanel(centralWidget());
     notif_panel_->setFixedWidth(centralWidget()->width());
     notif_panel_->raise();
@@ -793,13 +793,13 @@ void Dashboard::setup_statusbar() {
 
 void Dashboard::on_nav_changed(int index) {
     page_stack->setCurrentIndex(index);
-    // 切换到系统页时刷新信息
+    // Refresh system info when switching to system page
     if (index == 6) page_system->refresh_info();
 }
 
 void Dashboard::on_shutdown_clicked() {
-    // QApplication::quit() 使 qapp.exec() 返回，main.cpp 中的关闭流程
-    // 负责调用 app.stop() 并等待所有 jthread 安全退出。
+    // QApplication::quit() unblocks qapp.exec(); shutdown sequence in main.cpp
+    // calls app.stop() and waits for all jthreads to exit cleanly.
     QApplication::quit();
 }
 

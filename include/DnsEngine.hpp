@@ -95,7 +95,7 @@ namespace Scalpel::Logic {
 
             // Inject 16 bytes A record at packet end (assume RawSocket mmap ring has padding)
             uint8_t* tail = pkt.raw_span.data() + old_len;
-            tail[0] = 0xC0; tail[1] = 0x0C; // Name Pointer 回指 Question
+            tail[0] = 0xC0; tail[1] = 0x0C; // Name pointer back to Question section
             tail[2] = 0x00; tail[3] = 0x01; // Type A
             tail[4] = 0x00; tail[5] = 0x01; // Class IN
             tail[6] = 0x00; tail[7] = 0x00; tail[8] = 0x01; tail[9] = 0x2C; // TTL = 300 sec
