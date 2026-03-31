@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <cstdint>
+#include <atomic>
 #include <array>
 #include <print>
 #include <format>

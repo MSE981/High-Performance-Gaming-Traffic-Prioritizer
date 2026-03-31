@@ -1,6 +1,7 @@
 #pragma once
 #include <thread>
 #include <stop_token>
+#include <atomic>
 #include <memory>
 #include <expected>
 #include <chrono>
