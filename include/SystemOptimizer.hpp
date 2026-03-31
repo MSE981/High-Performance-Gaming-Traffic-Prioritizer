@@ -1,19 +1,23 @@
 #pragma once
-#include <fstream>
 #include <print>
-#include <format>
-#include <string>
 #include <cstdio>
 #include <pthread.h>
 #include <sched.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace Scalpel::System::Optimizer {
-    // Lock CPU frequency to performance mode
+    // Lock CPU frequency to performance mode (raw fd, no ifstream)
     inline void lock_cpu_frequency() {
         for (int i = 0; i < 4; ++i) {
-            std::string path = std::format("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor", i);
-            std::ofstream f(path);
-            if (f.is_open()) f << "performance";
+            char path[80];
+            snprintf(path, sizeof(path),
+                "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_governor", i);
+            int fd = ::open(path, O_WRONLY);
+            if (fd >= 0) {
+                ::write(fd, "performance", 11);
+                ::close(fd);
+            }
         }
         std::println("[System] CPU governor set to PERFORMANCE.");
     }

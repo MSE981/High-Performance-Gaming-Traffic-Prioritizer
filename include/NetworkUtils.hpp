@@ -1,14 +1,13 @@
 #pragma once
 #include <string>
-#include <vector>
-#include <fstream>
-#include <sstream>
 #include <print>
 #include <sys/ioctl.h>
 #include <net/if.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <cstring>
+#include <cstdio>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <linux/ethtool.h>
 #include <linux/sockios.h>
@@ -38,36 +37,61 @@ namespace Scalpel::Utils {
             return ip;
         }
 
-        // 2. Auto-get default gateway IP (from /proc/net/route)
+        // 2. Auto-get default gateway IP (raw fd, no ifstream)
         static std::string get_gateway_ip() {
-            std::ifstream route_file("/proc/net/route");
-            std::string line;
-            while (std::getline(route_file, line)) {
-                std::stringstream ss(line);
-                std::string iface, dest, gateway;
-                ss >> iface >> dest >> gateway;
-                // Destination 00000000 means default route
-                if (dest == "00000000") {
-                    unsigned int addr = std::stoul(gateway, nullptr, 16);
-                    struct in_addr in {};
-                    in.s_addr = addr;
-                    return inet_ntoa(in);
+            char buf[2048]{};
+            int fd = ::open("/proc/net/route", O_RDONLY);
+            if (fd < 0) return "";
+            ssize_t n = ::read(fd, buf, sizeof(buf) - 1);
+            ::close(fd);
+            if (n <= 0) return "";
+
+            // Parse line by line: skip header, find dest==00000000
+            char* line = buf;
+            char* end  = buf + n;
+            // Skip header line
+            while (line < end && *line != '\n') ++line;
+            if (line < end) ++line;
+
+            while (line < end) {
+                char iface[32]{}, dest[16]{}, gw[16]{};
+                if (sscanf(line, "%31s %15s %15s", iface, dest, gw) == 3) {
+                    if (strcmp(dest, "00000000") == 0) {
+                        unsigned int addr = 0;
+                        sscanf(gw, "%x", &addr);
+                        struct in_addr in{};
+                        in.s_addr = addr;
+                        return inet_ntoa(in);
+                    }
                 }
+                while (line < end && *line != '\n') ++line;
+                if (line < end) ++line;
             }
             return "";
         }
 
-        // 3. Auto-get MAC for target IP (from /proc/net/arp)
+        // 3. Auto-get MAC for target IP (raw fd, no ifstream)
         static std::string get_mac_from_arp(const std::string& target_ip) {
-            // Hint: if no result, may need to ping target IP first to activate ARP cache
-            std::ifstream arp_file("/proc/net/arp");
-            std::string line;
-            std::getline(arp_file, line); // Skip header line
-            while (std::getline(arp_file, line)) {
-                std::stringstream ss(line);
-                std::string ip, hw_type, flags, mac, mask, dev;
-                ss >> ip >> hw_type >> flags >> mac >> mask >> dev;
-                if (ip == target_ip) return mac;
+            char buf[4096]{};
+            int fd = ::open("/proc/net/arp", O_RDONLY);
+            if (fd < 0) return "";
+            ssize_t n = ::read(fd, buf, sizeof(buf) - 1);
+            ::close(fd);
+            if (n <= 0) return "";
+
+            // Skip header line
+            char* line = buf;
+            char* end  = buf + n;
+            while (line < end && *line != '\n') ++line;
+            if (line < end) ++line;
+
+            while (line < end) {
+                char ip[32]{}, hw[8]{}, flags[8]{}, mac[20]{};
+                if (sscanf(line, "%31s %7s %7s %19s", ip, hw, flags, mac) >= 4) {
+                    if (target_ip == ip) return mac;
+                }
+                while (line < end && *line != '\n') ++line;
+                if (line < end) ++line;
             }
             return "";
         }
