@@ -37,9 +37,9 @@ namespace Scalpel::Logic {
 
         static constexpr size_t CACHE_SIZE = 4096;
         std::array<DnsCacheEntry, CACHE_SIZE> cache{};
-        Net::SpscRingBuffer<DnsMessage, 1024> response_queue{}; 
-        
-        uint32_t current_tick = 0;
+        Net::SpscRingBuffer<DnsMessage, 1024> response_queue{};
+
+        std::atomic<uint32_t> current_tick{0};
 
         // FNV-1a Hash for domain string (QNAME)
         static uint32_t hash_qname(const uint8_t* qname, size_t max_len) {
@@ -53,7 +53,7 @@ namespace Scalpel::Logic {
         }
 
     public:
-        void tick() { current_tick++; }
+        void tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
 
         // Core 3 (Upstream: LAN -> WAN) - data plane cache hit and zero-copy bounce
         bool process_query(Net::ParsedPacket& pkt, int bounce_fd) {
@@ -79,7 +79,7 @@ namespace Scalpel::Logic {
 
             // Principle 3.0: pure dereference with acquire barrier for lock-free reads
             if (!cache[idx].valid.load(std::memory_order_acquire)) return false;
-            if (cache[idx].domain_hash != h || current_tick > cache[idx].expire_tick) {
+            if (cache[idx].domain_hash != h || current_tick.load(std::memory_order_relaxed) > cache[idx].expire_tick) {
                 cache[idx].valid.store(false, std::memory_order_relaxed);
                 return false;
             }
@@ -174,7 +174,7 @@ namespace Scalpel::Logic {
                         size_t idx = h % CACHE_SIZE;
                         cache[idx].domain_hash = h;
                         cache[idx].ipv4_address = ipv4;
-                        cache[idx].expire_tick = current_tick + 300; // Expiry in tick units
+                        cache[idx].expire_tick = current_tick.load(std::memory_order_relaxed) + 300;
                         // Principle 3.0: release barrier ensures memory writes complete before data plane acquires true
                         cache[idx].valid.store(true, std::memory_order_release);
 
