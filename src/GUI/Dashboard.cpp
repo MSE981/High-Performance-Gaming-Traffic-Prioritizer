@@ -307,13 +307,10 @@ void InterfacePage::scan_interfaces() {
     for (uint8_t i = 0; i < valid; ++i) {
         const auto& [name, state] = buf[i];
 
-        Config::IfaceRole role = Config::IfaceRole::DISABLED;
-        if (Config::IFACE_ROLES.count(name)) {
-            role = Config::IFACE_ROLES.at(name);
-        } else if (name == "eth0") {
-            role = Config::IfaceRole::GATEWAY;
-        } else if (name == "eth1") {
-            role = Config::IfaceRole::LAN;
+        Config::IfaceRole role = Config::find_role(name);
+        if (role == Config::IfaceRole::DISABLED) {
+            if (name == "eth0") role = Config::IfaceRole::GATEWAY;
+            else if (name == "eth1") role = Config::IfaceRole::LAN;
         }
 
         int row = iface_table->rowCount();
@@ -364,18 +361,18 @@ void InterfacePage::on_save_clicked() {
         return;
     }
 
-    // Persist role map
-    Config::IFACE_ROLES.clear();
+    // Persist role table
+    Config::clear_roles();
     for (const auto& [name, combo] : role_combos)
-        Config::IFACE_ROLES[name] = static_cast<Config::IfaceRole>(combo->currentIndex());
+        Config::set_role(name, static_cast<Config::IfaceRole>(combo->currentIndex()));
 
     // Derive legacy variables consumed by App
     Config::IFACE_GATEWAY = gw_iface;
     Config::IFACE_WAN = gw_iface;
-    Config::BRIDGED_INTERFACES.clear();
+    Config::clear_bridged();
     for (const auto& [name, combo] : role_combos)
-        if (combo->currentIndex() == 1) Config::BRIDGED_INTERFACES.push_back(name);
-    Config::IFACE_LAN = Config::BRIDGED_INTERFACES.empty() ? "" : Config::BRIDGED_INTERFACES[0];
+        if (combo->currentIndex() == 1) Config::add_bridged(name);
+    Config::IFACE_LAN = Config::BRIDGED_IFACES_COUNT == 0 ? "" : std::string(Config::BRIDGED_INTERFACES[0].name.data());
 
     Config::ENABLE_STP.store(chk_stp->isChecked(), std::memory_order_relaxed);
     Config::ENABLE_IGMP_SNOOPING.store(chk_igmp->isChecked(), std::memory_order_relaxed);
@@ -383,7 +380,7 @@ void InterfacePage::on_save_clicked() {
     Telemetry::instance().bridge_mode.store(true, std::memory_order_relaxed);
 
     std::println("[GUI] Interface roles saved. Gateway: {}, LAN interfaces: {}",
-        Config::IFACE_GATEWAY, Config::BRIDGED_INTERFACES.size());
+        Config::IFACE_GATEWAY, Config::BRIDGED_IFACES_COUNT);
 }
 
 void InterfacePage::on_reset_clicked() {
@@ -445,7 +442,9 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     rules_lay->addWidget(rules_table);
 
     // 从当前配置加载
-    for (auto& [ip, rate] : Config::IP_LIMIT_MAP) {
+    for (size_t idx = 0; idx < Config::IP_LIMIT_COUNT; ++idx) {
+        uint32_t ip = Config::IP_LIMIT_TABLE[idx].ip;
+        double rate = Config::IP_LIMIT_TABLE[idx].rate;
         int row = rules_table->rowCount();
         rules_table->insertRow(row);
         const uint8_t* b = reinterpret_cast<const uint8_t*>(&ip);

@@ -27,7 +27,6 @@
 #include <poll.h> 
 #include <future>
 #include <array>
-#include <map>
 #include <sys/timerfd.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -114,12 +113,12 @@ namespace Scalpel {
         std::array<StaticIpMap<std::shared_ptr<Traffic::Shaper>, 256>, 2> buffers;
         alignas(64) std::atomic<size_t> active_idx{0};
 
-        void update(const std::map<uint32_t, double>& limits) {
+        void update(const std::array<Config::IpLimitEntry, Config::MAX_IP_LIMITS>& table, size_t count) {
             size_t active = active_idx.load(std::memory_order_relaxed);
             size_t inactive = 1 - active;
             buffers[inactive] = {}; // Zero Allocation Refresh
-            for (auto const& [ip, rate] : limits) {
-                buffers[inactive].insert(ip, std::make_shared<Traffic::Shaper>(rate));
+            for (size_t i = 0; i < count; ++i) {
+                buffers[inactive].insert(table[i].ip, std::make_shared<Traffic::Shaper>(table[i].rate));
             }
             active_idx.store(inactive, std::memory_order_release);
         }
@@ -346,7 +345,7 @@ namespace Scalpel {
             qos_config = std::make_shared<QoSConfig>();
 
             // Initialize QoS lock-free double-buffer table
-            qos_config->update(Config::IP_LIMIT_MAP);
+            qos_config->update(Config::IP_LIMIT_TABLE, Config::IP_LIMIT_COUNT);
             nat_engine->set_wan_ip(Config::parse_ip_str(Config::ROUTER_IP));
         }
         std::expected<void, std::string> init() {
