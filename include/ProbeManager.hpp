@@ -107,8 +107,8 @@ namespace Scalpel::Probe {
         static void run_async_real_isp_probe(std::function<void(double, double)> on_complete) {
             std::println("[Probe C] Spawning asynchronous speedtest thread. Realtime engine will NOT block.");
 
-            // Spawn background thread for blocking task; fire-and-forget, no stop-token needed
-            std::jthread([cb = std::move(on_complete)]() {
+            // Fire-and-forget: use std::thread + detach, not jthread (no stop-token needed)
+            std::thread([cb = std::move(on_complete)]() {
                 std::array<char, 128> buffer{};
                 std::string result;
 
