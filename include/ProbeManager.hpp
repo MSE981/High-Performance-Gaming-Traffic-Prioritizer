@@ -1,7 +1,6 @@
 #pragma once
 #include <chrono>
 #include <cstring>
-#include <vector>
 #include <print>
 #include <array>
 #include <memory>

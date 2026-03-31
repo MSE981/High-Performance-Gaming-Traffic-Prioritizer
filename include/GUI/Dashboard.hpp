@@ -19,7 +19,6 @@
 #include <QComboBox>
 #include <QSocketNotifier>
 #include <array>
-#include <map>
 #include <string>
 #include "Telemetry.hpp"
 
@@ -98,7 +97,18 @@ private slots:
 private:
     void on_role_changed(const QString& iface, int index);
     QTableWidget* iface_table;
-    std::map<std::string, QComboBox*> role_combos;
+    struct RoleComboEntry {
+        std::array<char, 16> name{};
+        QComboBox* combo = nullptr;
+    };
+    std::array<RoleComboEntry, Telemetry::SystemInfo::MAX_IFACES> role_combos{};
+    size_t role_combos_count = 0;
+
+    QComboBox* find_combo(const std::string& name) const {
+        for (size_t i = 0; i < role_combos_count; ++i)
+            if (name == role_combos[i].name.data()) return role_combos[i].combo;
+        return nullptr;
+    }
     QCheckBox* chk_stp;
     QCheckBox* chk_igmp;
     QPushButton* btn_refresh = nullptr;

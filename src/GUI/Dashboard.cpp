@@ -283,7 +283,7 @@ InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
 
 void InterfacePage::scan_interfaces() {
     iface_table->setRowCount(0);
-    role_combos.clear();
+    role_combos_count = 0;
 
     // Read interface list from Core 1 watchdog pre-cache — zero file I/O on Core 0 (§7.7)
     auto& si = Telemetry::instance().sys_info;
@@ -323,7 +323,12 @@ void InterfacePage::scan_interfaces() {
         auto* combo = new QComboBox();
         combo->addItems({"外网 (WAN)", "内网 (LAN)", "默认网关", "禁用"});
         combo->setCurrentIndex(static_cast<int>(role));
-        role_combos[name] = combo;
+        if (role_combos_count < role_combos.size()) {
+            strncpy(role_combos[role_combos_count].name.data(), name.c_str(), 15);
+            role_combos[role_combos_count].name[15] = '\0';
+            role_combos[role_combos_count].combo = combo;
+            ++role_combos_count;
+        }
         iface_table->setCellWidget(row, 1, combo);
 
         bool is_up = (state == "up");
@@ -341,10 +346,11 @@ void InterfacePage::scan_interfaces() {
 void InterfacePage::on_role_changed(const QString& iface, int index) {
     if (index != 2) return; // Only enforce when a combo is set to GATEWAY
     // Demote any other gateway combo to WAN to maintain single-gateway invariant
-    for (auto& [name, combo] : role_combos) {
-        if (name != iface.toStdString() && combo->currentIndex() == 2) {
-            QSignalBlocker blocker(combo);
-            combo->setCurrentIndex(0); // demote to WAN
+    std::string iface_str = iface.toStdString();
+    for (size_t i = 0; i < role_combos_count; ++i) {
+        if (iface_str != role_combos[i].name.data() && role_combos[i].combo->currentIndex() == 2) {
+            QSignalBlocker blocker(role_combos[i].combo);
+            role_combos[i].combo->setCurrentIndex(0); // demote to WAN
         }
     }
 }
@@ -353,8 +359,8 @@ void InterfacePage::on_save_clicked() {
     // Validate: exactly one gateway must be assigned
     int gw_count = 0;
     std::string gw_iface;
-    for (const auto& [name, combo] : role_combos) {
-        if (combo->currentIndex() == 2) { ++gw_count; gw_iface = name; }
+    for (size_t i = 0; i < role_combos_count; ++i) {
+        if (role_combos[i].combo->currentIndex() == 2) { ++gw_count; gw_iface = role_combos[i].name.data(); }
     }
     if (gw_count == 0) {
         QMessageBox::warning(this, "配置错误", "请指定一个默认网关接口。");
@@ -363,15 +369,15 @@ void InterfacePage::on_save_clicked() {
 
     // Persist role table
     Config::clear_roles();
-    for (const auto& [name, combo] : role_combos)
-        Config::set_role(name, static_cast<Config::IfaceRole>(combo->currentIndex()));
+    for (size_t i = 0; i < role_combos_count; ++i)
+        Config::set_role(role_combos[i].name.data(), static_cast<Config::IfaceRole>(role_combos[i].combo->currentIndex()));
 
     // Derive legacy variables consumed by App
     Config::IFACE_GATEWAY = gw_iface;
     Config::IFACE_WAN = gw_iface;
     Config::clear_bridged();
-    for (const auto& [name, combo] : role_combos)
-        if (combo->currentIndex() == 1) Config::add_bridged(name);
+    for (size_t i = 0; i < role_combos_count; ++i)
+        if (role_combos[i].combo->currentIndex() == 1) Config::add_bridged(role_combos[i].name.data());
     Config::IFACE_LAN = Config::BRIDGED_IFACES_COUNT == 0 ? "" : std::string(Config::BRIDGED_INTERFACES[0].name.data());
 
     Config::ENABLE_STP.store(chk_stp->isChecked(), std::memory_order_relaxed);
