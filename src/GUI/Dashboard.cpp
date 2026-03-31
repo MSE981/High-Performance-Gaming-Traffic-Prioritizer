@@ -214,8 +214,8 @@ void OverviewPage::refresh(const Telemetry& tel, uint64_t last_p[4], uint64_t la
     pps_plot->update();
     bps_plot->update();
 
-    lbl_mode->setText(tel.bridge_mode.load() ? "Mode: Bridge" : "Mode: Acceleration");
-    double cap = tel.internal_limit_mbps.load();
+    lbl_mode->setText(tel.bridge_mode.load(std::memory_order_relaxed) ? "Mode: Bridge" : "Mode: Acceleration");
+    double cap = tel.internal_limit_mbps.load(std::memory_order_relaxed);
     if (cap > 0) lbl_cpu_capacity->setText(QString("CPU Capacity: %1 Mbps").arg(cap, 0, 'f', 1));
 }
 
@@ -251,10 +251,10 @@ InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
     auto* adv_group = new QGroupBox("高级选项");
     auto* adv_form = new QFormLayout(adv_group);
     chk_stp = new QCheckBox("开启 STP");
-    chk_stp->setChecked(Config::ENABLE_STP.load());
+    chk_stp->setChecked(Config::ENABLE_STP.load(std::memory_order_relaxed));
     adv_form->addRow("生成树协议:", chk_stp);
     chk_igmp = new QCheckBox("启用 IGMP 嗅探");
-    chk_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load());
+    chk_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed));
     adv_form->addRow("IGMP Snooping:", chk_igmp);
     layout->addWidget(adv_group);
 
@@ -379,7 +379,7 @@ void InterfacePage::on_save_clicked() {
 
     Config::ENABLE_STP.store(chk_stp->isChecked(), std::memory_order_relaxed);
     Config::ENABLE_IGMP_SNOOPING.store(chk_igmp->isChecked(), std::memory_order_relaxed);
-    Config::ENABLE_ACCELERATION.store(true);
+    Config::ENABLE_ACCELERATION.store(true, std::memory_order_relaxed);
     Telemetry::instance().bridge_mode.store(true, std::memory_order_relaxed);
 
     std::println("[GUI] Interface roles saved. Gateway: {}, LAN interfaces: {}",
@@ -388,8 +388,8 @@ void InterfacePage::on_save_clicked() {
 
 void InterfacePage::on_reset_clicked() {
     scan_interfaces(); // Rebuilds table from Config::IFACE_ROLES
-    chk_stp->setChecked(Config::ENABLE_STP.load());
-    chk_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load());
+    chk_stp->setChecked(Config::ENABLE_STP.load(std::memory_order_relaxed));
+    chk_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed));
 }
 
 void InterfacePage::on_refresh_clicked() {
@@ -420,7 +420,7 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
 
     // 加速开关
     chk_acceleration = new QCheckBox("启用游戏流量加速 (启发式优先级调度)");
-    chk_acceleration->setChecked(Config::ENABLE_ACCELERATION.load());
+    chk_acceleration->setChecked(Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed));
     connect(chk_acceleration, &QCheckBox::toggled, this, &QosPage::on_toggle_accel);
     layout->addWidget(chk_acceleration);
 
@@ -472,7 +472,7 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
 
 void QosPage::on_toggle_accel() {
     bool on = chk_acceleration->isChecked();
-    Config::ENABLE_ACCELERATION.store(on);
+    Config::ENABLE_ACCELERATION.store(on, std::memory_order_relaxed);
     Telemetry::instance().bridge_mode.store(!on, std::memory_order_relaxed);
     std::println("[GUI] 加速模式: {}", on ? "ON" : "OFF");
 }

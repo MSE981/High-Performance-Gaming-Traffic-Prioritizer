@@ -173,21 +173,21 @@ namespace Scalpel::Config {
         file << "IFACE_WAN=" << IFACE_WAN << "\n";
         file << "IFACE_LAN=" << IFACE_LAN << "\n";
         file << "ROUTER_IP=" << ROUTER_IP << "\n";
-        file << "ENABLE_ACCELERATION=" << b(ENABLE_ACCELERATION.load()) << "\n";
-        file << "ENABLE_STP=" << b(ENABLE_STP.load()) << "\n";
-        file << "ENABLE_IGMP_SNOOPING=" << b(ENABLE_IGMP_SNOOPING.load()) << "\n";
+        file << "ENABLE_ACCELERATION=" << b(ENABLE_ACCELERATION.load(std::memory_order_relaxed)) << "\n";
+        file << "ENABLE_STP=" << b(ENABLE_STP.load(std::memory_order_relaxed)) << "\n";
+        file << "ENABLE_IGMP_SNOOPING=" << b(ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed)) << "\n";
         for (const auto& iface : BRIDGED_INTERFACES)
             file << "BRIDGE_IFACE=" << iface << "\n";
         file << "LARGE_PACKET_THRESHOLD=" << LARGE_PACKET_THRESHOLD << "\n";
         file << "PUNISH_TRIGGER_COUNT=" << PUNISH_TRIGGER_COUNT << "\n";
         file << "CLEANUP_INTERVAL=" << CLEANUP_INTERVAL << "\n";
-        file << "enable_gui=" << b(global_state.enable_gui.load()) << "\n";
-        file << "enable_nat=" << b(global_state.enable_nat.load()) << "\n";
-        file << "enable_dhcp=" << b(global_state.enable_dhcp.load()) << "\n";
-        file << "enable_dns_cache=" << b(global_state.enable_dns_cache.load()) << "\n";
-        file << "enable_upnp=" << b(global_state.enable_upnp.load()) << "\n";
-        file << "enable_firewall=" << b(global_state.enable_firewall.load()) << "\n";
-        file << "enable_pppoe=" << b(global_state.enable_pppoe.load()) << "\n";
+        file << "enable_gui=" << b(global_state.enable_gui.load(std::memory_order_relaxed)) << "\n";
+        file << "enable_nat=" << b(global_state.enable_nat.load(std::memory_order_relaxed)) << "\n";
+        file << "enable_dhcp=" << b(global_state.enable_dhcp.load(std::memory_order_relaxed)) << "\n";
+        file << "enable_dns_cache=" << b(global_state.enable_dns_cache.load(std::memory_order_relaxed)) << "\n";
+        file << "enable_upnp=" << b(global_state.enable_upnp.load(std::memory_order_relaxed)) << "\n";
+        file << "enable_firewall=" << b(global_state.enable_firewall.load(std::memory_order_relaxed)) << "\n";
+        file << "enable_pppoe=" << b(global_state.enable_pppoe.load(std::memory_order_relaxed)) << "\n";
         for (const auto& [ip, rate] : IP_LIMIT_MAP)
             file << "IP_LIMIT=" << ip_to_str(ip) << ":" << rate << "\n";
         file << "IFACE_GATEWAY=" << IFACE_GATEWAY << "\n";

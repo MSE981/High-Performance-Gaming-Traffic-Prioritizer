@@ -379,8 +379,8 @@ namespace Scalpel {
             lan_fd_ = fd_lan; // cache before iface_lan is moved into the worker thread
 
             auto& tel = Telemetry::instance();
-            double dl = tel.isp_down_limit_mbps.load() > 1.0 ? tel.isp_down_limit_mbps.load() : 500.0;
-            double ul = tel.isp_up_limit_mbps.load() > 1.0 ? tel.isp_up_limit_mbps.load() : 50.0;
+            double dl = tel.isp_down_limit_mbps.load(std::memory_order_relaxed) > 1.0 ? tel.isp_down_limit_mbps.load(std::memory_order_relaxed) : 500.0;
+            double ul = tel.isp_up_limit_mbps.load(std::memory_order_relaxed) > 1.0 ? tel.isp_up_limit_mbps.load(std::memory_order_relaxed) : 50.0;
 
             auto shaper_dl = std::make_shared<Traffic::Shaper>(dl * 0.85);
             auto shaper_ul = std::make_shared<Traffic::Shaper>(ul * 0.85);
@@ -595,7 +595,7 @@ namespace Scalpel {
                 double ul_mbps = (total_bytes_up - last_bytes[3]) * 8.0 / 1e6;
 
                 std::println("[Monitor] DL: {:.2f} Mbps | UL: {:.2f} Mbps | Mode: {}",
-                    dl_mbps, ul_mbps, tel.bridge_mode.load() ? "Bridge" : "Accel");
+                    dl_mbps, ul_mbps, tel.bridge_mode.load(std::memory_order_relaxed) ? "Bridge" : "Accel");
 
                 last_bytes[2] = total_bytes_down;
                 last_bytes[3] = total_bytes_up;

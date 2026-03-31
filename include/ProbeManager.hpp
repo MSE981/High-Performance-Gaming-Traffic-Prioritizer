@@ -54,7 +54,7 @@ namespace Scalpel::Probe {
 
             double pps = count / 5.0;
             tel.internal_limit_mbps.store((pps * 64 * 8) / 1e6, std::memory_order_relaxed);
-            std::println("[Probe A] CPU capacity: {:.2f} Mbps ({} PPS)", tel.internal_limit_mbps.load(), pps);
+            std::println("[Probe A] CPU capacity: {:.2f} Mbps ({} PPS)", tel.internal_limit_mbps.load(std::memory_order_relaxed), pps);
             tel.is_probing.store(false, std::memory_order_relaxed);
         }
 
