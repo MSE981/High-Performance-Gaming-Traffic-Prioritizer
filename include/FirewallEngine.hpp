@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <netinet/in.h>
@@ -35,13 +36,13 @@ namespace Scalpel::Logic {
     class FirewallEngine {
         struct ConnTrackEntry {
             uint32_t  remote_ip   = 0;
-            uint16_t  remote_port = 0;   // network byte order — compared directly with packet fields
+            uint16_t  remote_port = 0;   // network byte order
             uint32_t  lan_ip      = 0;
             uint16_t  lan_port    = 0;   // network byte order
             uint8_t   protocol    = 0;
-            ConnState state       = ConnState::SYN_SENT;
-            bool      active      = false;
-            uint32_t  last_tick   = 0;
+            std::atomic<ConnState> state{ConnState::SYN_SENT};
+            std::atomic<bool>     active{false};
+            std::atomic<uint32_t> last_tick{0};
         };
 
         static constexpr size_t   TABLE_SIZE          = 65536;
@@ -51,7 +52,7 @@ namespace Scalpel::Logic {
         static constexpr uint32_t TIMEOUT_FIN_WAIT    = 30;   // 30 s — closing connection drains quickly
 
         std::array<ConnTrackEntry, TABLE_SIZE> table{};
-        uint32_t current_tick = 0;
+        std::atomic<uint32_t> current_tick{0};
 
         // FNV-1a keyed on remote side only — ensures outbound writes and inbound reads
         // hash to the same bucket, making cross-direction lookup possible.
@@ -67,19 +68,22 @@ namespace Scalpel::Logic {
             return h;
         }
 
-        uint32_t timeout_for(ConnState s) const {
+        static uint32_t timeout_for(ConnState s) {
             if (s == ConnState::ESTABLISHED) return TIMEOUT_ESTABLISHED;
             if (s == ConnState::FIN_WAIT)    return TIMEOUT_FIN_WAIT;
             return TIMEOUT_SYN_SENT;
         }
 
         bool is_expired(const ConnTrackEntry& e) const {
-            return (current_tick - e.last_tick) > timeout_for(e.state);
+            uint32_t tick = current_tick.load(std::memory_order_relaxed);
+            uint32_t lt   = e.last_tick.load(std::memory_order_relaxed);
+            ConnState st  = e.state.load(std::memory_order_relaxed);
+            return (tick - lt) > timeout_for(st);
         }
 
     public:
         // Core 1: advance logical clock (called at 1 Hz by watchdog)
-        void tick() { current_tick++; }
+        void tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
 
         // Core 3 (LAN→WAN): register or refresh outbound session BEFORE SNAT.
         //
@@ -111,11 +115,13 @@ namespace Scalpel::Logic {
             uint32_t h = hash_remote(remote_ip, remote_port, proto) % TABLE_SIZE;
             int32_t  free_slot = -1;
 
+            uint32_t tick = current_tick.load(std::memory_order_relaxed);
+
             for (size_t i = 0; i < PROBE_LIMIT; ++i) {
                 size_t idx = (h + i) % TABLE_SIZE;
                 auto& e = table[idx];
 
-                if (!e.active || is_expired(e)) {
+                if (!e.active.load(std::memory_order_acquire) || is_expired(e)) {
                     if (free_slot == -1) free_slot = static_cast<int32_t>(idx);
                     continue;
                 }
@@ -127,42 +133,41 @@ namespace Scalpel::Logic {
 
                     if (proto == 6) {
                         uint16_t flags = ntohs(pkt.tcp()->res1_doff_flags);
-                        if (flags & 0x0004) {          // RST — close immediately
-                            e.active = false;
-                        } else if (flags & 0x0001) {   // FIN — begin closing
-                            e.state     = ConnState::FIN_WAIT;
-                            e.last_tick = current_tick;
+                        if (flags & 0x0004) {          // RST
+                            e.active.store(false, std::memory_order_release);
+                        } else if (flags & 0x0001) {   // FIN
+                            e.state.store(ConnState::FIN_WAIT, std::memory_order_relaxed);
+                            e.last_tick.store(tick, std::memory_order_relaxed);
                         } else {
-                            e.last_tick = current_tick;
+                            e.last_tick.store(tick, std::memory_order_relaxed);
                         }
                     } else {
-                        e.last_tick = current_tick;
+                        e.last_tick.store(tick, std::memory_order_relaxed);
                     }
                     return;
                 }
             }
 
-            // No existing entry for this 5-tuple — create one at first free slot
-            if (free_slot == -1) return;  // probe segment full, discard silently
+            // No existing entry — create at first free slot
+            if (free_slot == -1) return;
             auto& ne      = table[free_slot];
             ne.remote_ip   = remote_ip;
             ne.remote_port = remote_port;
             ne.lan_ip      = lan_ip;
             ne.lan_port    = lan_port;
             ne.protocol    = proto;
-            ne.last_tick   = current_tick;
-            ne.active      = true;
+            ne.last_tick.store(tick, std::memory_order_relaxed);
 
             if (proto == 6) {
                 uint16_t flags = ntohs(pkt.tcp()->res1_doff_flags);
-                // Pure SYN (no ACK): start handshake tracking.
-                // Any other TCP flag combination (e.g. mid-session recovery): trust as ESTABLISHED.
-                ne.state = ((flags & 0x0002) && !(flags & 0x0010))
-                           ? ConnState::SYN_SENT
-                           : ConnState::ESTABLISHED;
+                ne.state.store(((flags & 0x0002) && !(flags & 0x0010))
+                               ? ConnState::SYN_SENT
+                               : ConnState::ESTABLISHED, std::memory_order_relaxed);
             } else {
-                ne.state = ConnState::ESTABLISHED;
+                ne.state.store(ConnState::ESTABLISHED, std::memory_order_relaxed);
             }
+            // Release store on active: ensures all identity fields are visible to other cores
+            ne.active.store(true, std::memory_order_release);
         }
 
         // Core 2 (WAN→LAN): enforce stateful inspection BEFORE DNAT.
@@ -199,20 +204,21 @@ namespace Scalpel::Logic {
             }
 
             uint32_t h = hash_remote(remote_ip, sport, proto) % TABLE_SIZE;
+            uint32_t tick = current_tick.load(std::memory_order_relaxed);
 
             for (size_t i = 0; i < PROBE_LIMIT; ++i) {
                 size_t idx = (h + i) % TABLE_SIZE;
                 auto& e = table[idx];
 
-                if (!e.active || is_expired(e)) continue;
+                if (!e.active.load(std::memory_order_acquire) || is_expired(e)) continue;
 
                 if (e.remote_ip != remote_ip || e.remote_port != sport || e.protocol != proto)
                     continue;
 
-                // Matching conntrack entry found — apply state machine
+                // Matching conntrack entry found
                 if (proto == 17) {
-                    e.last_tick = current_tick;
-                    return true;  // UDP: established session, allow
+                    e.last_tick.store(tick, std::memory_order_relaxed);
+                    return true;
                 }
 
                 // TCP stateful inspection
@@ -223,46 +229,43 @@ namespace Scalpel::Logic {
                 bool rst = (flags & 0x0004) != 0;
 
                 if (rst) {
-                    // RST must reach the LAN client to properly abort the connection
-                    e.active = false;
+                    e.active.store(false, std::memory_order_release);
                     return true;
                 }
 
-                switch (e.state) {
+                ConnState st = e.state.load(std::memory_order_relaxed);
+                switch (st) {
                     case ConnState::SYN_SENT:
                         if (syn && ack) {
-                            // Server accepted our SYN — three-way handshake complete
-                            e.state     = ConnState::ESTABLISHED;
-                            e.last_tick = current_tick;
+                            e.state.store(ConnState::ESTABLISHED, std::memory_order_relaxed);
+                            e.last_tick.store(tick, std::memory_order_relaxed);
                             return true;
                         }
-                        // Server sent data before completing handshake — block
                         return false;
 
                     case ConnState::ESTABLISHED:
                         if (fin) {
-                            e.state = ConnState::FIN_WAIT;
+                            e.state.store(ConnState::FIN_WAIT, std::memory_order_relaxed);
                         }
-                        e.last_tick = current_tick;
+                        e.last_tick.store(tick, std::memory_order_relaxed);
                         return true;
 
                     case ConnState::FIN_WAIT:
-                        // Allow remaining ACKs and the peer's FIN through
-                        e.last_tick = current_tick;
+                        e.last_tick.store(tick, std::memory_order_relaxed);
                         return true;
                 }
 
                 return false;
             }
 
-            return false;  // no matching entry — unsolicited inbound, block
+            return false;
         }
 
         // Core 1 (watchdog): expire timed-out entries with state-aware timeouts (called at 1 Hz)
         void cleanup() {
             for (auto& e : table) {
-                if (e.active && is_expired(e)) {
-                    e.active = false;
+                if (e.active.load(std::memory_order_relaxed) && is_expired(e)) {
+                    e.active.store(false, std::memory_order_release);
                 }
             }
         }
