@@ -84,8 +84,8 @@ namespace Scalpel::Logic {
         }
 
     private:
-        void handle_dhcp_request(const DhcpMessage& msg, int lan_fd) {
-            auto parsed = Net::ParsedPacket::parse(std::span<uint8_t>(const_cast<uint8_t*>(msg.data.data()), msg.len));
+        void handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
+            auto parsed = Net::ParsedPacket::parse(std::span<uint8_t>(msg.data.data(), msg.len));
             if (!parsed.is_valid_ipv4()) return;
             if (parsed.l4_protocol != 17) return;
 
