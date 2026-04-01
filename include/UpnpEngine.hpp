@@ -120,8 +120,7 @@ namespace Scalpel::Logic {
                     std::string_view req(buf, n);
                     
                     if (req.find("GET /desc.xml") != std::string_view::npos) {
-                        char resp[1500];
-                        const char* xml_template = 
+                        const char* xml_template =
                             "<?xml version=\"1.0\"?>\r\n<root xmlns=\"urn:schemas-upnp-org:device-1-0\">\r\n"
                             "  <specVersion><major>1</major><minor>0</minor></specVersion>\r\n"
                             "  <URLBase>http://%s:5000/</URLBase>\r\n"
@@ -135,11 +134,13 @@ namespace Scalpel::Logic {
                             "        <SCPDURL>/scpd.xml</SCPDURL>\r\n"
                             "      </service>\r\n    </serviceList>\r\n  </device>\r\n</root>";
                         
-                        char xml_buf[1024];
+                        char xml_buf[1200];
                         int xml_len = snprintf(xml_buf, sizeof(xml_buf), xml_template, router_ip_str.c_str());
-                        
+                        if (xml_len >= (int)sizeof(xml_buf)) xml_len = (int)sizeof(xml_buf) - 1;
+
+                        char resp[1500];
                         int resp_len = snprintf(resp, sizeof(resp),
-                            "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", 
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
                             xml_len, xml_buf);
                         send(cfd, resp, resp_len, 0);
                     } else if (req.find("POST /control") != std::string_view::npos) {
