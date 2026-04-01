@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <netinet/in.h>
 #include <array>
+#include <functional>
 #include "Headers.hpp"
 #include "Config.hpp"
 
@@ -84,7 +85,7 @@ namespace Scalpel::Logic {
         uint32_t process_counter = 0;
         uint32_t pkt_count = 0;   // monotonic packet counter — lightweight logical clock
 
-        using ProtocolHandler = Net::Priority(*)(HeuristicProcessor*, const Net::ParsedPacket&);
+        using ProtocolHandler = std::function<Net::Priority(HeuristicProcessor*, const Net::ParsedPacket&)>;
         std::array<ProtocolHandler, 256> protocol_handlers;
 
         // UDP protocol-specific identification logic
