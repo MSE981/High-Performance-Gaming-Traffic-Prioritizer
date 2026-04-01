@@ -15,7 +15,8 @@ namespace Scalpel::System::Optimizer {
                 "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_governor", i);
             int fd = ::open(path, O_WRONLY);
             if (fd >= 0) {
-                ::write(fd, "performance", 11);
+                if (::write(fd, "performance", 11) < 0)
+                    std::println(stderr, "[System] Warning: failed to set governor for cpu{}", i);
                 ::close(fd);
             }
         }
