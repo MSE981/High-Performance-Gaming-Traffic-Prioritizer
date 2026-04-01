@@ -31,6 +31,7 @@ int main(int argc, char* argv[]) {
     std::signal(SIGPIPE, SIG_IGN);
 
     // 1. Load router and system config
+    // Requires the working directory to be the project root (i.e. run as: ./build/app from project root)
     Scalpel::Config::load_config("config/config.txt");
 
     // Create eventfd pair for iface rescan signalling — must happen before watchdog thread starts
