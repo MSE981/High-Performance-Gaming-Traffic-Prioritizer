@@ -479,7 +479,7 @@ void QosPage::on_toggle_accel() {
     bool on = chk_acceleration->isChecked();
     Config::ENABLE_ACCELERATION.store(on, std::memory_order_relaxed);
     Telemetry::instance().bridge_mode.store(!on, std::memory_order_relaxed);
-    std::println("[GUI] 加速模式: {}", on ? "ON" : "OFF");
+    std::println("[GUI] Acceleration mode: {}", on ? "ON" : "OFF");
 }
 
 void QosPage::on_add_rule() {
@@ -560,7 +560,7 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
             state_ptr->store(checked, std::memory_order_relaxed);
             status_lbl->setText(checked ? "● 运行中" : "○ 已停止");
             status_lbl->setStyleSheet(checked ? "color: #00cc66; font-weight: bold;" : "color: #cc3333; font-weight: bold;");
-            std::println("[GUI] 服务状态已更新");
+            std::println("[GUI] Service state updated");
         });
 
         layout->addWidget(row_frame);

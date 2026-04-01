@@ -402,14 +402,14 @@ namespace Scalpel {
 
         void wait_for_shutdown() {
             shutdown_future.wait();
-            std::println("\n[System] 收到退出信号，核心服务已优雅关闭.");
+            std::println("\n[System] Shutdown signal received, core services terminated gracefully.");
         }
 
     private:
         void worker_event_loop(std::stop_token st, std::unique_ptr<Engine::RawSocketManager> rx_mgr, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp, std::shared_ptr<Logic::FirewallEngine> fw) {
             Scalpel::System::Optimizer::set_current_thread_affinity(core);
             Scalpel::System::Optimizer::set_realtime_priority();
-            std::println("[App] Core {} Pipeline 挂载就绪.", core);
+            std::println("[App] Core {} pipeline mounted and ready.", core);
 
             int rx_fd = rx_mgr->get_fd();
             PacketConsumer consumer(rx_fd, tx_fd, core, shpr, nat, dns, qos, dhcp, fw, Config::parse_ip_str(Config::ROUTER_IP));
