@@ -125,6 +125,19 @@ namespace Scalpel {
         }
     };
 
+    // Configuration bundle for a packet worker thread (§2.2.3: use struct not loads of arguments)
+    struct PacketWorkerConfig {
+        int tx_fd;
+        int core_id;
+        std::shared_ptr<Traffic::Shaper> global_shaper;
+        std::shared_ptr<Logic::NatEngine> nat_engine;
+        std::shared_ptr<Logic::DnsEngine> dns_engine;
+        std::shared_ptr<QoSConfig> qos_config;
+        std::shared_ptr<Logic::DhcpEngine> dhcp_engine;
+        std::shared_ptr<Logic::FirewallEngine> firewall_engine;
+        uint32_t gateway_ip;
+    };
+
     // Data plane: event-consumer model — core packet processing
     class PacketConsumer {
     public:
@@ -148,8 +161,12 @@ namespace Scalpel {
         using PipelineStep = bool (*)(PacketConsumer& self, Net::ParsedPacket& pkt);
         std::array<PipelineStep, 8> pipeline;
 
-        PacketConsumer(int rx_fd, int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp, std::shared_ptr<Logic::FirewallEngine> fw, uint32_t gw_ip)
-            : rx_fd(rx_fd), tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat), dns_engine(dns), qos_config(qos), dhcp_engine(dhcp), firewall_engine(fw), gateway_ip(gw_ip) {
+        PacketConsumer(int rx_fd, const PacketWorkerConfig& cfg)
+            : rx_fd(rx_fd), tx_fd(cfg.tx_fd), core_id(cfg.core_id),
+              ctx{cfg.tx_fd, cfg.global_shaper},
+              nat_engine(cfg.nat_engine), dns_engine(cfg.dns_engine),
+              qos_config(cfg.qos_config), dhcp_engine(cfg.dhcp_engine),
+              firewall_engine(cfg.firewall_engine), gateway_ip(cfg.gateway_ip) {
 
             routes = {{
                 { fast_path_handler, fast_path_handler, shaper_handler }, // acceleration mode
@@ -385,15 +402,16 @@ namespace Scalpel {
             auto shaper_dl = std::make_shared<Traffic::Shaper>(dl * 0.85);
             auto shaper_ul = std::make_shared<Traffic::Shaper>(ul * 0.85);
 
+            uint32_t gw_ip = Config::parse_ip_str(Config::ROUTER_IP);
             worker_downstream = std::jthread(
-                [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, int tx, int c, std::shared_ptr<Traffic::Shaper> sh, std::shared_ptr<Logic::NatEngine> ne, std::shared_ptr<Logic::DnsEngine> de, std::shared_ptr<QoSConfig> qc, std::shared_ptr<Logic::DhcpEngine> d, std::shared_ptr<Logic::FirewallEngine> fw) {
-                    worker_event_loop(std::move(st), std::move(iface), tx, c, sh, ne, de, qc, d, fw);
-                }, std::move(iface_wan), fd_lan, 2, shaper_dl, nat_engine, dns_engine, qos_config, dhcp_engine, firewall_engine);
+                [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, PacketWorkerConfig cfg) {
+                    worker_event_loop(std::move(st), std::move(iface), std::move(cfg));
+                }, std::move(iface_wan), PacketWorkerConfig{fd_lan, 2, shaper_dl, nat_engine, dns_engine, qos_config, dhcp_engine, firewall_engine, gw_ip});
 
             worker_upstream = std::jthread(
-                [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, int tx, int c, std::shared_ptr<Traffic::Shaper> sh, std::shared_ptr<Logic::NatEngine> ne, std::shared_ptr<Logic::DnsEngine> de, std::shared_ptr<QoSConfig> qc, std::shared_ptr<Logic::DhcpEngine> d, std::shared_ptr<Logic::FirewallEngine> fw) {
-                    worker_event_loop(std::move(st), std::move(iface), tx, c, sh, ne, de, qc, d, fw);
-                }, std::move(iface_lan), fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config, dhcp_engine, firewall_engine);
+                [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, PacketWorkerConfig cfg) {
+                    worker_event_loop(std::move(st), std::move(iface), std::move(cfg));
+                }, std::move(iface_lan), PacketWorkerConfig{fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config, dhcp_engine, firewall_engine, gw_ip});
 
             std::println("[App] Data plane and control plane started.");
         }
@@ -406,13 +424,13 @@ namespace Scalpel {
         }
 
     private:
-        void worker_event_loop(std::stop_token st, std::unique_ptr<Engine::RawSocketManager> rx_mgr, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp, std::shared_ptr<Logic::FirewallEngine> fw) {
-            Scalpel::System::Optimizer::set_current_thread_affinity(core);
+        void worker_event_loop(std::stop_token st, std::unique_ptr<Engine::RawSocketManager> rx_mgr, PacketWorkerConfig cfg) {
+            Scalpel::System::Optimizer::set_current_thread_affinity(cfg.core_id);
             Scalpel::System::Optimizer::set_realtime_priority();
-            std::println("[App] Core {} pipeline mounted and ready.", core);
+            std::println("[App] Core {} pipeline mounted and ready.", cfg.core_id);
 
             int rx_fd = rx_mgr->get_fd();
-            PacketConsumer consumer(rx_fd, tx_fd, core, shpr, nat, dns, qos, dhcp, fw, Config::parse_ip_str(Config::ROUTER_IP));
+            PacketConsumer consumer(rx_fd, cfg);
 
             while (!st.stop_requested()) {
                 rx_mgr->poll_and_dispatch([&consumer](std::span<uint8_t> raw_span) {
@@ -421,18 +439,18 @@ namespace Scalpel {
                 }, 1);
 
                 // Periodic QoS queue drain and hardware TX unblock
-                if (shpr) shpr->process_queue(tx_fd);
+                if (cfg.global_shaper) cfg.global_shaper->process_queue(cfg.tx_fd);
                 // Only scan per-IP shaper table when at least one IP limit is configured,
                 // avoiding 256 empty-slot iterations per poll cycle when no limits are active.
                 if (consumer.qos_config && Config::IP_LIMIT_ACTIVE.load(std::memory_order_relaxed)) {
                     size_t active_idx = consumer.qos_config->active_idx.load(std::memory_order_relaxed);
                     consumer.qos_config->buffers[active_idx].for_each_occupied([&](auto& shaper) {
-                        shaper->process_queue(tx_fd);
+                        shaper->process_queue(cfg.tx_fd);
                     });
                 }
-                
+
                 // Lock-free heartbeat tick: single atomic add, zero syscalls
-                Telemetry::instance().core_metrics[core].last_heartbeat.fetch_add(1, std::memory_order_relaxed);
+                Telemetry::instance().core_metrics[cfg.core_id].last_heartbeat.fetch_add(1, std::memory_order_relaxed);
             }
         }
 
