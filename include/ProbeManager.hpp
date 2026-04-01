@@ -126,15 +126,21 @@ namespace Scalpel::Probe {
                 double upload_mbps = 0.0;
 
                 auto pos_down = result.find("Download:");
-                if (pos_down != std::string::npos) {
-                    try { download_mbps = std::stod(result.substr(pos_down + 9)); }
-                    catch (...) {}
+                if (pos_down != std::string::npos && pos_down + 9 < result.size()) {
+                    const char* p = result.c_str() + pos_down + 9;
+                    while (*p == ' ') ++p; // skip whitespace
+                    if (*p >= '0' && *p <= '9') {
+                        try { download_mbps = std::stod(p); } catch (...) {}
+                    }
                 }
 
                 auto pos_up = result.find("Upload:");
-                if (pos_up != std::string::npos) {
-                    try { upload_mbps = std::stod(result.substr(pos_up + 8)); }
-                    catch (...) {}
+                if (pos_up != std::string::npos && pos_up + 8 < result.size()) {
+                    const char* p = result.c_str() + pos_up + 8;
+                    while (*p == ' ') ++p;
+                    if (*p >= '0' && *p <= '9') {
+                        try { upload_mbps = std::stod(p); } catch (...) {}
+                    }
                 }
 
                 if (download_mbps > 0.0 && upload_mbps > 0.0) {
