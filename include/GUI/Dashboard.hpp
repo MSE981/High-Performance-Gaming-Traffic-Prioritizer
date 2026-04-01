@@ -74,7 +74,7 @@ class OverviewPage : public QWidget {
     Q_OBJECT
 public:
     explicit OverviewPage(QWidget* parent = nullptr);
-    void refresh(const Telemetry& tel, uint64_t last_pkts[4], uint64_t last_bytes[4]);
+    void refresh(const Telemetry& tel, const std::array<uint64_t, 4>& last_pkts, const std::array<uint64_t, 4>& last_bytes);
 private:
     RealTimePlot* pps_plot;
     RealTimePlot* bps_plot;
@@ -224,8 +224,8 @@ private:
     // Adaptive dual-timer
     int data_timer_id_ = -1;   // 1Hz: router stats refresh (always on)
     int anim_timer_id_ = -1;   // 60Hz: animation frames (on-demand)
-    uint64_t last_pkts[4]  = {};
-    uint64_t last_bytes[4] = {};
+    std::array<uint64_t, 4> last_pkts  = {};
+    std::array<uint64_t, 4> last_bytes = {};
     uint64_t data_tick_    = 0;
 
 private slots:

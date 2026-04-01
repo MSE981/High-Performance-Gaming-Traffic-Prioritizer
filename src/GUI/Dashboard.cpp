@@ -198,7 +198,7 @@ OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
     layout->addStretch();
 }
 
-void OverviewPage::refresh(const Telemetry& tel, uint64_t last_p[4], uint64_t last_b[4]) {
+void OverviewPage::refresh(const Telemetry& tel, const std::array<uint64_t, 4>& last_p, const std::array<uint64_t, 4>& last_b) {
     double total_pps = 0, total_bps = 0;
     for (int i = 0; i < 4; ++i) {
         uint64_t cp = tel.core_metrics[i].pkts.load(std::memory_order_relaxed);
