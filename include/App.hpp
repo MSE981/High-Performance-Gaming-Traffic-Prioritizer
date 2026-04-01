@@ -27,6 +27,7 @@
 #include <span>
 #include <poll.h> 
 #include <future>
+#include <functional>
 #include <array>
 #include <sys/timerfd.h>
 #include <unistd.h>
@@ -158,7 +159,7 @@ namespace Scalpel {
         std::array<std::array<RouteFunc, 3>, 2> routes;
 
         // Callback-based pipeline — eliminates all runtime if-else branching
-        using PipelineStep = bool (*)(PacketConsumer& self, Net::ParsedPacket& pkt);
+        using PipelineStep = std::function<bool(PacketConsumer&, Net::ParsedPacket&)>;
         std::array<PipelineStep, 8> pipeline;
 
         PacketConsumer(int rx_fd, const PacketWorkerConfig& cfg)
