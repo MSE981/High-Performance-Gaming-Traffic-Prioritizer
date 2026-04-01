@@ -610,7 +610,6 @@ SystemPage::SystemPage(QWidget* parent) : QWidget(parent) {
     lbl_hostname = new QLabel("--");
     lbl_kernel = new QLabel("--");
     lbl_kernel->setWordWrap(true);
-    lbl_kernel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     lbl_cpu_temp = new QLabel("--");
     lbl_uptime = new QLabel("--");
     lbl_memory = new QLabel("--");
@@ -762,13 +761,23 @@ void Dashboard::setup_ui() {
     page_vpn = new PlaceholderPage("🔐 VPN / IPsec 安全传输");
     page_system = new SystemPage();
 
-    page_stack->addWidget(page_overview);
-    page_stack->addWidget(page_interfaces);
-    page_stack->addWidget(page_qos);
-    page_stack->addWidget(page_services);
-    page_stack->addWidget(page_docker);
-    page_stack->addWidget(page_vpn);
-    page_stack->addWidget(page_system);
+    // Wrap each page in QScrollArea to prevent oversized content from
+    // inflating QStackedWidget's minimumSize and distorting the layout.
+    auto wrap = [](QWidget* page) -> QScrollArea* {
+        auto* sa = new QScrollArea();
+        sa->setWidget(page);
+        sa->setWidgetResizable(true);
+        sa->setFrameShape(QFrame::NoFrame);
+        sa->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        return sa;
+    };
+    page_stack->addWidget(wrap(page_overview));
+    page_stack->addWidget(wrap(page_interfaces));
+    page_stack->addWidget(wrap(page_qos));
+    page_stack->addWidget(wrap(page_services));
+    page_stack->addWidget(wrap(page_docker));
+    page_stack->addWidget(wrap(page_vpn));
+    page_stack->addWidget(wrap(page_system));
     body_layout->addWidget(page_stack, 1);
 
     root_layout->addLayout(body_layout, 1);
