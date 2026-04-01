@@ -3,6 +3,7 @@
 #include "Config.hpp"
 #include "SystemOptimizer.hpp"
 #include <QApplication>
+#include <QMetaObject>
 #include <QPainter>
 #include <QPainterPath>
 #include <QLinearGradient>
@@ -672,9 +673,13 @@ void SystemPage::refresh_info() {
 
 void SystemPage::on_save_config() {
     std::string path = edit_config_path->text().toStdString();
-    std::thread([path](){
+    // §3.1: async task with completion callback — notify UI thread on finish (QueuedConnection)
+    std::thread([this, path](){
         Scalpel::System::Optimizer::set_current_thread_affinity(1); // Core 1: Control Plane
         Config::save_config(path);
+        QMetaObject::invokeMethod(edit_config_path, [this, path](){
+            edit_config_path->setPlaceholderText(QString("Saved: %1").arg(QString::fromStdString(path)));
+        }, Qt::QueuedConnection);
     }).detach();
 }
 
