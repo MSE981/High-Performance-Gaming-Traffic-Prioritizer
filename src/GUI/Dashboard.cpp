@@ -112,11 +112,13 @@ RealTimePlot::RealTimePlot(QWidget* parent) : QWidget(parent) {
 void RealTimePlot::add_sample(double val) {
     shift_buffer[shift_head] = val;
     shift_head = (shift_head + 1) % SHIFT_BUFFER_SIZE;
+    if (fixed_max_ > 0.0) return; // Y-axis locked — skip auto-scale
     if (val > target_max) target_max = val * 1.2;
     else target_max = std::max(1.0, target_max * 0.99);
 }
 
 void RealTimePlot::step_physics() {
+    if (fixed_max_ > 0.0) { current_max = fixed_max_; return; }
     constexpr double spring_k = 0.15, damper = 0.1;
     double force = spring_k * (target_max - current_max);
     current_velocity = (current_velocity + force) * (1.0 - damper);
@@ -207,6 +209,16 @@ void OverviewPage::refresh(const Telemetry& tel, uint64_t last_p[4], uint64_t la
         core_labels[i]->setText(QString("Core %1\n%2 Pkts\n%3 KB")
             .arg(i).arg(cp).arg(cb / 1024));
     }
+
+    // Lock Y-axis ceiling to configured ISP bandwidth limits (Mbps → Bytes/s and PPS)
+    double dl = tel.isp_down_limit_mbps.load(std::memory_order_relaxed);
+    double ul = tel.isp_up_limit_mbps.load(std::memory_order_relaxed);
+    if (dl > 0.0 || ul > 0.0) {
+        double total_bytes_s = (dl + ul) * 1e6 / 8.0;
+        bps_plot->set_fixed_max(total_bytes_s);
+        pps_plot->set_fixed_max(total_bytes_s / 64.0); // estimate: minimum 64-byte packets
+    }
+
     pps_plot->add_sample(total_pps);
     bps_plot->add_sample(total_bps);
     pps_plot->step_physics();
