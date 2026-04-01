@@ -114,6 +114,11 @@ namespace Scalpel::Logic {
                 int cfd = accept(fd, (sockaddr*)&client, &clen);
                 if (cfd < 0) continue;
 
+                // Set recv timeout on accepted socket so stop_requested() is checked
+                // even if a client connects but sends nothing (§3.3.4: blocking I/O with timeout)
+                struct timeval ctv; ctv.tv_sec = 1; ctv.tv_usec = 0;
+                setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &ctv, sizeof(ctv));
+
                 char buf[2048];
                 int n = recv(cfd, buf, sizeof(buf)-1, 0);
                 if (n > 0) {
