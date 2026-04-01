@@ -93,7 +93,7 @@ int main(int argc, char* argv[]) {
     }
 
     global_app = nullptr;
-    Scalpel::Config::save_config();
+    Scalpel::Config::save_config("config/config.txt");
     std::println("[System] Application cleanly exited. Kernel resources fully released.");
 
     return ret;
