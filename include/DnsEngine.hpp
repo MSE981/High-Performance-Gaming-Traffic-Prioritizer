@@ -124,7 +124,8 @@ namespace Scalpel::Logic {
             udp->check = 0; 
 
             // Fast bounce: send back to LAN interface at wire speed (bounce_fd = rx_fd)
-            send(bounce_fd, pkt.raw_span.data(), new_len, MSG_DONTWAIT);
+            if (send(bounce_fd, pkt.raw_span.data(), new_len, MSG_DONTWAIT) < 0)
+                Telemetry::instance().dropped[1].fetch_add(1, std::memory_order_relaxed);
             return true; // Block data path pipeline
         }
 
