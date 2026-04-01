@@ -597,6 +597,8 @@ SystemPage::SystemPage(QWidget* parent) : QWidget(parent) {
     info_form->setSpacing(10);
     lbl_hostname = new QLabel("--");
     lbl_kernel = new QLabel("--");
+    lbl_kernel->setWordWrap(true);
+    lbl_kernel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     lbl_cpu_temp = new QLabel("--");
     lbl_uptime = new QLabel("--");
     lbl_memory = new QLabel("--");
