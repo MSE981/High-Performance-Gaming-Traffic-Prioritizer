@@ -148,6 +148,7 @@ namespace Scalpel::Logic {
                             std::string_view body = req.substr(body_idx + 4);
                             if (body.find("AddPortMapping") != std::string_view::npos) {
                                 auto get_tag = [&](std::string_view t) -> std::string_view {
+                                    if (t.size() > 60) return {}; // tag name too long to fit in buffers
                                     char start_tag[64], end_tag[64];
                                     int start_len = snprintf(start_tag, sizeof(start_tag), "<%.*s>", (int)t.size(), t.data());
                                     int end_len = snprintf(end_tag, sizeof(end_tag), "</%.*s>", (int)t.size(), t.data());
