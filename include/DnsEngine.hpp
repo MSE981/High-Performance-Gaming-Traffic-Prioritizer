@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <print>
 #include "Headers.hpp"
+#include "Telemetry.hpp"
 
 namespace Scalpel::Logic {
     struct DnsHeader {
@@ -125,7 +126,7 @@ namespace Scalpel::Logic {
 
             // Fast bounce: send back to LAN interface at wire speed (bounce_fd = rx_fd)
             if (send(bounce_fd, pkt.raw_span.data(), new_len, MSG_DONTWAIT) < 0)
-                Telemetry::instance().dropped[1].fetch_add(1, std::memory_order_relaxed);
+                Telemetry::instance().core_metrics[3].dropped[1].fetch_add(1, std::memory_order_relaxed);
             return true; // Block data path pipeline
         }
 
