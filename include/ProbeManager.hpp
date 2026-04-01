@@ -31,7 +31,8 @@ namespace Scalpel::Probe {
 
     public:
         // Mode A: internal compute stress test
-        static void run_internal_stress() {
+        // on_complete(mbps): fired when benchmark finishes; caller stores result (§1.1 callbacks not getters)
+        static void run_internal_stress(std::function<void(double)> on_complete = nullptr) {
             auto& tel = Telemetry::instance();
             tel.is_probing.store(true, std::memory_order_relaxed);
             std::println("[Probe A] Benchmarking internal logic...");
@@ -52,9 +53,10 @@ namespace Scalpel::Probe {
             }
 
             double pps = count / 5.0;
-            tel.internal_limit_mbps.store((pps * 64 * 8) / 1e6, std::memory_order_relaxed);
-            std::println("[Probe A] CPU capacity: {:.2f} Mbps ({} PPS)", tel.internal_limit_mbps.load(std::memory_order_relaxed), pps);
+            double mbps = (pps * 64 * 8) / 1e6;
+            std::println("[Probe A] CPU capacity: {:.2f} Mbps ({} PPS)", mbps, pps);
             tel.is_probing.store(false, std::memory_order_relaxed);
+            if (on_complete) on_complete(mbps);
         }
 
         // Mode B: ISP PPS probing (deterministic precise rate limiting via timerfd)

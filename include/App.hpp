@@ -390,7 +390,11 @@ namespace Scalpel {
             std::string gw_ip = Utils::Network::get_gateway_ip();
             Utils::Network::force_arp_resolution(gw_ip);
 
-            std::thread([]{ Probe::Manager::run_internal_stress(); }).detach();
+            std::thread([]{
+                Probe::Manager::run_internal_stress([](double mbps) {
+                    Telemetry::instance().internal_limit_mbps.store(mbps, std::memory_order_relaxed);
+                });
+            }).detach();
 
             int fd_wan = iface_wan->get_fd();
             int fd_lan = iface_lan->get_fd();
