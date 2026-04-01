@@ -32,9 +32,10 @@ namespace Scalpel::Utils {
                 close(fd);
                 return "127.0.0.1";
             }
-            std::string ip = inet_ntoa(((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr);
+            char ip_buf[INET_ADDRSTRLEN]{};
+            inet_ntop(AF_INET, &((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr, ip_buf, sizeof(ip_buf));
             close(fd);
-            return ip;
+            return ip_buf;
         }
 
         // 2. Auto-get default gateway IP (raw fd, no ifstream)
@@ -58,10 +59,13 @@ namespace Scalpel::Utils {
                 if (sscanf(line, "%31s %15s %15s", iface, dest, gw) == 3) {
                     if (strcmp(dest, "00000000") == 0) {
                         unsigned int addr = 0;
-                        sscanf(gw, "%x", &addr);
-                        struct in_addr in{};
-                        in.s_addr = addr;
-                        return inet_ntoa(in);
+                        if (sscanf(gw, "%x", &addr) == 1) {
+                            struct in_addr in{};
+                            in.s_addr = addr;
+                            char gw_buf[INET_ADDRSTRLEN]{};
+                            inet_ntop(AF_INET, &in, gw_buf, sizeof(gw_buf));
+                            return gw_buf;
+                        }
                     }
                 }
                 while (line < end && *line != '\n') ++line;
