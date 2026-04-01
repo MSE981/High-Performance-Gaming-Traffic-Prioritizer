@@ -129,7 +129,9 @@ namespace Scalpel::Logic {
                 if (leased_ip == requested_ip) {
                     commit_lease(dhcp->chaddr, leased_ip);
                     send_dhcp_response(msg.data, parsed, dhcp, 5, leased_ip, lan_fd); // DHCP ACK
-                    std::println("[DHCP Engine] Assigned IP to device: {}", inet_ntoa(*(in_addr*)&leased_ip));
+                    char ip_buf[INET_ADDRSTRLEN]{};
+                    inet_ntop(AF_INET, &leased_ip, ip_buf, sizeof(ip_buf));
+                    std::println("[DHCP Engine] Assigned IP to device: {}", ip_buf);
                 } else {
                     send_dhcp_response(msg.data, parsed, dhcp, 6, requested_ip, lan_fd); // DHCP NAK
                 }
