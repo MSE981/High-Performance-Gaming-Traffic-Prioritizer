@@ -48,7 +48,7 @@ NotificationPanel::NotificationPanel(QWidget* parent) : QFrame(parent) {
     handle_row->addStretch();
     root->addLayout(handle_row);
 
-    auto* header_lbl = new QLabel("通知中心");
+    auto* header_lbl = new QLabel("Notification Centre");
     header_lbl->setStyleSheet("color: rgba(255,255,255,180); font-size: 13px; font-weight: bold;");
     root->addWidget(header_lbl);
 
