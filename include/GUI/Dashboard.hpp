@@ -114,6 +114,7 @@ private:
     QCheckBox* chk_stp;
     QCheckBox* chk_igmp;
     QPushButton* btn_refresh = nullptr;
+    QSocketNotifier* scan_done_notifier_ = nullptr;
 };
 
 // ═══════════════════════════════════════════

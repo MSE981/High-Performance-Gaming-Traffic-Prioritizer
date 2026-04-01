@@ -288,8 +288,8 @@ InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
     // Register QSocketNotifier for done_fd — wakes Qt event loop when watchdog completes rescan
     int done_fd = Telemetry::instance().sys_info.done_fd;
     if (done_fd >= 0) {
-        auto* notifier = new QSocketNotifier(done_fd, QSocketNotifier::Read, this);
-        connect(notifier, &QSocketNotifier::activated, this, &InterfacePage::on_scan_done);
+        scan_done_notifier_ = new QSocketNotifier(done_fd, QSocketNotifier::Read, this);
+        connect(scan_done_notifier_, &QSocketNotifier::activated, this, &InterfacePage::on_scan_done);
     }
 }
 
