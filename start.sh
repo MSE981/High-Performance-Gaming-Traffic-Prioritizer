@@ -147,7 +147,10 @@ export QT_QPA_EGLFS_ROTATION=90           # 90° CW: portrait panel → landscap
 export QT_QPA_EGLFS_INTEGRATION=eglfs_kms # Pi 5 VC7 KMS/DRM backend
 export QT_LOGGING_RULES="qt.qpa.*=false"  # suppress platform plugin verbose output
 
-# Touch-screen axis calibration for 90° rotation (uncomment if panel has touch):
-# export LIBINPUT_CALIBRATION_MATRIX="0 -1 1 1 0 0"
+# Touch-screen axis calibration for 90° CW display rotation:
+# lx = 1 - py,  ly = px  (physical portrait coords → logical landscape coords)
+export LIBINPUT_CALIBRATION_MATRIX="0 -1 1 1 0 0"
+# If touch is diagonally mirrored (CCW panel), swap to:
+# export LIBINPUT_CALIBRATION_MATRIX="0 1 0 -1 0 1"
 
 exec "$BINARY"
