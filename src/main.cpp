@@ -1,6 +1,7 @@
 #include "App.hpp"
 #include "Config.hpp"
 #include "Telemetry.hpp"
+#include "SelfTest.hpp"
 #include <csignal>
 #include <print>
 #include <sys/eventfd.h>
@@ -54,6 +55,32 @@ int main(int argc, char* argv[]) {
     if (auto res = app.init(); !res) {
         std::println(stderr, "[Fatal Error] Initialization failed: {}", res.error());
         return 1;
+    }
+
+    // 4. Startup self-test (§3.3.1/3.3.2): runs on a worker thread, main thread joins.
+    // Executes before app.start() so data-plane Cores 2/3 are not yet running.
+    // Uses independent engine instances — no interference with live routing pipeline.
+    {
+        Scalpel::SelfTest::SelfTest selftest;
+
+        // §2.2.1: register std::function functor as completion callback
+        // §2.2.3: callback receives Report struct (not multi-arg)
+        selftest.registerCallback([](const Scalpel::SelfTest::Report& r) {
+            std::println("\n╔══ 启动自检结果 ({}/{} 项通过) ══╗", r.passed, r.count);
+            for (size_t i = 0; i < r.count; ++i) {
+                std::println("  [{}] {}  —  {}",
+                    r.cases[i].pass ? "PASS" : "FAIL",
+                    r.cases[i].name.data(),
+                    r.cases[i].detail.data());
+            }
+            std::println("╚══════════════════════════════╝");
+            if (r.passed < r.count)
+                std::println(stderr, "[Warning] {} 项自检失败，请检查硬件或配置",
+                    r.count - r.passed);
+        });
+
+        selftest.start(); // §3.3.1: spawn worker thread
+        selftest.join();  // §3.3.2: block until worker + callback complete
     }
 
     int ret = 0;

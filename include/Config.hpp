@@ -109,27 +109,6 @@ namespace Scalpel::Config {
         return h;
     }
 
-    // Insert or update a static DNS record (called by GUI)
-    inline void upsert_static_dns(const std::string& hostname, const std::string& ip_str) {
-        uint32_t hash = dns_hash_hostname(hostname);
-        uint32_t ip   = parse_ip_str(ip_str);
-        for (size_t i = 0; i < STATIC_DNS_COUNT; ++i) {
-            if (STATIC_DNS_TABLE[i].domain_hash == hash) {
-                STATIC_DNS_TABLE[i].ip = ip;
-                strncpy(STATIC_DNS_TABLE[i].hostname.data(), hostname.c_str(), 63);
-                STATIC_DNS_TABLE[i].hostname[63] = '\0';
-                return;
-            }
-        }
-        if (STATIC_DNS_COUNT < MAX_STATIC_DNS) {
-            auto& e = STATIC_DNS_TABLE[STATIC_DNS_COUNT++];
-            e.domain_hash = hash;
-            e.ip = ip;
-            strncpy(e.hostname.data(), hostname.c_str(), 63);
-            e.hostname[63] = '\0';
-        }
-    }
-
     inline std::atomic<bool> ENABLE_ACCELERATION{true};
 
     // Bridge depth configuration
@@ -238,6 +217,27 @@ namespace Scalpel::Config {
     inline std::string ip_to_str(uint32_t ip) {
         return std::format("{}.{}.{}.{}",
             ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF);
+    }
+
+    // Insert or update a static DNS record (called by GUI); parse_ip_str must precede this
+    inline void upsert_static_dns(const std::string& hostname, const std::string& ip_str) {
+        uint32_t hash = dns_hash_hostname(hostname);
+        uint32_t ip   = parse_ip_str(ip_str);
+        for (size_t i = 0; i < STATIC_DNS_COUNT; ++i) {
+            if (STATIC_DNS_TABLE[i].domain_hash == hash) {
+                STATIC_DNS_TABLE[i].ip = ip;
+                strncpy(STATIC_DNS_TABLE[i].hostname.data(), hostname.c_str(), 63);
+                STATIC_DNS_TABLE[i].hostname[63] = '\0';
+                return;
+            }
+        }
+        if (STATIC_DNS_COUNT < MAX_STATIC_DNS) {
+            auto& e = STATIC_DNS_TABLE[STATIC_DNS_COUNT++];
+            e.domain_hash = hash;
+            e.ip = ip;
+            strncpy(e.hostname.data(), hostname.c_str(), 63);
+            e.hostname[63] = '\0';
+        }
     }
 
     // atoul helper (avoids std::stoul heap overhead at call site)
