@@ -78,7 +78,7 @@ namespace Scalpel::Logic {
                             "ST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n"
                             "USN: uuid:12345678-1234-1234-1234-123456789abc::urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n"
                             "EXT:\r\n"
-                            "Server: Scalpel/1.0 UPnP/1.0 IGD/1.0\r\n"
+                            "Server: HPGTP/1.0 UPnP/1.0 IGD/1.0\r\n"
                             "Location: http://%s:5000/desc.xml\r\n"
                             "\r\n", router_ip_str.c_str());
                             
@@ -130,7 +130,7 @@ namespace Scalpel::Logic {
                             "  <specVersion><major>1</major><minor>0</minor></specVersion>\r\n"
                             "  <URLBase>http://%s:5000/</URLBase>\r\n"
                             "  <device>\r\n    <deviceType>urn:schemas-upnp-org:device:InternetGatewayDevice:1</deviceType>\r\n"
-                            "    <friendlyName>Scalpel Gaming Engine</friendlyName>\r\n"
+                            "    <friendlyName>High-Performance Gaming Traffic Prioritizer</friendlyName>\r\n"
                             "    <serviceList>\r\n      <service>\r\n"
                             "        <serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType>\r\n"
                             "        <serviceId>urn:upnp-org:serviceId:WANIPConn1</serviceId>\r\n"

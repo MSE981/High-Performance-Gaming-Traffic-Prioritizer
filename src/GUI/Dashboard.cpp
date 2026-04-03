@@ -459,43 +459,57 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     throttle_lay->addLayout(slider_row);
     layout->addWidget(throttle_group);
 
-    // Per-IP rate limit rules table
-    auto* rules_group = new QGroupBox("Per-IP Rate Limit Rules");
-    auto* rules_lay = new QVBoxLayout(rules_group);
+    // Game port whitelist
+    auto* wl_group = new QGroupBox("Game Port Whitelist");
+    auto* wl_lay = new QVBoxLayout(wl_group);
+    auto* wl_desc = new QLabel("Traffic on these ports receives highest scheduling priority. Supports single ports and ranges (e.g. 27015 or 3478-3480).");
+    wl_desc->setStyleSheet("color: #808090; font-size: 12px;");
+    wl_desc->setWordWrap(true);
+    wl_lay->addWidget(wl_desc);
 
-    rules_table = new QTableWidget(0, 3);
-    rules_table->setHorizontalHeaderLabels({"IP Address", "Rate Limit (Mbps)", "Action"});
-    rules_table->horizontalHeader()->setStretchLastSection(true);
-    rules_table->setSelectionBehavior(QAbstractItemView::SelectRows);
-    rules_table->verticalHeader()->setVisible(false);
-    rules_lay->addWidget(rules_table);
+    whitelist_table = new QTableWidget(0, 3);
+    whitelist_table->setHorizontalHeaderLabels({"Port / Range", "Protocol", "Description"});
+    whitelist_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    whitelist_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    whitelist_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    whitelist_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    whitelist_table->verticalHeader()->setVisible(false);
+    wl_lay->addWidget(whitelist_table);
 
-    // Load from current config
-    for (size_t idx = 0; idx < Config::IP_LIMIT_COUNT; ++idx) {
-        uint32_t ip = Config::IP_LIMIT_TABLE[idx].ip;
-        double rate = Config::IP_LIMIT_TABLE[idx].rate;
-        int row = rules_table->rowCount();
-        rules_table->insertRow(row);
-        const uint8_t* b = reinterpret_cast<const uint8_t*>(&ip);
-        rules_table->setItem(row, 0, new QTableWidgetItem(
-            QString("%1.%2.%3.%4").arg(b[0]).arg(b[1]).arg(b[2]).arg(b[3])));
-        rules_table->setItem(row, 1, new QTableWidgetItem(QString::number(rate)));
-        auto* btn_del = new QPushButton("Remove");
-        btn_del->setObjectName("btn_danger");
-        btn_del->setFixedHeight(32);
-        connect(btn_del, &QPushButton::clicked, this, &QosPage::on_remove_rule);
-        rules_table->setCellWidget(row, 2, btn_del);
+    struct PortEntry { const char* port; const char* proto; const char* desc; };
+    static constexpr PortEntry defaults[] = {
+        {"27015",      "UDP",     "Steam / Valve"},
+        {"3074",       "UDP",     "Call of Duty"},
+        {"3659",       "UDP",     "EA / Origin"},
+        {"3478-3480",  "UDP",     "PlayStation Network"},
+        {"5223",       "TCP",     "PlayStation Network"},
+        {"7777",       "UDP",     "Unreal Engine games"},
+        {"25565",      "TCP",     "Minecraft"},
+        {"6112",       "TCP/UDP", "Blizzard / StarCraft"},
+        {"1119",       "TCP/UDP", "Blizzard Battle.net"},
+        {"8080",       "TCP",     "Game HTTP services"},
+    };
+    for (auto& e : defaults) {
+        int row = whitelist_table->rowCount();
+        whitelist_table->insertRow(row);
+        whitelist_table->setItem(row, 0, new QTableWidgetItem(e.port));
+        whitelist_table->setItem(row, 1, new QTableWidgetItem(e.proto));
+        whitelist_table->setItem(row, 2, new QTableWidgetItem(e.desc));
     }
 
-    auto* btn_row = new QHBoxLayout();
-    btn_row->addStretch();
-    btn_add_rule = new QPushButton("+ Add Rule");
-    btn_add_rule->setObjectName("btn_primary");
-    connect(btn_add_rule, &QPushButton::clicked, this, &QosPage::on_add_rule);
-    btn_row->addWidget(btn_add_rule);
-    rules_lay->addLayout(btn_row);
-    layout->addWidget(rules_group);
+    auto* wl_btn_row = new QHBoxLayout();
+    auto* btn_add_port    = new QPushButton("+ Add Port");
+    auto* btn_remove_port = new QPushButton("- Remove");
+    btn_add_port->setObjectName("btn_primary");
+    wl_btn_row->addWidget(btn_add_port);
+    wl_btn_row->addWidget(btn_remove_port);
+    wl_btn_row->addStretch();
+    wl_lay->addLayout(wl_btn_row);
+    layout->addWidget(wl_group);
     layout->addStretch();
+
+    connect(btn_add_port,    &QPushButton::clicked, this, &QosPage::on_add_port);
+    connect(btn_remove_port, &QPushButton::clicked, this, &QosPage::on_remove_port);
 }
 
 void QosPage::on_toggle_accel() {
@@ -505,16 +519,13 @@ void QosPage::on_toggle_accel() {
     std::println("[GUI] Acceleration mode: {}", on ? "ON" : "OFF");
 }
 
-void QosPage::on_add_rule() {
-    int row = rules_table->rowCount();
-    rules_table->insertRow(row);
-    rules_table->setItem(row, 0, new QTableWidgetItem("192.168.1.100"));
-    rules_table->setItem(row, 1, new QTableWidgetItem("100"));
-    auto* btn_del = new QPushButton("Remove");
-    btn_del->setObjectName("btn_danger");
-    btn_del->setFixedHeight(32);
-    connect(btn_del, &QPushButton::clicked, this, &QosPage::on_remove_rule);
-    rules_table->setCellWidget(row, 2, btn_del);
+void QosPage::on_add_port() {
+    int row = whitelist_table->rowCount();
+    whitelist_table->insertRow(row);
+    whitelist_table->setItem(row, 0, new QTableWidgetItem(""));
+    whitelist_table->setItem(row, 1, new QTableWidgetItem("UDP"));
+    whitelist_table->setItem(row, 2, new QTableWidgetItem(""));
+    whitelist_table->editItem(whitelist_table->item(row, 0));
 }
 
 void QosPage::on_throttle_changed(int value) {
@@ -522,15 +533,9 @@ void QosPage::on_throttle_changed(int value) {
     lbl_throttle->setText(QString("%1%").arg(value));
 }
 
-void QosPage::on_remove_rule() {
-    auto* btn = qobject_cast<QPushButton*>(sender());
-    if (!btn) return;
-    for (int r = 0; r < rules_table->rowCount(); ++r) {
-        if (rules_table->cellWidget(r, 2) == btn) {
-            rules_table->removeRow(r);
-            return;
-        }
-    }
+void QosPage::on_remove_port() {
+    int row = whitelist_table->currentRow();
+    if (row >= 0) whitelist_table->removeRow(row);
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -1164,7 +1169,7 @@ PlaceholderPage::PlaceholderPage(const QString& name, QWidget* parent) : QWidget
 // Dashboard: main control panel frame
 // ═════════════════════════════════════════════════════════════
 Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
-    setWindowTitle("Scalpel Gaming Router");
+    setWindowTitle("High-Performance Gaming Traffic Prioritizer");
     setStyleSheet(DARK_STYLESHEET);
     setup_ui();
     // Unified 60Hz timer: drives spring animation and data refresh on every frame
@@ -1184,7 +1189,7 @@ void Dashboard::setup_ui() {
     header->setObjectName("header_frame");
     auto* header_lay = new QHBoxLayout(header);
     header_lay->setContentsMargins(16, 8, 16, 8);
-    auto* title = new QLabel("⚡ Scalpel Gaming Router");
+    auto* title = new QLabel("High-Performance-Gaming-Traffic-Prioritizer");
     title->setObjectName("header_title");
     header_lay->addWidget(title);
     header_lay->addStretch();

@@ -130,16 +130,15 @@ class QosPage : public QWidget {
 public:
     explicit QosPage(QWidget* parent = nullptr);
 private slots:
-    void on_add_rule();
-    void on_remove_rule();
+    void on_add_port();
+    void on_remove_port();
     void on_toggle_accel();
     void on_throttle_changed(int value);
 private:
     QCheckBox*    chk_acceleration;
     QLineEdit*    edit_dl_limit;
     QLineEdit*    edit_ul_limit;
-    QTableWidget* rules_table;
-    QPushButton*  btn_add_rule;
+    QTableWidget* whitelist_table;
     QSlider*      throttle_slider;
     QLabel*       lbl_throttle;
 };
