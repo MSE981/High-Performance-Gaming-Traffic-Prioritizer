@@ -89,13 +89,6 @@ int main(int argc, char* argv[]) {
             // Phase 3: Start Qt GUI mode
             Scalpel::System::Optimizer::set_current_thread_affinity(0); // Core 0: UI/Graphics
 
-            // Bypass cage/Wayland and drive the DRM framebuffer directly via eglfs.
-            // QT_QPA_EGLFS_ROTATION=90 makes Qt report a 1280×800 logical screen to the
-            // application and rotates frames 90° via OpenGL before presenting to the
-            // 800×1280 physical DSI panel — no KMS-layer rotation needed.
-            qputenv("QT_QPA_PLATFORM", "eglfs");
-            qputenv("QT_QPA_EGLFS_ROTATION", "90");
-
             QApplication qapp(argc, argv);
             Scalpel::GUI::Dashboard gui;
 

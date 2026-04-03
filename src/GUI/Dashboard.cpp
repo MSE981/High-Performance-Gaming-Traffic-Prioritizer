@@ -1155,8 +1155,6 @@ Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Scalpel Gaming Router");
     setStyleSheet(DARK_STYLESHEET);
     setup_ui();
-    // Landscape layout: 1280×800 for DSI touchscreen in horizontal orientation
-    resize(1280, 800);
     // Data timer: 25Hz (40ms), always on — feeds RealTimePlot and router stats labels
     data_timer_id_ = startTimer(40, Qt::CoarseTimer);
 }

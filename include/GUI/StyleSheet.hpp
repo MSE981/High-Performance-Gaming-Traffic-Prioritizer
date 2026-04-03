@@ -4,7 +4,7 @@
 namespace Scalpel::GUI {
 
     // Global dark theme QSS stylesheet
-    // Optimized for 1280x800 landscape display @60Hz: compact nav (9px padding), 40px header
+    // Optimized for 800x1280 DSI display
     inline const QString DARK_STYLESHEET = R"QSS(
 
     /* ===== Global Basics ===== */
@@ -30,7 +30,7 @@ namespace Scalpel::GUI {
 
     QListWidget#nav_list::item {
         color: #a0a0c0;
-        padding: 9px 16px;
+        padding: 14px 16px;
         border-left: 3px solid transparent;
         font-size: 15px;
     }
@@ -51,8 +51,7 @@ namespace Scalpel::GUI {
     QFrame#header_frame {
         background-color: #12122a;
         border-bottom: 1px solid #2a2a4a;
-        min-height: 40px;
-        max-height: 40px;
+        min-height: 48px;
     }
 
     QLabel#header_title {
