@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # start.sh — Scalpel Gaming Traffic Prioritizer
-# One-shot setup and launch for Raspberry Pi 5 + DSI 1280×800 display
+# One-shot setup and launch for Raspberry Pi 5 + DSI 800×1280 portrait display
 #
 # Usage:  sudo ./start.sh
 # =============================================================================
@@ -133,15 +133,11 @@ done
 
 # ── 4. Launch ─────────────────────────────────────────────────────────────────
 echo ""
-echo "[4/4] Launching GUI (eglfs, 1280×800 landscape)..."
+echo "[4/4] Launching GUI (eglfs, 800×1280 portrait)..."
 echo ""
 
 # Qt eglfs: drive the DRM framebuffer directly — no Wayland compositor required.
-# QT_QPA_EGLFS_ROTATION=90  → Qt reports 1280×800 logical screen to the app
-#                              and rotates each frame 90° via OpenGL before
-#                              writing to the 800×1280 physical DSI panel.
-# These are also set in main.cpp via qputenv() as belt-and-suspenders, but
-# exporting them here ensures they are visible to Qt plugin discovery at exec().
+# Native portrait resolution 800×1280 is used as-is; no rotation applied.
 export QT_QPA_PLATFORM=eglfs              # direct DRM framebuffer, no compositor
 export QT_LOGGING_RULES="qt.qpa.*=false"  # suppress platform plugin verbose output
 
