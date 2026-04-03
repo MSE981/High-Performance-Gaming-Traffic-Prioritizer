@@ -25,6 +25,7 @@
 #include <QRegularExpressionValidator>
 #include <array>
 #include <string>
+#include <vector>
 #include "Telemetry.hpp"
 #include "ProbeManager.hpp"
 
@@ -183,12 +184,22 @@ class DevicePage : public QWidget {
     Q_OBJECT
 public:
     explicit DevicePage(QWidget* parent = nullptr);
-    void refresh();  // called by timerEvent when this page is visible
-private slots:
-    void on_apply_row(int row);
+    void refresh();
 private:
-    QTableWidget* device_table;
-    uint8_t last_device_count = 255;  // force first refresh
+    void on_apply_all();
+
+    struct DeviceRow {
+        uint32_t ip;
+        std::array<uint8_t, 6> mac{};
+        QCheckBox*      chk_allow;
+        QCheckBox*      chk_rate;
+        QDoubleSpinBox* spin_dl;
+        QDoubleSpinBox* spin_ul;
+    };
+
+    QVBoxLayout*         cards_layout;
+    std::vector<DeviceRow> rows_;
+    uint8_t last_device_count = 255;
 };
 
 // ═══════════════════════════════════════════
