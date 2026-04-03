@@ -534,6 +534,211 @@ void QosPage::on_remove_rule() {
 }
 
 // ═════════════════════════════════════════════════════════════
+// DhcpConfigDialog
+// ═════════════════════════════════════════════════════════════
+DhcpConfigDialog::DhcpConfigDialog(QWidget* parent) : QDialog(parent) {
+    setWindowTitle("DHCP Pool Configuration");
+    setMinimumWidth(360);
+    auto* layout = new QVBoxLayout(this);
+    auto* form = new QFormLayout();
+    form->setRowWrapPolicy(QFormLayout::WrapAllRows);
+
+    auto* ip_validator = new QRegularExpressionValidator(
+        QRegularExpression(
+            R"(^((25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$)"),
+        this);
+
+    edit_pool_start = new QLineEdit(QString::fromStdString(Config::DHCP_POOL_START));
+    edit_pool_start->setValidator(ip_validator);
+    edit_pool_start->setPlaceholderText("e.g. 192.168.1.50");
+    form->addRow("Pool Start:", edit_pool_start);
+
+    edit_pool_end = new QLineEdit(QString::fromStdString(Config::DHCP_POOL_END));
+    edit_pool_end->setValidator(ip_validator);
+    edit_pool_end->setPlaceholderText("e.g. 192.168.1.249");
+    form->addRow("Pool End:", edit_pool_end);
+
+    auto* lease_row = new QHBoxLayout();
+    spin_days = new QSpinBox(); spin_days->setRange(0, 365); spin_days->setSuffix(" d");
+    spin_days->setValue(static_cast<int>(Config::DHCP_LEASE_SECONDS / 86400));
+    spin_hours = new QSpinBox(); spin_hours->setRange(0, 24); spin_hours->setSuffix(" h");
+    spin_hours->setValue(static_cast<int>((Config::DHCP_LEASE_SECONDS % 86400) / 3600));
+    spin_minutes = new QSpinBox(); spin_minutes->setRange(0, 60); spin_minutes->setSuffix(" min");
+    spin_minutes->setValue(static_cast<int>((Config::DHCP_LEASE_SECONDS % 3600) / 60));
+    lease_row->addWidget(spin_days);
+    lease_row->addWidget(spin_hours);
+    lease_row->addWidget(spin_minutes);
+    form->addRow("Lease Duration:", lease_row);
+    layout->addLayout(form);
+
+    auto* btn_row = new QHBoxLayout();
+    auto* btn_apply = new QPushButton("Apply");
+    btn_apply->setObjectName("btn_primary");
+    btn_row->addStretch();
+    btn_row->addWidget(btn_apply);
+    layout->addLayout(btn_row);
+
+    connect(btn_apply, &QPushButton::clicked, this, &DhcpConfigDialog::on_apply);
+}
+
+void DhcpConfigDialog::on_apply() {
+    if (!edit_pool_start->hasAcceptableInput() || !edit_pool_end->hasAcceptableInput()) {
+        edit_pool_start->setStyleSheet("border: 1px solid #cc3333;");
+        edit_pool_end->setStyleSheet("border: 1px solid #cc3333;");
+        return;
+    }
+    edit_pool_start->setStyleSheet("");
+    edit_pool_end->setStyleSheet("");
+
+    uint32_t start_ip = Config::parse_ip_str(edit_pool_start->text().toStdString());
+    uint32_t end_ip   = Config::parse_ip_str(edit_pool_end->text().toStdString());
+    if (ntohl(start_ip) >= ntohl(end_ip)) {
+        edit_pool_start->setStyleSheet("border: 1px solid #cc3333;");
+        edit_pool_end->setStyleSheet("border: 1px solid #cc3333;");
+        return;
+    }
+
+    uint32_t secs = static_cast<uint32_t>(spin_days->value())    * 86400u
+                  + static_cast<uint32_t>(spin_hours->value())   * 3600u
+                  + static_cast<uint32_t>(spin_minutes->value()) * 60u;
+    if (secs == 0) secs = 60;
+
+    Config::DHCP_POOL_START    = edit_pool_start->text().toStdString();
+    Config::DHCP_POOL_END      = edit_pool_end->text().toStdString();
+    Config::DHCP_LEASE_SECONDS = secs;
+    Telemetry::instance().dhcp_config_dirty.store(true, std::memory_order_release);
+    std::println("[GUI] DHCP pool updated: {} – {}, lease {}s",
+        Config::DHCP_POOL_START, Config::DHCP_POOL_END, secs);
+    accept();
+}
+
+// ═════════════════════════════════════════════════════════════
+// DnsConfigDialog
+// ═════════════════════════════════════════════════════════════
+DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
+    setWindowTitle("DNS Configuration");
+    setMinimumWidth(420);
+    auto* layout = new QVBoxLayout(this);
+    auto* form = new QFormLayout();
+    form->setRowWrapPolicy(QFormLayout::WrapAllRows);
+
+    auto* dns_ip_validator1 = new QRegularExpressionValidator(
+        QRegularExpression(
+            R"(^((25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$)"),
+        this);
+    auto* dns_ip_validator2 = new QRegularExpressionValidator(
+        QRegularExpression(
+            R"(^((25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$)"),
+        this);
+
+    edit_dns_primary = new QLineEdit(QString::fromStdString(Config::DNS_UPSTREAM_PRIMARY));
+    edit_dns_primary->setValidator(dns_ip_validator1);
+    edit_dns_primary->setPlaceholderText("e.g. 8.8.8.8");
+    form->addRow("Primary DNS:", edit_dns_primary);
+
+    edit_dns_secondary = new QLineEdit(QString::fromStdString(Config::DNS_UPSTREAM_SECONDARY));
+    edit_dns_secondary->setValidator(dns_ip_validator2);
+    edit_dns_secondary->setPlaceholderText("e.g. 8.8.4.4");
+    form->addRow("Secondary DNS:", edit_dns_secondary);
+
+    chk_dns_redirect = new QCheckBox("Force all DNS queries to upstream server");
+    chk_dns_redirect->setChecked(Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
+    chk_dns_redirect->setToolTip("When enabled, all LAN DNS queries (UDP 53) are forwarded to the configured upstream server");
+    form->addRow("", chk_dns_redirect);
+
+    auto* static_dns_label = new QLabel("Static DNS Records (hostname → IP, never expires, overrides cache)");
+    static_dns_label->setStyleSheet("color: #808090; font-size: 12px;");
+    form->addRow(static_dns_label);
+
+    static_dns_table = new QTableWidget(0, 2);
+    static_dns_table->setHorizontalHeaderLabels({"Hostname", "IP Address"});
+    static_dns_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    static_dns_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    static_dns_table->setFixedHeight(160);
+    static_dns_table->setStyleSheet("QTableWidget { background: #1a1a2e; }");
+
+    for (size_t i = 0; i < Config::STATIC_DNS_COUNT; ++i) {
+        int row = static_dns_table->rowCount();
+        static_dns_table->insertRow(row);
+        static_dns_table->setItem(row, 0, new QTableWidgetItem(
+            QString::fromLatin1(Config::STATIC_DNS_TABLE[i].hostname.data())));
+        uint32_t ip = Config::STATIC_DNS_TABLE[i].ip;
+        static_dns_table->setItem(row, 1, new QTableWidgetItem(
+            QString("%1.%2.%3.%4")
+                .arg(ip & 0xFF).arg((ip >> 8) & 0xFF)
+                .arg((ip >> 16) & 0xFF).arg((ip >> 24) & 0xFF)));
+    }
+    form->addRow(static_dns_table);
+
+    auto* dns_btn_row = new QHBoxLayout();
+    auto* btn_add    = new QPushButton("+ Add");
+    auto* btn_remove = new QPushButton("- Remove");
+    auto* btn_apply  = new QPushButton("Apply");
+    btn_apply->setObjectName("btn_primary");
+    btn_apply->setFixedWidth(100);
+    dns_btn_row->addWidget(btn_add);
+    dns_btn_row->addWidget(btn_remove);
+    dns_btn_row->addStretch();
+    dns_btn_row->addWidget(btn_apply);
+    form->addRow("", dns_btn_row);
+
+    layout->addLayout(form);
+
+    connect(btn_add,    &QPushButton::clicked, this, &DnsConfigDialog::on_add_record);
+    connect(btn_remove, &QPushButton::clicked, this, &DnsConfigDialog::on_remove_record);
+    connect(btn_apply,  &QPushButton::clicked, this, &DnsConfigDialog::on_apply);
+}
+
+void DnsConfigDialog::on_apply() {
+    if (!edit_dns_primary->hasAcceptableInput()) {
+        edit_dns_primary->setStyleSheet("border: 1px solid #cc3333;");
+        return;
+    }
+    edit_dns_primary->setStyleSheet("");
+
+    if (!edit_dns_secondary->text().isEmpty() && !edit_dns_secondary->hasAcceptableInput()) {
+        edit_dns_secondary->setStyleSheet("border: 1px solid #cc3333;");
+        return;
+    }
+    edit_dns_secondary->setStyleSheet("");
+
+    Config::DNS_UPSTREAM_PRIMARY   = edit_dns_primary->text().toStdString();
+    Config::DNS_UPSTREAM_SECONDARY = edit_dns_secondary->text().toStdString();
+    Config::DNS_REDIRECT_ENABLED.store(chk_dns_redirect->isChecked(), std::memory_order_relaxed);
+
+    Config::STATIC_DNS_COUNT = 0;
+    for (int i = 0; i < static_dns_table->rowCount(); ++i) {
+        auto* host_item = static_dns_table->item(i, 0);
+        auto* ip_item   = static_dns_table->item(i, 1);
+        if (!host_item || !ip_item) continue;
+        std::string hostname = host_item->text().trimmed().toStdString();
+        std::string ip_str   = ip_item->text().trimmed().toStdString();
+        if (hostname.empty() || ip_str.empty()) continue;
+        Config::upsert_static_dns(hostname, ip_str);
+    }
+
+    Telemetry::instance().dns_config_dirty.store(true, std::memory_order_release);
+    std::println("[GUI] DNS config updated: upstream {}→{}, redirect={}, static={} records",
+        Config::DNS_UPSTREAM_PRIMARY, Config::DNS_UPSTREAM_SECONDARY,
+        chk_dns_redirect->isChecked(), Config::STATIC_DNS_COUNT);
+    accept();
+}
+
+void DnsConfigDialog::on_add_record() {
+    int row = static_dns_table->rowCount();
+    if (row >= static_cast<int>(Config::MAX_STATIC_DNS)) return;
+    static_dns_table->insertRow(row);
+    static_dns_table->setItem(row, 0, new QTableWidgetItem(""));
+    static_dns_table->setItem(row, 1, new QTableWidgetItem(""));
+    static_dns_table->editItem(static_dns_table->item(row, 0));
+}
+
+void DnsConfigDialog::on_remove_record() {
+    int row = static_dns_table->currentRow();
+    if (row >= 0) static_dns_table->removeRow(row);
+}
+
+// ═════════════════════════════════════════════════════════════
 // ServicePage: service toggle page
 // ═════════════════════════════════════════════════════════════
 ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
@@ -550,14 +755,15 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
         const char* name;
         const char* description;
         std::atomic<bool>* state;
+        const char* settings_label;  // nullptr = no settings button
     };
 
     ServiceDef defs[5] = {
-        {"NAT (Network Address Translation)", "Zero-copy SNAT/DNAT engine", &Config::global_state.enable_nat},
-        {"DHCP (Dynamic Host Config)", "Automatically assigns IP addresses to LAN clients", &Config::global_state.enable_dhcp},
-        {"DNS Cache", "Local DNS cache for fast resolution", &Config::global_state.enable_dns_cache},
-        {"Firewall", "Inbound traffic filter rule engine", &Config::global_state.enable_firewall},
-        {"UPnP (Plug & Play)", "Automatic port mapping for NAT traversal", &Config::global_state.enable_upnp},
+        {"NAT (Network Address Translation)", "Zero-copy SNAT/DNAT engine",                  &Config::global_state.enable_nat,       nullptr},
+        {"DHCP (Dynamic Host Config)",        "Automatically assigns IP addresses to LAN clients", &Config::global_state.enable_dhcp, "Set DHCP"},
+        {"DNS Cache",                         "Local DNS cache for fast resolution",           &Config::global_state.enable_dns_cache, "Set DNS"},
+        {"Firewall",                          "Inbound traffic filter rule engine",            &Config::global_state.enable_firewall,  nullptr},
+        {"UPnP (Plug & Play)",                "Automatic port mapping for NAT traversal",      &Config::global_state.enable_upnp,      nullptr},
     };
 
     for (int i = 0; i < 5; ++i) {
@@ -579,233 +785,45 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
         text_col->addWidget(rows[i].chk);
         text_col->addWidget(desc_lbl);
         row_lay->addLayout(text_col, 1);
+
+        // Settings button (DHCP / DNS only)
+        if (defs[i].settings_label) {
+            auto* btn = new QPushButton(defs[i].settings_label);
+            btn->setEnabled(defs[i].state->load(std::memory_order_relaxed));
+            rows[i].btn_settings = btn;
+            row_lay->addWidget(btn);
+
+            if (i == 1) {
+                connect(btn, &QPushButton::clicked, this, [this]() {
+                    DhcpConfigDialog dlg(this);
+                    dlg.exec();
+                });
+            } else if (i == 2) {
+                connect(btn, &QPushButton::clicked, this, [this]() {
+                    DnsConfigDialog dlg(this);
+                    dlg.exec();
+                });
+            }
+        }
+
         row_lay->addWidget(rows[i].status_label);
 
-        // Connect signal
-        auto* state_ptr = defs[i].state;
+        // Connect toggle: update state + status label + settings button enabled
+        auto* state_ptr  = defs[i].state;
         auto* status_lbl = rows[i].status_label;
-        connect(rows[i].chk, &QCheckBox::toggled, [state_ptr, status_lbl](bool checked) {
+        auto* btn_cfg    = rows[i].btn_settings;
+        connect(rows[i].chk, &QCheckBox::toggled, [state_ptr, status_lbl, btn_cfg](bool checked) {
             state_ptr->store(checked, std::memory_order_relaxed);
             status_lbl->setText(checked ? "● Running" : "○ Stopped");
             status_lbl->setStyleSheet(checked ? "color: #00cc66; font-weight: bold;" : "color: #cc3333; font-weight: bold;");
+            if (btn_cfg) btn_cfg->setEnabled(checked);
             std::println("[GUI] Service state updated");
         });
 
         layout->addWidget(row_frame);
     }
 
-    // DHCP pool configuration group
-    auto* dhcp_group = new QGroupBox("DHCP Pool Configuration");
-    auto* dhcp_form  = new QFormLayout(dhcp_group);
-    dhcp_form->setRowWrapPolicy(QFormLayout::WrapAllRows);
-
-    // IP address validator: 1-3 digits per octet, four octets
-    auto* ip_validator = new QRegularExpressionValidator(
-        QRegularExpression(
-            R"(^((25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$)"),
-        this);
-
-    edit_pool_start = new QLineEdit(QString::fromStdString(Config::DHCP_POOL_START));
-    edit_pool_start->setValidator(ip_validator);
-    edit_pool_start->setPlaceholderText("e.g. 192.168.1.50");
-    dhcp_form->addRow("Pool Start:", edit_pool_start);
-
-    edit_pool_end = new QLineEdit(QString::fromStdString(Config::DHCP_POOL_END));
-    edit_pool_end->setValidator(ip_validator);
-    edit_pool_end->setPlaceholderText("e.g. 192.168.1.249");
-    dhcp_form->addRow("Pool End:", edit_pool_end);
-
-    // Lease duration row: days / hours / minutes
-    auto* lease_row = new QHBoxLayout();
-    spin_days = new QSpinBox();
-    spin_days->setRange(0, 365);
-    spin_days->setSuffix(" d");
-    spin_days->setValue(static_cast<int>(Config::DHCP_LEASE_SECONDS / 86400));
-
-    spin_hours = new QSpinBox();
-    spin_hours->setRange(0, 24);
-    spin_hours->setSuffix(" h");
-    spin_hours->setValue(static_cast<int>((Config::DHCP_LEASE_SECONDS % 86400) / 3600));
-
-    spin_minutes = new QSpinBox();
-    spin_minutes->setRange(0, 60);
-    spin_minutes->setSuffix(" min");
-    spin_minutes->setValue(static_cast<int>((Config::DHCP_LEASE_SECONDS % 3600) / 60));
-
-    lease_row->addWidget(spin_days);
-    lease_row->addWidget(spin_hours);
-    lease_row->addWidget(spin_minutes);
-    dhcp_form->addRow("Lease Duration:", lease_row);
-
-    auto* btn_dhcp_apply = new QPushButton("Apply");
-    btn_dhcp_apply->setObjectName("btn_primary");
-    btn_dhcp_apply->setFixedWidth(100);
-    auto* apply_row = new QHBoxLayout();
-    apply_row->addStretch();
-    apply_row->addWidget(btn_dhcp_apply);
-    dhcp_form->addRow("", apply_row);
-
-    connect(btn_dhcp_apply, &QPushButton::clicked, this, &ServicePage::on_dhcp_apply);
-    layout->addWidget(dhcp_group);
-
-    // DNS upstream server configuration group
-    auto* dns_group = new QGroupBox("DNS Upstream Servers");
-    auto* dns_form  = new QFormLayout(dns_group);
-    dns_form->setRowWrapPolicy(QFormLayout::WrapAllRows);
-
-    auto* dns_ip_validator1 = new QRegularExpressionValidator(
-        QRegularExpression(
-            R"(^((25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$)"),
-        this);
-    auto* dns_ip_validator2 = new QRegularExpressionValidator(
-        QRegularExpression(
-            R"(^((25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$)"),
-        this);
-
-    edit_dns_primary = new QLineEdit(QString::fromStdString(Config::DNS_UPSTREAM_PRIMARY));
-    edit_dns_primary->setValidator(dns_ip_validator1);
-    edit_dns_primary->setPlaceholderText("e.g. 8.8.8.8");
-    dns_form->addRow("Primary DNS:", edit_dns_primary);
-
-    edit_dns_secondary = new QLineEdit(QString::fromStdString(Config::DNS_UPSTREAM_SECONDARY));
-    edit_dns_secondary->setValidator(dns_ip_validator2);
-    edit_dns_secondary->setPlaceholderText("e.g. 8.8.4.4");
-    dns_form->addRow("Secondary DNS:", edit_dns_secondary);
-
-    chk_dns_redirect = new QCheckBox("Force all DNS queries to upstream server");
-    chk_dns_redirect->setChecked(Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
-    chk_dns_redirect->setToolTip("When enabled, all LAN DNS queries (UDP 53) are forwarded to the configured upstream server");
-    dns_form->addRow("", chk_dns_redirect);
-
-    // Static DNS records table
-    auto* static_dns_label = new QLabel("Static DNS Records (hostname → IP, never expires, overrides cache)");
-    static_dns_label->setStyleSheet("color: #808090; font-size: 12px;");
-    dns_form->addRow(static_dns_label);
-
-    static_dns_table = new QTableWidget(0, 2);
-    static_dns_table->setHorizontalHeaderLabels({"Hostname", "IP Address"});
-    static_dns_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    static_dns_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    static_dns_table->setFixedHeight(160);
-    static_dns_table->setStyleSheet("QTableWidget { background: #1a1a2e; }");
-
-    // Populate from Config
-    for (size_t i = 0; i < Config::STATIC_DNS_COUNT; ++i) {
-        int row = static_dns_table->rowCount();
-        static_dns_table->insertRow(row);
-        static_dns_table->setItem(row, 0, new QTableWidgetItem(
-            QString::fromLatin1(Config::STATIC_DNS_TABLE[i].hostname.data())));
-        uint32_t ip = Config::STATIC_DNS_TABLE[i].ip;
-        static_dns_table->setItem(row, 1, new QTableWidgetItem(
-            QString("%1.%2.%3.%4")
-                .arg(ip & 0xFF).arg((ip >> 8) & 0xFF)
-                .arg((ip >> 16) & 0xFF).arg((ip >> 24) & 0xFF)));
-    }
-    dns_form->addRow(static_dns_table);
-
-    auto* dns_btn_row = new QHBoxLayout();
-    auto* btn_dns_add    = new QPushButton("+ Add");
-    auto* btn_dns_remove = new QPushButton("- Remove");
-    auto* btn_dns_apply  = new QPushButton("Apply");
-    btn_dns_apply->setObjectName("btn_primary");
-    btn_dns_apply->setFixedWidth(100);
-    dns_btn_row->addWidget(btn_dns_add);
-    dns_btn_row->addWidget(btn_dns_remove);
-    dns_btn_row->addStretch();
-    dns_btn_row->addWidget(btn_dns_apply);
-    dns_form->addRow("", dns_btn_row);
-
-    connect(btn_dns_add,    &QPushButton::clicked, this, &ServicePage::on_dns_add_record);
-    connect(btn_dns_remove, &QPushButton::clicked, this, &ServicePage::on_dns_remove_record);
-    connect(btn_dns_apply,  &QPushButton::clicked, this, &ServicePage::on_dns_apply);
-    layout->addWidget(dns_group);
-
     layout->addStretch();
-}
-
-void ServicePage::on_dhcp_apply() {
-    QString start_str = edit_pool_start->text().trimmed();
-    QString end_str   = edit_pool_end->text().trimmed();
-
-    // Validate: both fields must pass the regex (hasAcceptableInput)
-    if (!edit_pool_start->hasAcceptableInput() || !edit_pool_end->hasAcceptableInput()) {
-        edit_pool_start->setStyleSheet("border: 1px solid #cc3333;");
-        edit_pool_end->setStyleSheet("border: 1px solid #cc3333;");
-        return;
-    }
-    edit_pool_start->setStyleSheet("");
-    edit_pool_end->setStyleSheet("");
-
-    // Validate: start < end (compare last octet for same /24)
-    uint32_t start_ip = Config::parse_ip_str(start_str.toStdString());
-    uint32_t end_ip   = Config::parse_ip_str(end_str.toStdString());
-    if (ntohl(start_ip) >= ntohl(end_ip)) {
-        edit_pool_start->setStyleSheet("border: 1px solid #cc3333;");
-        edit_pool_end->setStyleSheet("border: 1px solid #cc3333;");
-        return;
-    }
-
-    uint32_t secs = static_cast<uint32_t>(spin_days->value())    * 86400u
-                  + static_cast<uint32_t>(spin_hours->value())   * 3600u
-                  + static_cast<uint32_t>(spin_minutes->value()) * 60u;
-    if (secs == 0) secs = 60; // minimum 1 minute
-
-    Config::DHCP_POOL_START    = start_str.toStdString();
-    Config::DHCP_POOL_END      = end_str.toStdString();
-    Config::DHCP_LEASE_SECONDS = secs;
-    Telemetry::instance().dhcp_config_dirty.store(true, std::memory_order_release);
-    std::println("[GUI] DHCP pool updated: {} – {}, lease {}s",
-        Config::DHCP_POOL_START, Config::DHCP_POOL_END, secs);
-}
-
-void ServicePage::on_dns_add_record() {
-    int row = static_dns_table->rowCount();
-    if (row >= static_cast<int>(Config::MAX_STATIC_DNS)) return;
-    static_dns_table->insertRow(row);
-    static_dns_table->setItem(row, 0, new QTableWidgetItem(""));
-    static_dns_table->setItem(row, 1, new QTableWidgetItem(""));
-    static_dns_table->editItem(static_dns_table->item(row, 0));
-}
-
-void ServicePage::on_dns_remove_record() {
-    int row = static_dns_table->currentRow();
-    if (row >= 0) static_dns_table->removeRow(row);
-}
-
-void ServicePage::on_dns_apply() {
-    // Validate upstream server fields
-    if (!edit_dns_primary->hasAcceptableInput()) {
-        edit_dns_primary->setStyleSheet("border: 1px solid #cc3333;");
-        return;
-    }
-    edit_dns_primary->setStyleSheet("");
-
-    if (!edit_dns_secondary->text().isEmpty() && !edit_dns_secondary->hasAcceptableInput()) {
-        edit_dns_secondary->setStyleSheet("border: 1px solid #cc3333;");
-        return;
-    }
-    edit_dns_secondary->setStyleSheet("");
-
-    Config::DNS_UPSTREAM_PRIMARY   = edit_dns_primary->text().toStdString();
-    Config::DNS_UPSTREAM_SECONDARY = edit_dns_secondary->text().toStdString();
-    Config::DNS_REDIRECT_ENABLED.store(chk_dns_redirect->isChecked(), std::memory_order_relaxed);
-
-    // Rebuild static DNS table from GUI rows
-    Config::STATIC_DNS_COUNT = 0;
-    for (int i = 0; i < static_dns_table->rowCount(); ++i) {
-        auto* host_item = static_dns_table->item(i, 0);
-        auto* ip_item   = static_dns_table->item(i, 1);
-        if (!host_item || !ip_item) continue;
-        std::string hostname = host_item->text().trimmed().toStdString();
-        std::string ip_str   = ip_item->text().trimmed().toStdString();
-        if (hostname.empty() || ip_str.empty()) continue;
-        Config::upsert_static_dns(hostname, ip_str);
-    }
-
-    Telemetry::instance().dns_config_dirty.store(true, std::memory_order_release);
-    std::println("[GUI] DNS config updated: upstream {}→{}, redirect={}, static={} records",
-        Config::DNS_UPSTREAM_PRIMARY, Config::DNS_UPSTREAM_SECONDARY,
-        chk_dns_redirect->isChecked(), Config::STATIC_DNS_COUNT);
 }
 
 void ServicePage::refresh_status() {

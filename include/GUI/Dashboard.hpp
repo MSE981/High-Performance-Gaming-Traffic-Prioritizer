@@ -23,6 +23,7 @@
 #include <QDoubleSpinBox>
 #include <QValidator>
 #include <QRegularExpressionValidator>
+#include <QDialog>
 #include <array>
 #include <string>
 #include <vector>
@@ -144,6 +145,41 @@ private:
 };
 
 // ═══════════════════════════════════════════
+// DHCP pool configuration dialog
+// ═══════════════════════════════════════════
+class DhcpConfigDialog : public QDialog {
+    Q_OBJECT
+public:
+    explicit DhcpConfigDialog(QWidget* parent = nullptr);
+private slots:
+    void on_apply();
+private:
+    QLineEdit* edit_pool_start;
+    QLineEdit* edit_pool_end;
+    QSpinBox*  spin_days;
+    QSpinBox*  spin_hours;
+    QSpinBox*  spin_minutes;
+};
+
+// ═══════════════════════════════════════════
+// DNS upstream / static records configuration dialog
+// ═══════════════════════════════════════════
+class DnsConfigDialog : public QDialog {
+    Q_OBJECT
+public:
+    explicit DnsConfigDialog(QWidget* parent = nullptr);
+private slots:
+    void on_apply();
+    void on_add_record();
+    void on_remove_record();
+private:
+    QLineEdit*    edit_dns_primary;
+    QLineEdit*    edit_dns_secondary;
+    QCheckBox*    chk_dns_redirect;
+    QTableWidget* static_dns_table;
+};
+
+// ═══════════════════════════════════════════
 // Service control page: NAT / DHCP / DNS / Firewall / UPnP
 // ═══════════════════════════════════════════
 class ServicePage : public QWidget {
@@ -151,30 +187,13 @@ class ServicePage : public QWidget {
 public:
     explicit ServicePage(QWidget* parent = nullptr);
     void refresh_status();
-private slots:
-    void on_dhcp_apply();
-    void on_dns_apply();
-    void on_dns_add_record();
-    void on_dns_remove_record();
 private:
     struct ServiceRow {
-        QCheckBox* chk;
-        QLabel* status_label;
+        QCheckBox*   chk;
+        QLabel*      status_label;
+        QPushButton* btn_settings = nullptr;  // non-null only for DHCP and DNS rows
     };
     ServiceRow rows[5]; // NAT, DHCP, DNS, Firewall, UPnP
-
-    // DHCP pool configuration widgets
-    QLineEdit* edit_pool_start;
-    QLineEdit* edit_pool_end;
-    QSpinBox*  spin_days;
-    QSpinBox*  spin_hours;
-    QSpinBox*  spin_minutes;
-
-    // DNS configuration widgets
-    QLineEdit*    edit_dns_primary;
-    QLineEdit*    edit_dns_secondary;
-    QCheckBox*    chk_dns_redirect;
-    QTableWidget* static_dns_table;
 };
 
 // ═══════════════════════════════════════════
