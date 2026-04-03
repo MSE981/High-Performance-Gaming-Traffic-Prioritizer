@@ -227,18 +227,18 @@ void OverviewPage::refresh(const Telemetry& tel, const std::array<uint64_t, 4>& 
 InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
 
-    auto* title = new QLabel("网络接口角色分配");
+    auto* title = new QLabel("Network Interface Roles");
     title->setObjectName("section_title");
     layout->addWidget(title);
 
-    auto* desc = new QLabel("为每个检测到的网络接口分配角色。恰好一个接口须设置为「默认网关」。");
+    auto* desc = new QLabel("Assign a role to each detected interface. Exactly one must be set as Default Gateway.");
     desc->setStyleSheet("color: #707080; font-size: 12px;");
     desc->setWordWrap(true);
     layout->addWidget(desc);
 
     // Role table: Interface | Role | Link state
     iface_table = new QTableWidget(0, 3);
-    iface_table->setHorizontalHeaderLabels({"接口", "角色", "链路状态"});
+    iface_table->setHorizontalHeaderLabels({"Interface", "Role", "Link State"});
     iface_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     iface_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     iface_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
@@ -250,26 +250,26 @@ InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
     scan_interfaces();
 
     // Advanced options
-    auto* adv_group = new QGroupBox("高级选项");
+    auto* adv_group = new QGroupBox("Advanced Options");
     auto* adv_form = new QFormLayout(adv_group);
-    chk_stp = new QCheckBox("开启 STP");
+    chk_stp = new QCheckBox("Enable STP");
     chk_stp->setChecked(Config::ENABLE_STP.load(std::memory_order_relaxed));
-    adv_form->addRow("生成树协议:", chk_stp);
-    chk_igmp = new QCheckBox("启用 IGMP 嗅探");
+    adv_form->addRow("Spanning Tree Protocol:", chk_stp);
+    chk_igmp = new QCheckBox("Enable IGMP Snooping");
     chk_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed));
     adv_form->addRow("IGMP Snooping:", chk_igmp);
     layout->addWidget(adv_group);
 
     // Button row
     auto* btn_row = new QHBoxLayout();
-    btn_refresh = new QPushButton("刷新网口");
+    btn_refresh = new QPushButton("Refresh");
     connect(btn_refresh, &QPushButton::clicked, this, &InterfacePage::on_refresh_clicked);
     btn_row->addWidget(btn_refresh);
     btn_row->addStretch();
-    auto* btn_reset = new QPushButton("重置");
+    auto* btn_reset = new QPushButton("Reset");
     connect(btn_reset, &QPushButton::clicked, this, &InterfacePage::on_reset_clicked);
     btn_row->addWidget(btn_reset);
-    auto* btn_save = new QPushButton("保存并应用");
+    auto* btn_save = new QPushButton("Save & Apply");
     btn_save->setObjectName("btn_primary");
     connect(btn_save, &QPushButton::clicked, this, &InterfacePage::on_save_clicked);
     btn_row->addWidget(btn_save);
@@ -323,7 +323,7 @@ void InterfacePage::scan_interfaces() {
         iface_table->setItem(row, 0, name_item);
 
         auto* combo = new QComboBox();
-        combo->addItems({"外网 (WAN)", "内网 (LAN)", "默认网关", "禁用"});
+        combo->addItems({"WAN (Uplink)", "LAN (Local)", "Default Gateway", "Disabled"});
         combo->setCurrentIndex(static_cast<int>(role));
         if (role_combos_count < role_combos.size()) {
             strncpy(role_combos[role_combos_count].name.data(), name.c_str(), 15);
@@ -334,7 +334,7 @@ void InterfacePage::scan_interfaces() {
         iface_table->setCellWidget(row, 1, combo);
 
         bool is_up = (state == "up");
-        auto* state_lbl = new QLabel(is_up ? "● 已连接" : "○ 断开");
+        auto* state_lbl = new QLabel(is_up ? "● Connected" : "○ Down");
         state_lbl->setAlignment(Qt::AlignCenter);
         state_lbl->setStyleSheet(is_up ? "color: #00cc66;" : "color: #888888;");
         iface_table->setCellWidget(row, 2, state_lbl);
@@ -365,7 +365,7 @@ void InterfacePage::on_save_clicked() {
         if (role_combos[i].combo->currentIndex() == 2) { ++gw_count; gw_iface = role_combos[i].name.data(); }
     }
     if (gw_count == 0) {
-        QMessageBox::warning(this, "配置错误", "请指定一个默认网关接口。");
+        QMessageBox::warning(this, "Config Error", "No Default Gateway assigned.");
         return;
     }
 
@@ -402,7 +402,7 @@ void InterfacePage::on_refresh_clicked() {
     if (rescan_fd < 0) return;
     ::eventfd_write(rescan_fd, 1);   // wake Core 1 watchdog immediately
     btn_refresh->setEnabled(false);
-    btn_refresh->setText("扫描中…");
+    btn_refresh->setText("Scanning…");
 }
 
 void InterfacePage::on_scan_done() {
@@ -411,7 +411,7 @@ void InterfacePage::on_scan_done() {
     ::eventfd_read(Telemetry::instance().sys_info.done_fd, &val);
     scan_interfaces();
     btn_refresh->setEnabled(true);
-    btn_refresh->setText("刷新网口");
+    btn_refresh->setText("Refresh");
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -419,27 +419,27 @@ void InterfacePage::on_scan_done() {
 // ═════════════════════════════════════════════════════════════
 QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
-    auto* title = new QLabel("QoS 与流量控制");
+    auto* title = new QLabel("QoS & Traffic Control");
     title->setObjectName("section_title");
     layout->addWidget(title);
 
     // Acceleration toggle
-    chk_acceleration = new QCheckBox("启用游戏流量加速 (启发式优先级调度)");
+    chk_acceleration = new QCheckBox("Enable Gaming Traffic Acceleration (Heuristic Priority Scheduling)");
     chk_acceleration->setChecked(Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed));
     connect(chk_acceleration, &QCheckBox::toggled, this, &QosPage::on_toggle_accel);
     layout->addWidget(chk_acceleration);
 
     // Bandwidth limit
-    auto* bw_group = new QGroupBox("全局带宽限制");
+    auto* bw_group = new QGroupBox("Global Bandwidth Limits");
     auto* bw_form = new QFormLayout(bw_group);
     edit_dl_limit = new QLineEdit("500");
     edit_ul_limit = new QLineEdit("50");
-    bw_form->addRow("下行限制 (Mbps):", edit_dl_limit);
-    bw_form->addRow("上行限制 (Mbps):", edit_ul_limit);
+    bw_form->addRow("Download Limit (Mbps):", edit_dl_limit);
+    bw_form->addRow("Upload Limit (Mbps):", edit_ul_limit);
     layout->addWidget(bw_group);
 
     // Real-time throttle slider
-    auto* throttle_group = new QGroupBox("实时限速比例");
+    auto* throttle_group = new QGroupBox("Real-Time Throttle");
     auto* throttle_lay = new QVBoxLayout(throttle_group);
 
     auto* slider_row = new QHBoxLayout();
@@ -460,11 +460,11 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     layout->addWidget(throttle_group);
 
     // Per-IP rate limit rules table
-    auto* rules_group = new QGroupBox("IP 限速规则");
+    auto* rules_group = new QGroupBox("Per-IP Rate Limit Rules");
     auto* rules_lay = new QVBoxLayout(rules_group);
 
     rules_table = new QTableWidget(0, 3);
-    rules_table->setHorizontalHeaderLabels({"IP 地址", "速率限制 (Mbps)", "操作"});
+    rules_table->setHorizontalHeaderLabels({"IP Address", "Rate Limit (Mbps)", "Action"});
     rules_table->horizontalHeader()->setStretchLastSection(true);
     rules_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     rules_table->verticalHeader()->setVisible(false);
@@ -480,7 +480,7 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
         rules_table->setItem(row, 0, new QTableWidgetItem(
             QString("%1.%2.%3.%4").arg(b[0]).arg(b[1]).arg(b[2]).arg(b[3])));
         rules_table->setItem(row, 1, new QTableWidgetItem(QString::number(rate)));
-        auto* btn_del = new QPushButton("删除");
+        auto* btn_del = new QPushButton("Remove");
         btn_del->setObjectName("btn_danger");
         btn_del->setFixedHeight(32);
         connect(btn_del, &QPushButton::clicked, this, &QosPage::on_remove_rule);
@@ -489,7 +489,7 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
 
     auto* btn_row = new QHBoxLayout();
     btn_row->addStretch();
-    btn_add_rule = new QPushButton("+ 添加规则");
+    btn_add_rule = new QPushButton("+ Add Rule");
     btn_add_rule->setObjectName("btn_primary");
     connect(btn_add_rule, &QPushButton::clicked, this, &QosPage::on_add_rule);
     btn_row->addWidget(btn_add_rule);
@@ -510,7 +510,7 @@ void QosPage::on_add_rule() {
     rules_table->insertRow(row);
     rules_table->setItem(row, 0, new QTableWidgetItem("192.168.1.100"));
     rules_table->setItem(row, 1, new QTableWidgetItem("100"));
-    auto* btn_del = new QPushButton("删除");
+    auto* btn_del = new QPushButton("Remove");
     btn_del->setObjectName("btn_danger");
     btn_del->setFixedHeight(32);
     connect(btn_del, &QPushButton::clicked, this, &QosPage::on_remove_rule);
@@ -538,11 +538,11 @@ void QosPage::on_remove_rule() {
 // ═════════════════════════════════════════════════════════════
 ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
-    auto* title = new QLabel("服务管理");
+    auto* title = new QLabel("Services");
     title->setObjectName("section_title");
     layout->addWidget(title);
 
-    auto* desc = new QLabel("启用或禁用各核心网络服务。更改立即生效，无需重启。");
+    auto* desc = new QLabel("Enable or disable core network services. Changes take effect immediately, no restart required.");
     desc->setStyleSheet("color: #707080; font-size: 13px; margin-bottom: 8px;");
     layout->addWidget(desc);
 
@@ -553,11 +553,11 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
     };
 
     ServiceDef defs[5] = {
-        {"NAT (网络地址转换)", "用户态零拷贝高速 SNAT/DNAT 引擎", &Config::global_state.enable_nat},
-        {"DHCP (动态主机配置)", "自动为局域网设备分配 IP 地址", &Config::global_state.enable_dhcp},
-        {"DNS 缓存", "本地 DNS 缓存加速解析", &Config::global_state.enable_dns_cache},
-        {"防火墙", "入站流量过滤规则引擎", &Config::global_state.enable_firewall},
-        {"UPnP (即插即用)", "自动端口映射以支持 NAT 穿越", &Config::global_state.enable_upnp},
+        {"NAT (Network Address Translation)", "Zero-copy SNAT/DNAT engine", &Config::global_state.enable_nat},
+        {"DHCP (Dynamic Host Config)", "Automatically assigns IP addresses to LAN clients", &Config::global_state.enable_dhcp},
+        {"DNS Cache", "Local DNS cache for fast resolution", &Config::global_state.enable_dns_cache},
+        {"Firewall", "Inbound traffic filter rule engine", &Config::global_state.enable_firewall},
+        {"UPnP (Plug & Play)", "Automatic port mapping for NAT traversal", &Config::global_state.enable_upnp},
     };
 
     for (int i = 0; i < 5; ++i) {
@@ -572,7 +572,7 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
         auto* desc_lbl = new QLabel(defs[i].description);
         desc_lbl->setStyleSheet("color: #808090; font-size: 12px;");
 
-        rows[i].status_label = new QLabel("● 运行中");
+        rows[i].status_label = new QLabel("● Running");
         rows[i].status_label->setStyleSheet("color: #00cc66; font-weight: bold;");
 
         auto* text_col = new QVBoxLayout();
@@ -586,7 +586,7 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
         auto* status_lbl = rows[i].status_label;
         connect(rows[i].chk, &QCheckBox::toggled, [state_ptr, status_lbl](bool checked) {
             state_ptr->store(checked, std::memory_order_relaxed);
-            status_lbl->setText(checked ? "● 运行中" : "○ 已停止");
+            status_lbl->setText(checked ? "● Running" : "○ Stopped");
             status_lbl->setStyleSheet(checked ? "color: #00cc66; font-weight: bold;" : "color: #cc3333; font-weight: bold;");
             std::println("[GUI] Service state updated");
         });
@@ -595,7 +595,7 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
     }
 
     // DHCP pool configuration group
-    auto* dhcp_group = new QGroupBox("DHCP 地址池配置");
+    auto* dhcp_group = new QGroupBox("DHCP Pool Configuration");
     auto* dhcp_form  = new QFormLayout(dhcp_group);
     dhcp_form->setRowWrapPolicy(QFormLayout::WrapAllRows);
 
@@ -607,37 +607,37 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
 
     edit_pool_start = new QLineEdit(QString::fromStdString(Config::DHCP_POOL_START));
     edit_pool_start->setValidator(ip_validator);
-    edit_pool_start->setPlaceholderText("例: 192.168.1.50");
-    dhcp_form->addRow("起始地址:", edit_pool_start);
+    edit_pool_start->setPlaceholderText("e.g. 192.168.1.50");
+    dhcp_form->addRow("Pool Start:", edit_pool_start);
 
     edit_pool_end = new QLineEdit(QString::fromStdString(Config::DHCP_POOL_END));
     edit_pool_end->setValidator(ip_validator);
-    edit_pool_end->setPlaceholderText("例: 192.168.1.249");
-    dhcp_form->addRow("结束地址:", edit_pool_end);
+    edit_pool_end->setPlaceholderText("e.g. 192.168.1.249");
+    dhcp_form->addRow("Pool End:", edit_pool_end);
 
     // Lease duration row: days / hours / minutes
     auto* lease_row = new QHBoxLayout();
     spin_days = new QSpinBox();
     spin_days->setRange(0, 365);
-    spin_days->setSuffix(" 天");
+    spin_days->setSuffix(" d");
     spin_days->setValue(static_cast<int>(Config::DHCP_LEASE_SECONDS / 86400));
 
     spin_hours = new QSpinBox();
     spin_hours->setRange(0, 24);
-    spin_hours->setSuffix(" 小时");
+    spin_hours->setSuffix(" h");
     spin_hours->setValue(static_cast<int>((Config::DHCP_LEASE_SECONDS % 86400) / 3600));
 
     spin_minutes = new QSpinBox();
     spin_minutes->setRange(0, 60);
-    spin_minutes->setSuffix(" 分钟");
+    spin_minutes->setSuffix(" min");
     spin_minutes->setValue(static_cast<int>((Config::DHCP_LEASE_SECONDS % 3600) / 60));
 
     lease_row->addWidget(spin_days);
     lease_row->addWidget(spin_hours);
     lease_row->addWidget(spin_minutes);
-    dhcp_form->addRow("租期:", lease_row);
+    dhcp_form->addRow("Lease Duration:", lease_row);
 
-    auto* btn_dhcp_apply = new QPushButton("应用");
+    auto* btn_dhcp_apply = new QPushButton("Apply");
     btn_dhcp_apply->setObjectName("btn_primary");
     btn_dhcp_apply->setFixedWidth(100);
     auto* apply_row = new QHBoxLayout();
@@ -649,7 +649,7 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
     layout->addWidget(dhcp_group);
 
     // DNS upstream server configuration group
-    auto* dns_group = new QGroupBox("DNS 上游服务器配置");
+    auto* dns_group = new QGroupBox("DNS Upstream Servers");
     auto* dns_form  = new QFormLayout(dns_group);
     dns_form->setRowWrapPolicy(QFormLayout::WrapAllRows);
 
@@ -664,26 +664,26 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
 
     edit_dns_primary = new QLineEdit(QString::fromStdString(Config::DNS_UPSTREAM_PRIMARY));
     edit_dns_primary->setValidator(dns_ip_validator1);
-    edit_dns_primary->setPlaceholderText("例: 8.8.8.8");
-    dns_form->addRow("主 DNS 服务器:", edit_dns_primary);
+    edit_dns_primary->setPlaceholderText("e.g. 8.8.8.8");
+    dns_form->addRow("Primary DNS:", edit_dns_primary);
 
     edit_dns_secondary = new QLineEdit(QString::fromStdString(Config::DNS_UPSTREAM_SECONDARY));
     edit_dns_secondary->setValidator(dns_ip_validator2);
-    edit_dns_secondary->setPlaceholderText("例: 8.8.4.4");
-    dns_form->addRow("备用 DNS 服务器:", edit_dns_secondary);
+    edit_dns_secondary->setPlaceholderText("e.g. 8.8.4.4");
+    dns_form->addRow("Secondary DNS:", edit_dns_secondary);
 
-    chk_dns_redirect = new QCheckBox("强制重定向所有 DNS 查询到上游服务器");
+    chk_dns_redirect = new QCheckBox("Force all DNS queries to upstream server");
     chk_dns_redirect->setChecked(Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
-    chk_dns_redirect->setToolTip("开启后，所有局域网 DNS 查询 (UDP 53) 将被强制转发到上方配置的上游服务器");
+    chk_dns_redirect->setToolTip("When enabled, all LAN DNS queries (UDP 53) are forwarded to the configured upstream server");
     dns_form->addRow("", chk_dns_redirect);
 
     // Static DNS records table
-    auto* static_dns_label = new QLabel("静态 DNS 记录 (hostname → IP，永不过期，优先于缓存)");
+    auto* static_dns_label = new QLabel("Static DNS Records (hostname → IP, never expires, overrides cache)");
     static_dns_label->setStyleSheet("color: #808090; font-size: 12px;");
     dns_form->addRow(static_dns_label);
 
     static_dns_table = new QTableWidget(0, 2);
-    static_dns_table->setHorizontalHeaderLabels({"主机名", "IP 地址"});
+    static_dns_table->setHorizontalHeaderLabels({"Hostname", "IP Address"});
     static_dns_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     static_dns_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     static_dns_table->setFixedHeight(160);
@@ -704,9 +704,9 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
     dns_form->addRow(static_dns_table);
 
     auto* dns_btn_row = new QHBoxLayout();
-    auto* btn_dns_add    = new QPushButton("+ 添加");
-    auto* btn_dns_remove = new QPushButton("- 删除");
-    auto* btn_dns_apply  = new QPushButton("应用");
+    auto* btn_dns_add    = new QPushButton("+ Add");
+    auto* btn_dns_remove = new QPushButton("- Remove");
+    auto* btn_dns_apply  = new QPushButton("Apply");
     btn_dns_apply->setObjectName("btn_primary");
     btn_dns_apply->setFixedWidth(100);
     dns_btn_row->addWidget(btn_dns_add);
@@ -818,7 +818,7 @@ void ServicePage::refresh_status() {
     };
     for (int i = 0; i < 5; ++i) {
         bool on = states[i]->load(std::memory_order_relaxed);
-        rows[i].status_label->setText(on ? "● 运行中" : "○ 已停止");
+        rows[i].status_label->setText(on ? "● Running" : "○ Stopped");
         rows[i].status_label->setStyleSheet(on ? "color: #00cc66; font-weight: bold;" : "color: #cc3333; font-weight: bold;");
     }
 }
@@ -828,11 +828,11 @@ void ServicePage::refresh_status() {
 // ═════════════════════════════════════════════════════════════
 SystemPage::SystemPage(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
-    auto* title = new QLabel("系统信息");
+    auto* title = new QLabel("System Info");
     title->setObjectName("section_title");
     layout->addWidget(title);
 
-    auto* info_group = new QGroupBox("硬件与运行时");
+    auto* info_group = new QGroupBox("Hardware & Runtime");
     auto* info_form = new QFormLayout(info_group);
     info_form->setSpacing(10);
     lbl_hostname = new QLabel("--");
@@ -841,26 +841,26 @@ SystemPage::SystemPage(QWidget* parent) : QWidget(parent) {
     lbl_cpu_temp = new QLabel("--");
     lbl_uptime = new QLabel("--");
     lbl_memory = new QLabel("--");
-    info_form->addRow("主机名:", lbl_hostname);
-    info_form->addRow("内核版本:", lbl_kernel);
-    info_form->addRow("CPU 温度:", lbl_cpu_temp);
-    info_form->addRow("运行时间:", lbl_uptime);
-    info_form->addRow("内存使用:", lbl_memory);
+    info_form->addRow("Hostname:", lbl_hostname);
+    info_form->addRow("Kernel:", lbl_kernel);
+    info_form->addRow("CPU Temp:", lbl_cpu_temp);
+    info_form->addRow("Uptime:", lbl_uptime);
+    info_form->addRow("Memory:", lbl_memory);
     layout->addWidget(info_group);
 
-    auto* cfg_group = new QGroupBox("配置管理");
+    auto* cfg_group = new QGroupBox("Configuration");
     auto* cfg_lay = new QVBoxLayout(cfg_group);
     auto* cfg_form = new QFormLayout();
     edit_config_path = new QLineEdit("config.txt");
-    cfg_form->addRow("配置文件路径:", edit_config_path);
+    cfg_form->addRow("Config File:", edit_config_path);
     cfg_lay->addLayout(cfg_form);
 
     auto* btn_row = new QHBoxLayout();
-    auto* btn_save = new QPushButton("保存配置到文件");
+    auto* btn_save = new QPushButton("Save Config");
     btn_save->setObjectName("btn_primary");
     connect(btn_save, &QPushButton::clicked, this, &SystemPage::on_save_config);
     btn_row->addWidget(btn_save);
-    auto* btn_restart = new QPushButton("重启引擎");
+    auto* btn_restart = new QPushButton("Restart Engine");
     btn_restart->setObjectName("btn_danger");
     connect(btn_restart, &QPushButton::clicked, this, &SystemPage::on_restart_engine);
     btn_row->addWidget(btn_restart);
@@ -868,17 +868,17 @@ SystemPage::SystemPage(QWidget* parent) : QWidget(parent) {
     layout->addWidget(cfg_group);
 
     // Network speedtest group
-    auto* spd_group = new QGroupBox("网络测速");
+    auto* spd_group = new QGroupBox("Speed Test");
     auto* spd_lay   = new QVBoxLayout(spd_group);
-    auto* spd_desc  = new QLabel("调用 speedtest-cli 异步测量真实 ISP 上下行速率。\n测试期间路由引擎正常运行，不受影响。");
+    auto* spd_desc  = new QLabel("Runs speedtest-cli asynchronously to measure real ISP throughput.\nThe routing engine continues running during the test.");
     spd_desc->setStyleSheet("color: #808090; font-size: 12px;");
     spd_lay->addWidget(spd_desc);
 
     auto* spd_btn_row = new QHBoxLayout();
-    btn_speedtest = new QPushButton("▶ 开始测速");
+    btn_speedtest = new QPushButton("▶ Run Test");
     btn_speedtest->setObjectName("btn_primary");
     btn_speedtest->setFixedWidth(130);
-    lbl_speedtest_status = new QLabel("就绪");
+    lbl_speedtest_status = new QLabel("Ready");
     lbl_speedtest_status->setStyleSheet("color: #808090; font-size: 12px;");
     spd_btn_row->addWidget(btn_speedtest);
     spd_btn_row->addWidget(lbl_speedtest_status);
@@ -909,13 +909,13 @@ void SystemPage::refresh_info() {
     if (secs > 0) {
         int h = static_cast<int>(secs / 3600);
         int m = static_cast<int>((secs % 3600) / 60);
-        lbl_uptime->setText(QString("%1 小时 %2 分钟").arg(h).arg(m));
+        lbl_uptime->setText(QString("%1h %2m").arg(h).arg(m));
     }
 
     uint64_t total = si.mem_total_kb.load(std::memory_order_relaxed);
     uint64_t avail = si.mem_avail_kb.load(std::memory_order_relaxed);
     if (total > 0)
-        lbl_memory->setText(QString("已用 %1 MB / 共 %2 MB")
+        lbl_memory->setText(QString("%1 MB used / %2 MB total")
             .arg((total - avail) / 1024).arg(total / 1024));
 }
 
@@ -937,7 +937,7 @@ void SystemPage::on_restart_engine() {
 
 void SystemPage::on_speedtest_clicked() {
     btn_speedtest->setEnabled(false);
-    lbl_speedtest_status->setText("测速中，请稍候…");
+    lbl_speedtest_status->setText("Testing, please wait…");
     lbl_speedtest_status->setStyleSheet("color: #f0a500; font-size: 12px;");
 
     // run_async_real_isp_probe internally detaches a thread; callback fires from that thread.
@@ -952,22 +952,22 @@ void SystemPage::on_speedtest_clicked() {
 void SystemPage::on_speedtest_done(double dl_mbps, double ul_mbps) {
     btn_speedtest->setEnabled(true);
     lbl_speedtest_status->setText(
-        QString("下行 %1 Mbps / 上行 %2 Mbps")
+        QString("↓ %1 Mbps / ↑ %2 Mbps")
             .arg(dl_mbps, 0, 'f', 1)
             .arg(ul_mbps, 0, 'f', 1));
     lbl_speedtest_status->setStyleSheet("color: #00cc66; font-size: 12px;");
 
     auto* dlg = new QMessageBox(this);
-    dlg->setWindowTitle("测速完成");
+    dlg->setWindowTitle("Speed Test Complete");
     dlg->setText(
-        QString("下行: <b>%1 Mbps</b>&nbsp;&nbsp;&nbsp;上行: <b>%2 Mbps</b>")
+        QString("Download: <b>%1 Mbps</b>&nbsp;&nbsp;&nbsp;Upload: <b>%2 Mbps</b>")
             .arg(dl_mbps, 0, 'f', 1)
             .arg(ul_mbps, 0, 'f', 1));
-    dlg->setInformativeText("是否将此结果写入 QoS 限速基准？\n（当前限速比例滑块将按新基准重新计算）");
+    dlg->setInformativeText("Write these results as the QoS baseline?\n(The throttle slider will be recalculated against the new baseline)");
     dlg->setStandardButtons(QMessageBox::Yes | QMessageBox::No);
     dlg->setDefaultButton(QMessageBox::Yes);
-    dlg->button(QMessageBox::Yes)->setText("写入");
-    dlg->button(QMessageBox::No)->setText("忽略");
+    dlg->button(QMessageBox::Yes)->setText("Apply");
+    dlg->button(QMessageBox::No)->setText("Ignore");
 
     if (dlg->exec() == QMessageBox::Yes) {
         auto& tel = Telemetry::instance();
@@ -985,53 +985,57 @@ void SystemPage::on_speedtest_done(double dl_mbps, double ul_mbps) {
 // ═════════════════════════════════════════════════════════════
 DevicePage::DevicePage(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
-    auto* title = new QLabel("设备管理");
+    auto* title = new QLabel("Device Management");
     title->setObjectName("section_title");
     layout->addWidget(title);
 
-    auto* desc = new QLabel("列出子网内所有在线设备，可对每台设备单独设置访问权限和限速规则。");
+    auto* desc = new QLabel("Lists all active devices on the subnet. Configure access and rate limits, then click Apply All.");
     desc->setStyleSheet("color: #707080; font-size: 13px; margin-bottom: 8px;");
     layout->addWidget(desc);
 
-    // Columns: IP | MAC | 允许访问 | 启用限速 | 下载(Mbps) | 上传(Mbps) | 应用
-    device_table = new QTableWidget(0, 7);
-    device_table->setHorizontalHeaderLabels({"IP 地址", "MAC 地址", "允许访问", "启用限速", "下载限速 (Mbps)", "上传限速 (Mbps)", "应用"});
-    device_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    device_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    device_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-    device_table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
-    device_table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
-    device_table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
-    device_table->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
-    device_table->setSelectionMode(QAbstractItemView::NoSelection);
-    device_table->verticalHeader()->setVisible(false);
-    device_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    layout->addWidget(device_table, 1);
+    // Scrollable card list
+    auto* scroll = new QScrollArea();
+    scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setStyleSheet("QScrollArea { border: none; }");
+
+    auto* cards_container = new QWidget();
+    cards_layout = new QVBoxLayout(cards_container);
+    cards_layout->setSpacing(8);
+    cards_layout->setContentsMargins(4, 4, 4, 4);
+    cards_layout->addStretch();
+
+    scroll->setWidget(cards_container);
+    layout->addWidget(scroll, 1);
+
+    // Single apply button at the bottom
+    auto* btn_apply_all = new QPushButton("Apply All");
+    btn_apply_all->setObjectName("btn_primary");
+    btn_apply_all->setFixedHeight(36);
+    connect(btn_apply_all, &QPushButton::clicked, this, &DevicePage::on_apply_all);
+    layout->addWidget(btn_apply_all);
 }
 
 void DevicePage::refresh() {
     auto& tel = Telemetry::instance();
     uint8_t cnt = tel.device_count.load(std::memory_order_acquire);
-    if (cnt == last_device_count) return;  // no change — skip full rebuild
+    if (cnt == last_device_count) return;
     last_device_count = cnt;
 
-    device_table->setRowCount(0);
+    // Remove all existing cards (leave trailing stretch)
+    rows_.clear();
+    while (cards_layout->count() > 1) {
+        QLayoutItem* item = cards_layout->takeAt(0);
+        if (item->widget()) item->widget()->deleteLater();
+        delete item;
+    }
+
     for (uint8_t i = 0; i < cnt; ++i) {
-        uint32_t ip  = tel.device_table[i].ip;
-        const char* mac = tel.device_table[i].mac.data();
+        uint32_t ip         = tel.device_table[i].ip;
+        const char* mac_str = tel.device_table[i].mac.data();
 
-        int row = device_table->rowCount();
-        device_table->insertRow(row);
-
-        // IP (display only)
-        struct in_addr addr{}; addr.s_addr = ip;
-        device_table->setItem(row, 0, new QTableWidgetItem(inet_ntoa(addr)));
-        // MAC (display only)
-        device_table->setItem(row, 1, new QTableWidgetItem(mac));
-
-        // Look up existing policy for this IP
-        bool blocked      = false;
-        bool rate_limited = false;
+        // Look up existing policy
+        bool blocked = false, rate_limited = false;
         double dl = 100.0, ul = 10.0;
         for (size_t j = 0; j < Config::DEVICE_POLICY_COUNT; ++j) {
             if (Config::DEVICE_POLICY_TABLE[j].ip == ip) {
@@ -1043,78 +1047,82 @@ void DevicePage::refresh() {
             }
         }
 
-        // 允许访问 checkbox
-        auto* chk_allow = new QCheckBox();
+        // Card frame
+        auto* card = new QFrame();
+        card->setStyleSheet(
+            "QFrame { background:#1e1e3a; border:1px solid #2a2a4a; border-radius:6px; }"
+        );
+        auto* cl = new QVBoxLayout(card);
+        cl->setSpacing(6);
+        cl->setContentsMargins(12, 8, 12, 8);
+
+        // Header: IP + MAC
+        struct in_addr addr{}; addr.s_addr = ip;
+        auto* lbl_info = new QLabel(
+            QString("<b>%1</b>  <span style='color:#707080;font-size:12px;'>%2</span>")
+                .arg(inet_ntoa(addr)).arg(mac_str));
+        lbl_info->setTextFormat(Qt::RichText);
+        cl->addWidget(lbl_info);
+
+        // Row 1: checkboxes
+        auto* chk_row = new QHBoxLayout();
+        auto* chk_allow = new QCheckBox("Allow Access");
         chk_allow->setChecked(!blocked);
-        chk_allow->setStyleSheet("margin-left: 8px;");
-        device_table->setCellWidget(row, 2, chk_allow);
-
-        // 启用限速 checkbox
-        auto* chk_rate = new QCheckBox();
+        auto* chk_rate = new QCheckBox("Rate Limit");
         chk_rate->setChecked(rate_limited);
-        chk_rate->setStyleSheet("margin-left: 8px;");
-        device_table->setCellWidget(row, 3, chk_rate);
+        chk_row->addWidget(chk_allow);
+        chk_row->addSpacing(24);
+        chk_row->addWidget(chk_rate);
+        chk_row->addStretch();
+        cl->addLayout(chk_row);
 
-        // 下载限速 spinbox
+        // Row 2: speed spinboxes
+        auto* spin_row = new QHBoxLayout();
         auto* spin_dl = new QDoubleSpinBox();
         spin_dl->setRange(0.1, 10000.0);
         spin_dl->setDecimals(1);
+        spin_dl->setPrefix("↓ ");
         spin_dl->setSuffix(" Mbps");
         spin_dl->setValue(dl);
-        device_table->setCellWidget(row, 4, spin_dl);
-
-        // 上传限速 spinbox
         auto* spin_ul = new QDoubleSpinBox();
         spin_ul->setRange(0.1, 10000.0);
         spin_ul->setDecimals(1);
+        spin_ul->setPrefix("↑ ");
         spin_ul->setSuffix(" Mbps");
         spin_ul->setValue(ul);
-        device_table->setCellWidget(row, 5, spin_ul);
+        spin_row->addWidget(spin_dl);
+        spin_row->addSpacing(12);
+        spin_row->addWidget(spin_ul);
+        spin_row->addStretch();
+        cl->addLayout(spin_row);
 
-        // 应用 button
-        auto* btn_apply = new QPushButton("应用");
-        btn_apply->setObjectName("btn_primary");
-        btn_apply->setFixedHeight(28);
-        int captured_row = row;
-        connect(btn_apply, &QPushButton::clicked, this, [this, captured_row]() {
-            on_apply_row(captured_row);
-        });
-        device_table->setCellWidget(row, 6, btn_apply);
+        cards_layout->insertWidget(cards_layout->count() - 1, card);
+
+        // Store widget references for on_apply_all
+        DeviceRow r;
+        r.ip        = ip;
+        r.chk_allow = chk_allow;
+        r.chk_rate  = chk_rate;
+        r.spin_dl   = spin_dl;
+        r.spin_ul   = spin_ul;
+        unsigned int m[6]{};
+        if (sscanf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x",
+                   &m[0],&m[1],&m[2],&m[3],&m[4],&m[5]) == 6)
+            for (int k = 0; k < 6; ++k) r.mac[k] = static_cast<uint8_t>(m[k]);
+        rows_.push_back(r);
     }
 }
 
-void DevicePage::on_apply_row(int row) {
-    if (row >= device_table->rowCount()) return;
-
-    auto* item_ip  = device_table->item(row, 0);
-    auto* item_mac = device_table->item(row, 1);
-    if (!item_ip || !item_mac) return;
-
-    uint32_t ip = inet_addr(item_ip->text().toStdString().c_str());
-    if (ip == INADDR_NONE) return;
-
-    auto* chk_allow = qobject_cast<QCheckBox*>(device_table->cellWidget(row, 2));
-    auto* chk_rate  = qobject_cast<QCheckBox*>(device_table->cellWidget(row, 3));
-    auto* spin_dl   = qobject_cast<QDoubleSpinBox*>(device_table->cellWidget(row, 4));
-    auto* spin_ul   = qobject_cast<QDoubleSpinBox*>(device_table->cellWidget(row, 5));
-    if (!chk_allow || !chk_rate || !spin_dl || !spin_ul) return;
-
-    // Parse MAC from display string "xx:xx:xx:xx:xx:xx"
-    uint8_t mac_bytes[6]{};
-    unsigned int m[6]{};
-    if (sscanf(item_mac->text().toStdString().c_str(),
-               "%02x:%02x:%02x:%02x:%02x:%02x",
-               &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) == 6) {
-        for (int k = 0; k < 6; ++k) mac_bytes[k] = static_cast<uint8_t>(m[k]);
+void DevicePage::on_apply_all() {
+    for (auto& r : rows_) {
+        Config::upsert_device_policy(r.ip, r.mac.data(),
+            !r.chk_allow->isChecked(),
+            r.chk_rate->isChecked(),
+            r.spin_dl->value(),
+            r.spin_ul->value());
     }
-
-    Config::upsert_device_policy(ip, mac_bytes,
-        !chk_allow->isChecked(),
-        chk_rate->isChecked(),
-        spin_dl->value(),
-        spin_ul->value());
     Config::DEVICE_POLICY_DIRTY.store(true, std::memory_order_release);
-    std::println("[GUI] Device policy applied for IP: {}", item_ip->text().toStdString());
+    std::println("[GUI] Device policies applied for {} device(s)", rows_.size());
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -1126,7 +1134,7 @@ PlaceholderPage::PlaceholderPage(const QString& name, QWidget* parent) : QWidget
     title->setObjectName("section_title");
     layout->addWidget(title);
     
-    auto* msg = new QLabel(QString("'%1' 功能模块正在构建中...\n\n该模块将包含: \n - 容器生命周期管理\n - 镜像快速部署\n - 虚拟化网络隔绝").arg(name));
+    auto* msg = new QLabel(QString("'%1' is under construction.\n\nThis module will include:\n - Container lifecycle management\n - Fast image deployment\n - Virtualised network isolation").arg(name));
     msg->setStyleSheet("color: #707080; font-size: 15px;");
     msg->setAlignment(Qt::AlignCenter);
     layout->addStretch();
@@ -1162,7 +1170,7 @@ void Dashboard::setup_ui() {
     title->setObjectName("header_title");
     header_lay->addWidget(title);
     header_lay->addStretch();
-    auto* status_dot = new QLabel("● 运行中");
+    auto* status_dot = new QLabel("● Running");
     status_dot->setStyleSheet("color: #00cc66; font-weight: bold; font-size: 14px;");
     header_lay->addWidget(status_dot);
 
@@ -1172,7 +1180,7 @@ void Dashboard::setup_ui() {
     connect(btn_notif, &QPushButton::clicked, this, &Dashboard::on_notif_toggle_clicked);
     header_lay->addWidget(btn_notif);
 
-    auto* btn_shutdown = new QPushButton("关闭程序");
+    auto* btn_shutdown = new QPushButton("Shutdown");
     btn_shutdown->setObjectName("btn_danger");
     connect(btn_shutdown, &QPushButton::clicked, this, &Dashboard::on_shutdown_clicked);
     header_lay->addWidget(btn_shutdown);
@@ -1193,7 +1201,7 @@ void Dashboard::setup_ui() {
     page_qos = new QosPage();
     page_services = new ServicePage();
     page_devices = new DevicePage();
-    page_vpn = new PlaceholderPage("🔐 VPN / IPsec 安全传输");
+    page_vpn = new PlaceholderPage("🔐 VPN / IPsec");
     page_system = new SystemPage();
 
     // Wrap each page in QScrollArea to prevent oversized content from
@@ -1224,7 +1232,7 @@ void Dashboard::setup_ui() {
     notif_panel_ = new NotificationPanel(centralWidget());
     notif_panel_->setFixedWidth(centralWidget()->width());
     notif_panel_->raise();
-    notif_panel_->push_notification("路由器已就绪", "数据平面 Core 2/3 挂载完成，转发引擎运行中。");
+    notif_panel_->push_notification("Router Ready", "Data plane Cores 2/3 attached. Forwarding engine running.");
 }
 
 void Dashboard::setup_nav() {
@@ -1233,7 +1241,7 @@ void Dashboard::setup_nav() {
     nav_list->setFixedWidth(160);
     nav_list->setIconSize(QSize(0, 0));
 
-    QStringList items = {"📊 总览", "🌐 接口 (LAN/WAN)", "⚡ QoS", "🔧 服务 (NAT/DHCP)", "📡 设备管理", "🔐 VPN / IPsec", "💻 系统"};
+    QStringList items = {"📊 Overview", "🌐 Interfaces", "⚡ QoS", "🔧 Services", "📡 Devices", "🔐 VPN / IPsec", "💻 System"};
     for (auto& label : items) nav_list->addItem(label);
 
     nav_list->setCurrentRow(0);
