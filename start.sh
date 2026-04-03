@@ -143,14 +143,18 @@ echo ""
 # These are also set in main.cpp via qputenv() as belt-and-suspenders, but
 # exporting them here ensures they are visible to Qt plugin discovery at exec().
 export QT_QPA_PLATFORM=eglfs
-export QT_QPA_EGLFS_ROTATION=90           # 90° CW: portrait panel → landscape
+export QT_QPA_EGLFS_ROTATION=90           # 90° CW: logical (0,0) → physical top-right
 export QT_QPA_EGLFS_INTEGRATION=eglfs_kms # Pi 5 VC7 KMS/DRM backend
 export QT_LOGGING_RULES="qt.qpa.*=false"  # suppress platform plugin verbose output
 
-# Touch-screen axis calibration for 90° CW display rotation:
-# lx = 1 - py,  ly = px  (physical portrait coords → logical landscape coords)
-export LIBINPUT_CALIBRATION_MATRIX="0 -1 1 1 0 0"
-# If touch is diagonally mirrored (CCW panel), swap to:
-# export LIBINPUT_CALIBRATION_MATRIX="0 1 0 -1 0 1"
+# Touch-screen axis calibration for 90° CW display rotation.
+#
+# eglfs CW rotation maps logical→physical as:  px = 1-ly,  py = lx
+# Inverse (physical touch → logical app):       lx = py,    ly = 1-px
+# Libinput matrix [a b c  d e f]: lx=a·px+b·py+c,  ly=d·px+e·py+f
+#   → a=0 b=1 c=0 / d=-1 e=0 f=1
+export LIBINPUT_CALIBRATION_MATRIX="0 1 0 -1 0 1"
+# If the panel rotates CCW instead (ROTATION=270), use the mirrored matrix:
+# export LIBINPUT_CALIBRATION_MATRIX="0 -1 1 1 0 0"
 
 exec "$BINARY"
