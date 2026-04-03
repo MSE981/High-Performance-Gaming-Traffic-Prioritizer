@@ -31,8 +31,6 @@ REQUIRED_PKGS=(
     cmake
     gcc-14
     g++-14
-    libgpiod-dev
-    libgpiod2
     qt6-base-dev
     qt6-base-dev-tools
     ethtool

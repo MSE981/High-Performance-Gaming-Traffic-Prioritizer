@@ -28,7 +28,6 @@ target_link_libraries(GamingTrafficPrioritizer PRIVATE
     Qt6::Widgets
     Qt6::OpenGL
     Threads::Threads
-    gpiodcxx
 )
 
 target_compile_definitions(GamingTrafficPrioritizer PRIVATE _GNU_SOURCE)

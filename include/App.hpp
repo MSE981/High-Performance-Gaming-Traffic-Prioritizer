@@ -18,7 +18,6 @@
 #include "SystemOptimizer.hpp"
 #include "Telemetry.hpp"
 #include "ProbeManager.hpp"
-#include "Indicator.hpp"
 #include "Scheduler.hpp"
 #include "FirewallEngine.hpp"
 #include <print>
@@ -384,7 +383,6 @@ namespace Scalpel {
         std::shared_ptr<Logic::FirewallEngine> firewall_engine;
         std::shared_ptr<Logic::UpnpEngine> upnp_engine;
         std::shared_ptr<QoSConfig> qos_config;
-        HW::RGBLed led;
         int lan_fd_ = -1; // cached LAN fd for use by watchdog_loop
 
         std::shared_ptr<Traffic::Shaper> shaper_dl;
@@ -815,8 +813,6 @@ namespace Scalpel {
 
                 // Heartbeat-based fault detection (high/low frequency decoupling)
                 uint64_t current_tick = tel.core_metrics[2].last_heartbeat.load(std::memory_order_relaxed);
-                if (current_tick == last_ticks[2]) led.set_red(); // no tick increment in 1s — thread stalled
-                else led.set_green();
                 last_ticks[2] = current_tick;
             }
             close(tfd);
