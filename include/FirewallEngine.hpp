@@ -5,6 +5,7 @@
 #include <cstring>
 #include <netinet/in.h>
 #include "Headers.hpp"
+#include "Config.hpp"
 
 namespace Scalpel::Logic {
 
@@ -54,6 +55,12 @@ namespace Scalpel::Logic {
         std::array<ConnTrackEntry, TABLE_SIZE> table{};
         std::atomic<uint32_t> current_tick{0};
 
+        // Per-device block list: written by Core 1 watchdog, read by Core 2/3 hot path.
+        // Using a small linear array — max 64 blocked devices, O(n) scan is negligible.
+        static constexpr size_t MAX_BLOCKED = 64;
+        std::array<uint32_t, MAX_BLOCKED> blocked_ips{};
+        std::atomic<uint8_t> blocked_count{0};
+
         // FNV-1a keyed on remote side only — ensures outbound writes and inbound reads
         // hash to the same bucket, making cross-direction lookup possible.
         static uint32_t hash_remote(uint32_t remote_ip, uint16_t remote_port, uint8_t proto) {
@@ -84,6 +91,24 @@ namespace Scalpel::Logic {
     public:
         // Core 1: advance logical clock (called at 1 Hz by watchdog)
         void tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
+
+        // Core 1: rebuild blocked IP list from Config::DEVICE_POLICY_TABLE
+        void sync_blocked_ips() {
+            uint8_t cnt = 0;
+            for (size_t i = 0; i < Config::DEVICE_POLICY_COUNT && cnt < MAX_BLOCKED; ++i) {
+                if (Config::DEVICE_POLICY_TABLE[i].blocked)
+                    blocked_ips[cnt++] = Config::DEVICE_POLICY_TABLE[i].ip;
+            }
+            blocked_count.store(cnt, std::memory_order_release);
+        }
+
+        // Core 2/3 hot path: O(n) scan over tiny list
+        bool is_blocked_ip(uint32_t ip) const {
+            uint8_t cnt = blocked_count.load(std::memory_order_acquire);
+            for (uint8_t i = 0; i < cnt; ++i)
+                if (blocked_ips[i] == ip) return true;
+            return false;
+        }
 
         // Core 3 (LAN→WAN): register or refresh outbound session BEFORE SNAT.
         //

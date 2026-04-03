@@ -7,6 +7,7 @@
 #include <chrono>
 #include <ctime>
 #include <sys/socket.h>
+#include <arpa/inet.h>
 #include "NetworkUtils.hpp"
 #include "NetworkEngine.hpp"
 #include "Processor.hpp"
@@ -134,6 +135,7 @@ namespace Scalpel {
         std::shared_ptr<Logic::NatEngine> nat_engine;
         std::shared_ptr<Logic::DnsEngine> dns_engine;
         std::shared_ptr<QoSConfig> qos_config;
+        std::shared_ptr<QoSConfig> device_shaper;  // per-device hard rate cap (DL for core2, UL for core3) — independent of QoS
         std::shared_ptr<Logic::DhcpEngine> dhcp_engine;
         std::shared_ptr<Logic::FirewallEngine> firewall_engine;
         uint32_t gateway_ip;
@@ -152,6 +154,7 @@ namespace Scalpel {
         std::shared_ptr<Logic::NatEngine> nat_engine;
         std::shared_ptr<Logic::DnsEngine> dns_engine;
         std::shared_ptr<QoSConfig> qos_config;
+        std::shared_ptr<QoSConfig> device_shaper;
         std::shared_ptr<Logic::DhcpEngine> dhcp_engine;
         std::shared_ptr<Logic::FirewallEngine> firewall_engine;
         uint32_t gateway_ip = 0;
@@ -160,13 +163,14 @@ namespace Scalpel {
 
         // Callback-based pipeline — eliminates all runtime if-else branching
         using PipelineStep = std::function<bool(PacketConsumer&, Net::ParsedPacket&)>;
-        std::array<PipelineStep, 8> pipeline;
+        std::array<PipelineStep, 10> pipeline;
 
         PacketConsumer(int rx_fd, const PacketWorkerConfig& cfg)
             : rx_fd(rx_fd), tx_fd(cfg.tx_fd), core_id(cfg.core_id),
               ctx{cfg.tx_fd, cfg.global_shaper},
               nat_engine(cfg.nat_engine), dns_engine(cfg.dns_engine),
-              qos_config(cfg.qos_config), dhcp_engine(cfg.dhcp_engine),
+              qos_config(cfg.qos_config), device_shaper(cfg.device_shaper),
+              dhcp_engine(cfg.dhcp_engine),
               firewall_engine(cfg.firewall_engine), gateway_ip(cfg.gateway_ip) {
 
             routes = {{
@@ -178,11 +182,18 @@ namespace Scalpel {
             // Core 2 (WAN -> LAN, downstream): apply per-IP download shaper before QoS routing.
             // Core 3 (LAN -> WAN, upstream):   apply per-IP upload shaper before QoS routing.
             if (core_id == 2) {
-                // Firewall inbound check runs before DNAT so we see the original WAN source IP/port
-                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_firewall_inbound, step_nat_downstream, step_ip_shaper_downstream, step_qos_routing };
+                // step_block_device_downstream runs after DNAT so daddr is the real LAN IP.
+                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_firewall_inbound,
+                             step_nat_downstream, step_block_device_downstream,
+                             step_device_shaper_downstream, step_ip_shaper_downstream,
+                             step_qos_routing };
             } else {
-                // Firewall track runs before SNAT so we record the original LAN destination IP/port
-                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_local_delivery_blocker, step_firewall_track_outbound, step_nat_downstream, step_nat_upstream, step_ip_shaper_upstream, step_qos_routing };
+                // step_block_device_upstream checks saddr (LAN IP) before SNAT.
+                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_local_delivery_blocker,
+                             step_block_device_upstream, step_firewall_track_outbound,
+                             step_nat_downstream, step_nat_upstream,
+                             step_device_shaper_upstream, step_ip_shaper_upstream,
+                             step_qos_routing };
             }
         } // end PacketConsumer constructor
 
@@ -295,6 +306,44 @@ namespace Scalpel {
             return false; // never blocks forwarding
         }
 
+        // Core 2 (WAN→LAN): drop if LAN destination device is blocked (runs after DNAT)
+        static bool step_block_device_downstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (!pkt.is_valid_ipv4() || !self.firewall_engine) return false;
+            return self.firewall_engine->is_blocked_ip(pkt.ipv4->daddr);
+        }
+
+        // Core 3 (LAN→WAN): drop if LAN source device is blocked (runs before SNAT)
+        static bool step_block_device_upstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (!pkt.is_valid_ipv4() || !self.firewall_engine) return false;
+            return self.firewall_engine->is_blocked_ip(pkt.ipv4->saddr);
+        }
+
+        // Core 2 (WAN→LAN): per-device download rate shaping (daddr = LAN device)
+        static bool step_device_shaper_downstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (!pkt.is_valid_ipv4() || !self.device_shaper) return false;
+            size_t active_idx = self.device_shaper->active_idx.load(std::memory_order_acquire);
+            auto shaper = self.device_shaper->buffers[active_idx].find(pkt.ipv4->daddr);
+            if (shaper) {
+                RouteContext ctx{self.tx_fd, shaper};
+                shaper_handler(ctx, pkt.raw_span, 2, self.core_id);
+                return true;
+            }
+            return false;
+        }
+
+        // Core 3 (LAN→WAN): per-device upload rate shaping (saddr = LAN device)
+        static bool step_device_shaper_upstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (!pkt.is_valid_ipv4() || !self.device_shaper) return false;
+            size_t active_idx = self.device_shaper->active_idx.load(std::memory_order_acquire);
+            auto shaper = self.device_shaper->buffers[active_idx].find(pkt.ipv4->saddr);
+            if (shaper) {
+                RouteContext ctx{self.tx_fd, shaper};
+                shaper_handler(ctx, pkt.raw_span, 2, self.core_id);
+                return true;
+            }
+            return false;
+        }
+
         static bool step_qos_routing(PacketConsumer& self, Net::ParsedPacket& pkt) {
             auto prio = self.processor.process(pkt);
             const size_t p_idx = static_cast<size_t>(prio);
@@ -338,6 +387,13 @@ namespace Scalpel {
         HW::RGBLed led;
         int lan_fd_ = -1; // cached LAN fd for use by watchdog_loop
 
+        std::shared_ptr<Traffic::Shaper> shaper_dl;
+        std::shared_ptr<Traffic::Shaper> shaper_ul;
+        double base_dl_mbps = 500.0;
+        double base_ul_mbps = 50.0;
+        std::shared_ptr<QoSConfig> device_shaper_dl;
+        std::shared_ptr<QoSConfig> device_shaper_ul;
+
         std::jthread worker_downstream;
         std::jthread worker_upstream;
         std::jthread watchdog;
@@ -361,7 +417,9 @@ namespace Scalpel {
             // service is enabled so that enable_upnp=false actually suppresses the daemon.
             if (Config::global_state.enable_upnp.load(std::memory_order_relaxed))
                 upnp_engine = std::make_shared<Logic::UpnpEngine>(nat_engine, Config::ROUTER_IP);
-            qos_config = std::make_shared<QoSConfig>();
+            qos_config    = std::make_shared<QoSConfig>();
+            device_shaper_dl = std::make_shared<QoSConfig>();
+            device_shaper_ul = std::make_shared<QoSConfig>();
 
             // Initialize QoS lock-free double-buffer table
             qos_config->update(Config::IP_LIMIT_TABLE, Config::IP_LIMIT_COUNT);
@@ -387,8 +445,7 @@ namespace Scalpel {
 
             watchdog = std::jthread([this](std::stop_token st) { watchdog_loop(st); });
 
-            std::string gw_ip = Utils::Network::get_gateway_ip();
-            Utils::Network::force_arp_resolution(gw_ip);
+            Utils::Network::force_arp_resolution(Utils::Network::get_gateway_ip());
 
             std::thread([]{
                 Probe::Manager::run_internal_stress([](double mbps) {
@@ -404,19 +461,21 @@ namespace Scalpel {
             double dl = tel.isp_down_limit_mbps.load(std::memory_order_relaxed) > 1.0 ? tel.isp_down_limit_mbps.load(std::memory_order_relaxed) : 500.0;
             double ul = tel.isp_up_limit_mbps.load(std::memory_order_relaxed) > 1.0 ? tel.isp_up_limit_mbps.load(std::memory_order_relaxed) : 50.0;
 
-            auto shaper_dl = std::make_shared<Traffic::Shaper>(dl * 0.85);
-            auto shaper_ul = std::make_shared<Traffic::Shaper>(ul * 0.85);
+            base_dl_mbps = dl;
+            base_ul_mbps = ul;
+            shaper_dl = std::make_shared<Traffic::Shaper>(base_dl_mbps);
+            shaper_ul = std::make_shared<Traffic::Shaper>(base_ul_mbps);
 
             uint32_t gw_ip = Config::parse_ip_str(Config::ROUTER_IP);
             worker_downstream = std::jthread(
                 [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, PacketWorkerConfig cfg) {
                     worker_event_loop(std::move(st), std::move(iface), std::move(cfg));
-                }, std::move(iface_wan), PacketWorkerConfig{fd_lan, 2, shaper_dl, nat_engine, dns_engine, qos_config, dhcp_engine, firewall_engine, gw_ip});
+                }, std::move(iface_wan), PacketWorkerConfig{fd_lan, 2, shaper_dl, nat_engine, dns_engine, qos_config, device_shaper_dl, dhcp_engine, firewall_engine, gw_ip});
 
             worker_upstream = std::jthread(
                 [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, PacketWorkerConfig cfg) {
                     worker_event_loop(std::move(st), std::move(iface), std::move(cfg));
-                }, std::move(iface_lan), PacketWorkerConfig{fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config, dhcp_engine, firewall_engine, gw_ip});
+                }, std::move(iface_lan), PacketWorkerConfig{fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config, device_shaper_ul, dhcp_engine, firewall_engine, gw_ip});
 
             std::println("[App] Data plane and control plane started.");
         }
@@ -481,6 +540,7 @@ namespace Scalpel {
             uint64_t last_bytes[4] = {0, 0, 0, 0};
             uint64_t last_ticks[4] = {0, 0, 0, 0};
             uint64_t watchdog_tick = 0;
+            int last_throttle_pct = 100;
 
             auto& si = tel.sys_info;
             struct pollfd pfds[2]{};
@@ -604,6 +664,39 @@ namespace Scalpel {
                     // Scan /sys/class/net via lambda — raw fd + POSIX readdir, Core 1 only
                     scan_ifaces();
                     did_iface_scan = true;
+
+                    // Scan /proc/net/arp into Telemetry::device_table (Core 1, 5Hz)
+                    {
+                        char arp_buf[4096]{};
+                        int arp_fd = ::open("/proc/net/arp", O_RDONLY);
+                        if (arp_fd >= 0) {
+                            ssize_t nr = ::read(arp_fd, arp_buf, sizeof(arp_buf) - 1);
+                            ::close(arp_fd);
+                            uint8_t dcnt = 0;
+                            if (nr > 0) {
+                                // Skip header line
+                                char* line = arp_buf;
+                                char* end  = arp_buf + nr;
+                                while (line < end && *line != '\n') ++line;
+                                if (line < end) ++line;
+                                while (line < end && dcnt < Telemetry::MAX_TRACKED_DEVICES) {
+                                    char ip_str[20]{}, hw[8]{}, flags[8]{}, mac_str[20]{};
+                                    if (sscanf(line, "%19s %7s %7s %19s", ip_str, hw, flags, mac_str) == 4) {
+                                        uint32_t ip = inet_addr(ip_str);
+                                        if (ip != INADDR_NONE && strcmp(flags, "0x0") != 0) {
+                                            tel.device_table[dcnt].ip = ip;
+                                            strncpy(tel.device_table[dcnt].mac.data(), mac_str, 17);
+                                            tel.device_table[dcnt].mac[17] = '\0';
+                                            ++dcnt;
+                                        }
+                                    }
+                                    while (line < end && *line != '\n') ++line;
+                                    if (line < end) ++line;
+                                }
+                            }
+                            tel.device_count.store(dcnt, std::memory_order_release);
+                        }
+                    }
                 }
 
                 // If on-demand rescan was requested in same tick but 5-tick block didn't run, do it now
@@ -623,6 +716,61 @@ namespace Scalpel {
                 last_bytes[2] = total_bytes_down;
                 last_bytes[3] = total_bytes_up;
 
+                // Sync per-device block list and rate shapers when GUI sets DEVICE_POLICY_DIRTY
+                if (Config::DEVICE_POLICY_DIRTY.exchange(false, std::memory_order_acq_rel)) {
+                    // Rebuild firewall blocked IP list
+                    if (firewall_engine) firewall_engine->sync_blocked_ips();
+
+                    // Rebuild device QoS DL table (keyed by LAN IP, used in Core 2 daddr lookup)
+                    if (device_shaper_dl) {
+                        size_t active = device_shaper_dl->active_idx.load(std::memory_order_relaxed);
+                        size_t inactive = 1 - active;
+                        device_shaper_dl->buffers[inactive] = {};
+                        for (size_t i = 0; i < Config::DEVICE_POLICY_COUNT; ++i) {
+                            const auto& p = Config::DEVICE_POLICY_TABLE[i];
+                            if (p.rate_limited && p.ip != 0)
+                                device_shaper_dl->buffers[inactive].insert(p.ip, std::make_shared<Traffic::Shaper>(p.dl_mbps));
+                        }
+                        device_shaper_dl->active_idx.store(inactive, std::memory_order_release);
+                    }
+
+                    // Rebuild device QoS UL table (keyed by LAN IP, used in Core 3 saddr lookup)
+                    if (device_shaper_ul) {
+                        size_t active = device_shaper_ul->active_idx.load(std::memory_order_relaxed);
+                        size_t inactive = 1 - active;
+                        device_shaper_ul->buffers[inactive] = {};
+                        for (size_t i = 0; i < Config::DEVICE_POLICY_COUNT; ++i) {
+                            const auto& p = Config::DEVICE_POLICY_TABLE[i];
+                            if (p.rate_limited && p.ip != 0)
+                                device_shaper_ul->buffers[inactive].insert(p.ip, std::make_shared<Traffic::Shaper>(p.ul_mbps));
+                        }
+                        device_shaper_ul->active_idx.store(inactive, std::memory_order_release);
+                    }
+                    std::println("[Device] Policy synced: {} entries", Config::DEVICE_POLICY_COUNT);
+                }
+
+                // Apply DNS config changes when GUI sets dns_config_dirty
+                if (dns_engine && tel.dns_config_dirty.exchange(false, std::memory_order_acq_rel)) {
+                    uint32_t primary   = Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY);
+                    uint32_t secondary = Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY);
+                    dns_engine->set_upstream(primary, secondary);
+                    dns_engine->set_redirect(Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
+                    dns_engine->reload_static_records();
+                    std::println("[DNS] Config applied: upstream {} / {}, redirect={}, static={} records",
+                        Config::DNS_UPSTREAM_PRIMARY, Config::DNS_UPSTREAM_SECONDARY,
+                        Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed) ? "on" : "off",
+                        Config::STATIC_DNS_COUNT);
+                }
+
+                // Reconfigure DHCP engine when GUI has changed pool settings
+                if (dhcp_engine && tel.dhcp_config_dirty.exchange(false, std::memory_order_acq_rel)) {
+                    uint32_t start_ip = Config::parse_ip_str(Config::DHCP_POOL_START);
+                    uint32_t end_ip   = Config::parse_ip_str(Config::DHCP_POOL_END);
+                    dhcp_engine->reconfigure(start_ip, end_ip, Config::DHCP_LEASE_SECONDS);
+                    std::println("[DHCP] Pool reconfigured: {} – {}, lease {}s",
+                        Config::DHCP_POOL_START, Config::DHCP_POOL_END, Config::DHCP_LEASE_SECONDS);
+                }
+
                 // Drive control-plane engines at 1Hz (low-frequency async work pool)
                 if (nat_engine) nat_engine->tick();
                 if (dns_engine) {
@@ -635,6 +783,34 @@ namespace Scalpel {
                 if (firewall_engine) {
                     firewall_engine->tick();
                     firewall_engine->cleanup();
+                }
+
+                // Accept speedtest results when GUI user clicks "接受" (Core 0 → Core 1)
+                if (tel.speedtest_result_ready.exchange(false, std::memory_order_acq_rel)) {
+                    double new_dl = tel.isp_down_limit_mbps.load(std::memory_order_relaxed);
+                    double new_ul = tel.isp_up_limit_mbps.load(std::memory_order_relaxed);
+                    if (new_dl > 0.0) base_dl_mbps = new_dl;
+                    if (new_ul > 0.0) base_ul_mbps = new_ul;
+                    int pct = tel.qos_throttle_pct.load(std::memory_order_relaxed);
+                    double factor = pct / 100.0;
+                    if (shaper_dl) shaper_dl->set_rate_limit(base_dl_mbps * factor);
+                    if (shaper_ul) shaper_ul->set_rate_limit(base_ul_mbps * factor);
+                    last_throttle_pct = pct; // suppress spurious re-apply below
+                    std::println("[SpeedTest] Base rates updated: DL {:.1f} Mbps / UL {:.1f} Mbps (throttle {}%)",
+                        base_dl_mbps * factor, base_ul_mbps * factor, pct);
+                }
+
+                // Apply QoS throttle from GUI slider (written by Core 0, consumed here on Core 1)
+                {
+                    int pct = tel.qos_throttle_pct.load(std::memory_order_relaxed);
+                    if (pct != last_throttle_pct) {
+                        last_throttle_pct = pct;
+                        double factor = pct / 100.0;
+                        if (shaper_dl) shaper_dl->set_rate_limit(base_dl_mbps * factor);
+                        if (shaper_ul) shaper_ul->set_rate_limit(base_ul_mbps * factor);
+                        std::println("[QoS] Throttle {}% — DL {:.1f} Mbps / UL {:.1f} Mbps",
+                            pct, base_dl_mbps * factor, base_ul_mbps * factor);
+                    }
                 }
 
                 // Heartbeat-based fault detection (high/low frequency decoupling)

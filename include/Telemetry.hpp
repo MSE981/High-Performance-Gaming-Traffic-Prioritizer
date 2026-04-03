@@ -25,11 +25,27 @@ namespace Scalpel {
         std::atomic<double> internal_limit_mbps{ 0.0 };
         std::atomic<double> isp_down_limit_mbps{ 0.0 };
         std::atomic<double> isp_up_limit_mbps{ 0.0 };
+        // Set by GUI (Core 0) when user accepts speedtest results; consumed by Core 1 watchdog
+        // to propagate new base rates into the active shapers
+        std::atomic<bool> speedtest_result_ready{ false };
         std::atomic<double> internal_pps{ 0.0 };
         std::atomic<double> isp_pps{ 0.0 };
         std::atomic<bool> is_probing{ false };
         std::atomic<bool> bridge_mode{ false };
         std::atomic<double> cpu_temp_celsius{ 0.0 };  // updated by Core 1 watchdog via timerfd, read by Qt UI
+        std::atomic<int> qos_throttle_pct{ 85 };     // 0–100, written by GUI slider (Core 0), applied by Core 1 watchdog
+        std::atomic<bool> dhcp_config_dirty{ false }; // set by GUI (Core 0), consumed by Core 1 watchdog
+        std::atomic<bool> dns_config_dirty{ false };  // set by GUI (Core 0), consumed by Core 1 watchdog
+
+        // Device table: scanned from /proc/net/arp by Core 1 watchdog every 5s.
+        // Plain char arrays — torn reads acceptable for display-only data.
+        static constexpr uint8_t MAX_TRACKED_DEVICES = 64;
+        struct DeviceEntry {
+            uint32_t ip = 0;
+            std::array<char, 18> mac{};  // "xx:xx:xx:xx:xx:xx\0"
+        };
+        std::array<DeviceEntry, MAX_TRACKED_DEVICES> device_table{};
+        std::atomic<uint8_t> device_count{0}; // release-stored last after all entries are written
 
         // System info: updated by Core 1 watchdog every 5 seconds, read by UI thread on-demand.
         // char arrays are plain (not atomic) — display-only data, torn reads are acceptable.

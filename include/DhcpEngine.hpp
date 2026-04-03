@@ -49,22 +49,37 @@ namespace Scalpel::Logic {
     // Phase 2.5: Zero-Allocation user-space DHCP server (no Dnsmasq needed)
     class DhcpEngine {
         Net::SpscRingBuffer<DhcpMessage, 512> request_queue{};
-        
-        static constexpr size_t POOL_SIZE = 200; // 192.168.1.50 - 192.168.1.249
-        std::array<DhcpLease, POOL_SIZE> leases{};
+
+        static constexpr size_t MAX_POOL_SIZE = 253; // max usable IPs in a /24
+        std::array<DhcpLease, MAX_POOL_SIZE> leases{};
+        size_t pool_count = 0;
         uint32_t router_ip;
-        uint32_t base_ip;
-        
+        uint32_t lease_seconds = 86400;
+
+        void init_pool(uint32_t start_ip, uint32_t end_ip) {
+            uint32_t start_h = ntohl(start_ip);
+            uint32_t end_h   = ntohl(end_ip);
+            if (end_h < start_h) end_h = start_h;
+            pool_count = std::min(static_cast<size_t>(end_h - start_h + 1), MAX_POOL_SIZE);
+            for (size_t i = 0; i < pool_count; ++i) {
+                leases[i].ip = htonl(start_h + static_cast<uint32_t>(i));
+                leases[i].active = false;
+            }
+        }
+
     public:
         DhcpEngine(const std::string& lan_ip) {
             router_ip = inet_addr(lan_ip.c_str());
-            uint32_t network_prefix = ntohl(router_ip) & 0xFFFFFF00;
-            base_ip = htonl(network_prefix | 50); 
-            
-            for (size_t i = 0; i < POOL_SIZE; ++i) {
-                leases[i].ip = htonl(ntohl(base_ip) + i);
-                leases[i].active = false;
-            }
+            uint32_t start_ip = inet_addr(Config::DHCP_POOL_START.c_str());
+            uint32_t end_ip   = inet_addr(Config::DHCP_POOL_END.c_str());
+            lease_seconds = Config::DHCP_LEASE_SECONDS;
+            init_pool(start_ip, end_ip);
+        }
+
+        // Called by Core 1 watchdog when GUI sets dhcp_config_dirty
+        void reconfigure(uint32_t start_ip, uint32_t end_ip, uint32_t lease_secs) {
+            lease_seconds = lease_secs;
+            init_pool(start_ip, end_ip);
         }
 
         // Data plane (Core 3 LAN_RX): intercept and queue request to control plane
@@ -140,27 +155,29 @@ namespace Scalpel::Logic {
 
         uint32_t find_or_assign_lease(const uint8_t* mac) {
             auto now = std::chrono::steady_clock::now();
-            
-            for (auto& lease : leases) {
-                if (lease.active && std::memcmp(lease.mac, mac, 6) == 0) return lease.ip;    
+            auto duration = std::chrono::seconds(lease_seconds);
+
+            for (size_t i = 0; i < pool_count; ++i) {
+                if (leases[i].active && std::memcmp(leases[i].mac, mac, 6) == 0) return leases[i].ip;
             }
-            
-            for (auto& lease : leases) {
-                if (!lease.active || now > lease.lease_expiry) {
-                    std::memcpy(lease.mac, mac, 6);
-                    lease.active = true;
-                    lease.lease_expiry = now + std::chrono::hours(24);
-                    return lease.ip;
+
+            for (size_t i = 0; i < pool_count; ++i) {
+                if (!leases[i].active || now > leases[i].lease_expiry) {
+                    std::memcpy(leases[i].mac, mac, 6);
+                    leases[i].active = true;
+                    leases[i].lease_expiry = now + duration;
+                    return leases[i].ip;
                 }
             }
             return 0;
         }
 
         void commit_lease(const uint8_t* mac, uint32_t ip) {
-            for (auto& lease : leases) {
-                if (lease.ip == ip) {
-                    lease.active = true;
-                    lease.lease_expiry = std::chrono::steady_clock::now() + std::chrono::hours(24);
+            auto duration = std::chrono::seconds(lease_seconds);
+            for (size_t i = 0; i < pool_count; ++i) {
+                if (leases[i].ip == ip) {
+                    leases[i].active = true;
+                    leases[i].lease_expiry = std::chrono::steady_clock::now() + duration;
                     return;
                 }
             }
@@ -209,7 +226,7 @@ namespace Scalpel::Logic {
             *opt++ = 1; *opt++ = 4; *opt++ = 255; *opt++ = 255; *opt++ = 255; *opt++ = 0;
             *opt++ = 3; *opt++ = 4; std::memcpy(opt, &router_ip, 4); opt += 4;
             *opt++ = 6; *opt++ = 4; std::memcpy(opt, &router_ip, 4); opt += 4;
-            uint32_t lease_time = htonl(86400);
+            uint32_t lease_time = htonl(lease_seconds);
             *opt++ = 51; *opt++ = 4; std::memcpy(opt, &lease_time, 4); opt += 4;
             *opt++ = 54; *opt++ = 4; std::memcpy(opt, &router_ip, 4); opt += 4;
             *opt++ = 255; // DHCP End Indicator

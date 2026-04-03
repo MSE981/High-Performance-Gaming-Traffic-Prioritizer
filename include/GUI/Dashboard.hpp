@@ -18,9 +18,15 @@
 #include <QHeaderView>
 #include <QComboBox>
 #include <QSocketNotifier>
+#include <QSlider>
+#include <QSpinBox>
+#include <QDoubleSpinBox>
+#include <QValidator>
+#include <QRegularExpressionValidator>
 #include <array>
 #include <string>
 #include "Telemetry.hpp"
+#include "ProbeManager.hpp"
 
 namespace Scalpel::GUI {
 
@@ -128,12 +134,15 @@ private slots:
     void on_add_rule();
     void on_remove_rule();
     void on_toggle_accel();
+    void on_throttle_changed(int value);
 private:
-    QCheckBox* chk_acceleration;
-    QLineEdit* edit_dl_limit;
-    QLineEdit* edit_ul_limit;
+    QCheckBox*    chk_acceleration;
+    QLineEdit*    edit_dl_limit;
+    QLineEdit*    edit_ul_limit;
     QTableWidget* rules_table;
-    QPushButton* btn_add_rule;
+    QPushButton*  btn_add_rule;
+    QSlider*      throttle_slider;
+    QLabel*       lbl_throttle;
 };
 
 // ═══════════════════════════════════════════
@@ -144,12 +153,45 @@ class ServicePage : public QWidget {
 public:
     explicit ServicePage(QWidget* parent = nullptr);
     void refresh_status();
+private slots:
+    void on_dhcp_apply();
+    void on_dns_apply();
+    void on_dns_add_record();
+    void on_dns_remove_record();
 private:
     struct ServiceRow {
         QCheckBox* chk;
         QLabel* status_label;
     };
     ServiceRow rows[5]; // NAT, DHCP, DNS, Firewall, UPnP
+
+    // DHCP pool configuration widgets
+    QLineEdit* edit_pool_start;
+    QLineEdit* edit_pool_end;
+    QSpinBox*  spin_days;
+    QSpinBox*  spin_hours;
+    QSpinBox*  spin_minutes;
+
+    // DNS configuration widgets
+    QLineEdit*    edit_dns_primary;
+    QLineEdit*    edit_dns_secondary;
+    QCheckBox*    chk_dns_redirect;
+    QTableWidget* static_dns_table;
+};
+
+// ═══════════════════════════════════════════
+// Device management page: per-device access control + rate limiting
+// ═══════════════════════════════════════════
+class DevicePage : public QWidget {
+    Q_OBJECT
+public:
+    explicit DevicePage(QWidget* parent = nullptr);
+    void refresh();  // called by timerEvent when this page is visible
+private slots:
+    void on_apply_row(int row);
+private:
+    QTableWidget* device_table;
+    uint8_t last_device_count = 255;  // force first refresh
 };
 
 // ═══════════════════════════════════════════
@@ -163,6 +205,9 @@ public:
 private slots:
     void on_save_config();
     void on_restart_engine();
+    void on_speedtest_clicked();
+    // Called on Qt thread when speedtest completes (via QueuedConnection)
+    void on_speedtest_done(double dl_mbps, double ul_mbps);
 private:
     QLabel* lbl_hostname;
     QLabel* lbl_kernel;
@@ -170,10 +215,12 @@ private:
     QLabel* lbl_uptime;
     QLabel* lbl_memory;
     QLineEdit* edit_config_path;
+    QPushButton* btn_speedtest;
+    QLabel*      lbl_speedtest_status;
 };
 
 // ═══════════════════════════════════════════
-// Placeholder pages: Docker / VPN, etc.
+// Placeholder pages: VPN, etc.
 // ═══════════════════════════════════════════
 class PlaceholderPage : public QWidget {
     Q_OBJECT
@@ -207,7 +254,7 @@ private:
     InterfacePage*   page_interfaces;
     QosPage*         page_qos;
     ServicePage*     page_services;
-    PlaceholderPage* page_docker;
+    DevicePage*      page_devices;
     PlaceholderPage* page_vpn;
     SystemPage*      page_system;
 
