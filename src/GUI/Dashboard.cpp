@@ -208,8 +208,8 @@ void OverviewPage::refresh(const Telemetry& tel, const std::array<uint64_t, 4>& 
         uint64_t cp = tel.core_metrics[i].pkts.load(std::memory_order_relaxed);
         uint64_t cb = tel.core_metrics[i].bytes.load(std::memory_order_relaxed);
         uint64_t dp = cp - last_p[i], db = cb - last_b[i];
-        total_pps += dp * 25.0;   // 25Hz tick: scale 40ms delta to per-second rate
-        total_bps += db * 25.0;
+        total_pps += dp * 60.0;   // 60Hz tick: scale 16ms delta to per-second rate
+        total_bps += db * 60.0;
         core_labels[i]->setText(QString("Core %1\n%2 Pkts\n%3 KB")
             .arg(i).arg(cp).arg(cb / 1024));
     }
@@ -1155,8 +1155,8 @@ Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Scalpel Gaming Router");
     setStyleSheet(DARK_STYLESHEET);
     setup_ui();
-    // Data timer: 25Hz (40ms), always on — feeds RealTimePlot and router stats labels
-    data_timer_id_ = startTimer(40, Qt::CoarseTimer);
+    // Unified 60Hz timer: drives spring animation and data refresh on every frame
+    data_timer_id_ = startTimer(16, Qt::PreciseTimer);
 }
 
 void Dashboard::setup_ui() {
@@ -1283,19 +1283,6 @@ void Dashboard::on_shutdown_clicked() {
 
 void Dashboard::on_notif_toggle_clicked() {
     notif_panel_->set_expanded(!notif_panel_->is_expanded());
-    enter_anim_mode();
-}
-
-void Dashboard::enter_anim_mode() {
-    if (anim_timer_id_ != -1) return;
-    // 60Hz animation timer: vsync-synced by Qt Wayland compositor
-    anim_timer_id_ = startTimer(16, Qt::PreciseTimer);
-}
-
-void Dashboard::exit_anim_mode() {
-    if (anim_timer_id_ == -1) return;
-    killTimer(anim_timer_id_);
-    anim_timer_id_ = -1;
 }
 
 void Dashboard::resizeEvent(QResizeEvent* event) {
@@ -1305,27 +1292,24 @@ void Dashboard::resizeEvent(QResizeEvent* event) {
 }
 
 void Dashboard::timerEvent(QTimerEvent* event) {
-    const int id = event->timerId();
+    if (event->timerId() != data_timer_id_) return;
 
-    if (id == anim_timer_id_) {
-        // Animation frame: advance spring physics, repaint if still moving
+    // 60Hz unified tick: spring animation + data refresh
+    data_tick_++;
+
+    // Advance notification panel spring physics every frame (no-op when settled)
+    if (!notif_panel_->is_settled()) {
         notif_panel_->advance_spring();
         notif_panel_->update();
-        if (notif_panel_->is_settled()) exit_anim_mode();
-        return;
     }
 
-    if (id != data_timer_id_) return;
-
-    // Data tick (25Hz / 40ms): feed plots and update router stats labels
-    data_tick_++;
     auto& tel = Telemetry::instance();
 
-    // Bandwidth: delta over 40ms tick, scaled to Mbps (×25 = per-second rate)
+    // Bandwidth: delta over 16ms tick, scaled to Mbps (×60 = per-second rate)
     uint64_t cur_b2 = tel.core_metrics[2].bytes.load(std::memory_order_relaxed);
     uint64_t cur_b3 = tel.core_metrics[3].bytes.load(std::memory_order_relaxed);
-    double dl = (cur_b2 - last_bytes[2]) * 8.0 * 25.0 / 1e6;
-    double ul = (cur_b3 - last_bytes[3]) * 8.0 * 25.0 / 1e6;
+    double dl = (cur_b2 - last_bytes[2]) * 8.0 * 60.0 / 1e6;
+    double ul = (cur_b3 - last_bytes[3]) * 8.0 * 60.0 / 1e6;
     status_dl->setText(QString("↓ %1 Mbps").arg(dl, 0, 'f', 2));
     status_ul->setText(QString("↑ %1 Mbps").arg(ul, 0, 'f', 2));
 

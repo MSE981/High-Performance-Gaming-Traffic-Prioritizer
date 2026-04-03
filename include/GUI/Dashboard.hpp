@@ -242,9 +242,6 @@ private:
     void setup_ui();
     void setup_nav();
     void setup_statusbar();
-    void enter_anim_mode();
-    void exit_anim_mode();
-
     // Navigation and pages
     QListWidget*    nav_list;
     QStackedWidget* page_stack;
@@ -269,8 +266,7 @@ private:
     QLabel* status_ul;
 
     // Adaptive dual-timer
-    int data_timer_id_ = -1;   // 1Hz: router stats refresh (always on)
-    int anim_timer_id_ = -1;   // 60Hz: animation frames (on-demand)
+    int data_timer_id_ = -1;   // 60Hz: unified render + data refresh timer
     std::array<uint64_t, 4> last_pkts  = {};
     std::array<uint64_t, 4> last_bytes = {};
     uint64_t data_tick_    = 0;
