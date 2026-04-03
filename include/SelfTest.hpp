@@ -364,7 +364,7 @@ private:
         // ── PRIO_DNS: UDP dst=53 → Critical ──
         {
             Logic::HeuristicProcessor proc;
-            auto buf = make_udp_pkt(src, dst, 12345, 53);
+            auto buf = make_udp_pkt(src, dst, 40000, 53);
             auto pkt = Net::ParsedPacket::parse(std::span<uint8_t>{buf.data(), 42});
             bool pass = (proc.process(pkt) == Net::Priority::Critical);
             r.add("PRIO_DNS", pass,
@@ -374,7 +374,7 @@ private:
         // ── PRIO_Gaming: small UDP dst=3074 → High ──
         {
             Logic::HeuristicProcessor proc;
-            auto buf = make_udp_pkt(src, dst, 12345, 3074);
+            auto buf = make_udp_pkt(src, dst, 40000, 3074);
             auto pkt = Net::ParsedPacket::parse(std::span<uint8_t>{buf.data(), 42});
             bool pass = (proc.process(pkt) == Net::Priority::High);
             r.add("PRIO_Gaming", pass,
@@ -382,10 +382,11 @@ private:
         }
 
         // ── PRIO_Normal: 1200-byte UDP to high port → Normal ──
+        // sport=40000 avoids game port ranges {3074,27015,12000-12999}
         {
             Logic::HeuristicProcessor proc;
             std::array<uint8_t, 1200> big{};
-            auto hdr = make_udp_pkt(src, dst, 12345, 50000);
+            auto hdr = make_udp_pkt(src, dst, 40000, 50000);
             std::memcpy(big.data(), hdr.data(), 42);
             // Fix IPv4 and UDP length fields for the larger frame
             auto* ipv4 = reinterpret_cast<Net::IPv4Header*>(big.data() + 14);
