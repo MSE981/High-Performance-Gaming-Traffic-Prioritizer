@@ -116,18 +116,6 @@ RealTimePlot::RealTimePlot(QWidget* parent) : QWidget(parent) {
 void RealTimePlot::add_sample(double val) {
     shift_buffer[shift_head] = val;
     shift_head = (shift_head + 1) % SHIFT_BUFFER_SIZE;
-    if (fixed_max_ > 0.0) return; // Y-axis locked — skip auto-scale
-    if (val > target_max) target_max = val * 1.2;
-    else target_max = std::max(1.0, target_max * 0.99);
-}
-
-void RealTimePlot::step_physics() {
-    if (fixed_max_ > 0.0) { current_max = fixed_max_; return; }
-    constexpr double spring_k = 0.15, damper = 0.1;
-    double force = spring_k * (target_max - current_max);
-    current_velocity = (current_velocity + force) * (1.0 - damper);
-    current_max += current_velocity;
-    if (current_max < 1.0) current_max = 1.0;
 }
 
 void RealTimePlot::paintEvent(QPaintEvent*) {
@@ -225,8 +213,6 @@ void OverviewPage::refresh(const Telemetry& tel, const std::array<uint64_t, 4>& 
 
     pps_plot->add_sample(total_pps);
     bps_plot->add_sample(total_bps);
-    pps_plot->step_physics();
-    bps_plot->step_physics();
     pps_plot->update();
     bps_plot->update();
 

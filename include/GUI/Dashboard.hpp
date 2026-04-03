@@ -59,8 +59,7 @@ class RealTimePlot : public QWidget {
 public:
     explicit RealTimePlot(QWidget* parent = nullptr);
     void add_sample(double val);
-    void step_physics();
-    void set_fixed_max(double max) { fixed_max_ = max; }
+    void set_fixed_max(double max) { fixed_max_ = max; current_max = max; }
 protected:
     void paintEvent(QPaintEvent* event) override;
 private:
@@ -68,9 +67,7 @@ private:
     std::array<double, SHIFT_BUFFER_SIZE> shift_buffer{};
     size_t shift_head = 0;   // circular write index
     double current_max = 1.0;
-    double target_max = 1.0;
-    double current_velocity = 0.0;
-    double fixed_max_ = 0.0; // >0: lock Y-axis to this ceiling
+    double fixed_max_ = 0.0;
 };
 
 // ═══════════════════════════════════════════
