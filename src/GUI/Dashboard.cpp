@@ -537,22 +537,20 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     throttle_lay->addLayout(slider_row);
     layout->addWidget(throttle_group);
 
-    // Game port whitelist
+    // Game port whitelist (read-only display — edit via dialog)
     auto* wl_group = new QGroupBox("Game Port Whitelist");
     auto* wl_lay = new QVBoxLayout(wl_group);
-    auto* wl_desc = new QLabel("Traffic on these ports receives highest scheduling priority. Supports single ports and ranges (e.g. 27015 or 3478-3480).");
-    wl_desc->setStyleSheet("color: #808090; font-size: 12px;");
-    wl_desc->setWordWrap(true);
-    wl_lay->addWidget(wl_desc);
 
     whitelist_table = new QTableWidget(0, 3);
     whitelist_table->setHorizontalHeaderLabels({"Port / Range", "Protocol", "Description"});
     whitelist_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     whitelist_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     whitelist_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    whitelist_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     whitelist_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     whitelist_table->verticalHeader()->setVisible(false);
     whitelist_table->verticalHeader()->setDefaultSectionSize(78);
+    whitelist_table->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     wl_lay->addWidget(whitelist_table);
 
     struct PortEntry { const char* port; const char* proto; const char* desc; };
@@ -569,26 +567,29 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
         {"8080",       "TCP",     "Game HTTP services"},
     };
     for (auto& e : defaults) {
-        int row = whitelist_table->rowCount();
-        whitelist_table->insertRow(row);
-        whitelist_table->setItem(row, 0, new QTableWidgetItem(e.port));
-        whitelist_table->setItem(row, 1, new QTableWidgetItem(e.proto));
-        whitelist_table->setItem(row, 2, new QTableWidgetItem(e.desc));
+        int r = whitelist_table->rowCount();
+        whitelist_table->insertRow(r);
+        whitelist_table->setItem(r, 0, new QTableWidgetItem(e.port));
+        whitelist_table->setItem(r, 1, new QTableWidgetItem(e.proto));
+        whitelist_table->setItem(r, 2, new QTableWidgetItem(e.desc));
+    }
+    // Size table to show all rows without internal scrolling
+    {
+        int header_h = whitelist_table->horizontalHeader()->height();
+        int rows_h   = whitelist_table->rowCount() * 78;
+        whitelist_table->setMinimumHeight(header_h + rows_h + 4);
     }
 
     auto* wl_btn_row = new QHBoxLayout();
-    auto* btn_add_port    = new QPushButton("+ Add Port");
-    auto* btn_remove_port = new QPushButton("- Remove");
-    btn_add_port->setObjectName("btn_primary");
-    wl_btn_row->addWidget(btn_add_port);
-    wl_btn_row->addWidget(btn_remove_port);
+    auto* btn_edit_wl = new QPushButton("Edit Whitelist…");
+    btn_edit_wl->setObjectName("btn_primary");
+    wl_btn_row->addWidget(btn_edit_wl);
     wl_btn_row->addStretch();
     wl_lay->addLayout(wl_btn_row);
     layout->addWidget(wl_group);
     layout->addStretch();
 
-    connect(btn_add_port,    &QPushButton::clicked, this, &QosPage::on_add_port);
-    connect(btn_remove_port, &QPushButton::clicked, this, &QosPage::on_remove_port);
+    connect(btn_edit_wl, &QPushButton::clicked, this, &QosPage::on_edit_whitelist);
 }
 
 void QosPage::on_toggle_accel() {
@@ -598,8 +599,52 @@ void QosPage::on_toggle_accel() {
     std::println("[GUI] Acceleration mode: {}", on ? "ON" : "OFF");
 }
 
-void QosPage::on_add_port() {
-    // Protocol selection dialog
+// ═════════════════════════════════════════════════════════════
+// PortWhitelistDialog: full-edit modal for game port whitelist
+// ═════════════════════════════════════════════════════════════
+PortWhitelistDialog::PortWhitelistDialog(QWidget* parent) : QDialog(parent) {
+    setWindowTitle("Edit Game Port Whitelist");
+    setMinimumSize(720, 900);
+    setStyleSheet(Scalpel::GUI::DARK_STYLESHEET);
+
+    auto* lay = new QVBoxLayout(this);
+    lay->setContentsMargins(20, 16, 20, 16);
+    lay->setSpacing(12);
+
+    auto* desc = new QLabel("Ports listed here receive highest scheduling priority.\nFormat: single port (27015) or range (3478-3480).");
+    desc->setStyleSheet("color: #808090; font-size: 13px;");
+    desc->setWordWrap(true);
+    lay->addWidget(desc);
+
+    table_ = new QTableWidget(0, 3);
+    table_->setHorizontalHeaderLabels({"Port / Range", "Protocol", "Description"});
+    table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table_->verticalHeader()->setVisible(false);
+    table_->verticalHeader()->setDefaultSectionSize(78);
+    lay->addWidget(table_, 1);
+
+    auto* btn_row = new QHBoxLayout();
+    btn_row->setSpacing(12);
+    auto* btn_add    = new QPushButton("+ Add Port");
+    auto* btn_remove = new QPushButton("- Remove");
+    auto* btn_close  = new QPushButton("Apply & Close");
+    btn_add->setObjectName("btn_primary");
+    btn_close->setObjectName("btn_primary");
+    btn_row->addWidget(btn_add);
+    btn_row->addWidget(btn_remove);
+    btn_row->addStretch();
+    btn_row->addWidget(btn_close);
+    lay->addLayout(btn_row);
+
+    connect(btn_add,    &QPushButton::clicked, this, &PortWhitelistDialog::on_add_port);
+    connect(btn_remove, &QPushButton::clicked, this, &PortWhitelistDialog::on_remove_port);
+    connect(btn_close,  &QPushButton::clicked, this, &QDialog::accept);
+}
+
+void PortWhitelistDialog::on_add_port() {
     QDialog dlg(this);
     dlg.setWindowTitle("Select Protocol");
     dlg.setFixedSize(560, 300);
@@ -640,12 +685,46 @@ void QosPage::on_add_port() {
 
     if (dlg.exec() != QDialog::Accepted) return;
 
-    int row = whitelist_table->rowCount();
-    whitelist_table->insertRow(row);
-    whitelist_table->setItem(row, 0, new QTableWidgetItem(""));
-    whitelist_table->setItem(row, 1, new QTableWidgetItem(chosen));
-    whitelist_table->setItem(row, 2, new QTableWidgetItem(""));
-    whitelist_table->editItem(whitelist_table->item(row, 0));
+    int row = table_->rowCount();
+    table_->insertRow(row);
+    table_->setItem(row, 0, new QTableWidgetItem(""));
+    table_->setItem(row, 1, new QTableWidgetItem(chosen));
+    table_->setItem(row, 2, new QTableWidgetItem(""));
+    table_->editItem(table_->item(row, 0));
+}
+
+void PortWhitelistDialog::on_remove_port() {
+    int row = table_->currentRow();
+    if (row >= 0) table_->removeRow(row);
+}
+
+void QosPage::on_edit_whitelist() {
+    PortWhitelistDialog dlg(this);
+    // Pre-populate dialog from the page display table
+    for (int r = 0; r < whitelist_table->rowCount(); ++r) {
+        dlg.table()->insertRow(dlg.table()->rowCount());
+        for (int c = 0; c < 3; ++c) {
+            auto* src = whitelist_table->item(r, c);
+            dlg.table()->setItem(dlg.table()->rowCount() - 1, c,
+                new QTableWidgetItem(src ? src->text() : ""));
+        }
+    }
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    // Sync back to page display table
+    whitelist_table->setRowCount(0);
+    for (int r = 0; r < dlg.table()->rowCount(); ++r) {
+        int nr = whitelist_table->rowCount();
+        whitelist_table->insertRow(nr);
+        for (int c = 0; c < 3; ++c) {
+            auto* src = dlg.table()->item(r, c);
+            whitelist_table->setItem(nr, c, new QTableWidgetItem(src ? src->text() : ""));
+        }
+    }
+    // Resize display table to show all rows without internal scrolling
+    int rows_h   = whitelist_table->rowCount() * 78;
+    int header_h = whitelist_table->horizontalHeader()->height();
+    whitelist_table->setMinimumHeight(header_h + rows_h + 4);
 }
 
 void QosPage::on_throttle_changed(int value) {
@@ -653,10 +732,6 @@ void QosPage::on_throttle_changed(int value) {
     lbl_throttle->setText(QString("%1%").arg(value));
 }
 
-void QosPage::on_remove_port() {
-    int row = whitelist_table->currentRow();
-    if (row >= 0) whitelist_table->removeRow(row);
-}
 
 // ═════════════════════════════════════════════════════════════
 // DhcpConfigDialog
@@ -1430,17 +1505,42 @@ void Dashboard::on_tab_clicked(int page_index) {
 }
 
 void Dashboard::on_more_clicked() {
-    QMenu menu(this);
-    menu.setStyleSheet(DARK_STYLESHEET);
-    menu.addAction("🌐  Interfaces", this, [this]() {
+    QDialog popup(this);
+    popup.setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
+    popup.setStyleSheet(DARK_STYLESHEET);
+    popup.setFixedWidth(440);
+
+    auto* lay = new QVBoxLayout(&popup);
+    lay->setContentsMargins(10, 10, 10, 10);
+    lay->setSpacing(8);
+
+    auto* btn_iface = new QPushButton("🌐  Interfaces");
+    btn_iface->setFixedHeight(80);
+    btn_iface->setStyleSheet("QPushButton { font-size: 22px; text-align: left; padding-left: 20px; }"
+                             "QPushButton:pressed { background-color: #0055cc; }");
+    lay->addWidget(btn_iface);
+
+    auto* btn_shutdown = new QPushButton("⏻  Shutdown");
+    btn_shutdown->setFixedHeight(80);
+    btn_shutdown->setObjectName("btn_danger");
+    btn_shutdown->setStyleSheet("QPushButton#btn_danger { font-size: 22px; text-align: left; padding-left: 20px; }"
+                                "QPushButton#btn_danger:pressed { background-color: #aa2222; }");
+    lay->addWidget(btn_shutdown);
+
+    connect(btn_iface, &QPushButton::clicked, &popup, [this, &popup]() {
         for (auto* b : tab_btns_) b->setChecked(false);
         page_stack->setCurrentIndex(1);
+        popup.accept();
     });
-    menu.addSeparator();
-    menu.addAction("⏻  Shutdown", this, &Dashboard::on_shutdown_clicked);
-    // Show above the more button
+    connect(btn_shutdown, &QPushButton::clicked, &popup, [this, &popup]() {
+        popup.accept();
+        on_shutdown_clicked();
+    });
+
+    popup.adjustSize();
     QPoint pos = btn_more_->mapToGlobal(QPoint(0, 0));
-    menu.exec(QPoint(pos.x(), pos.y() - menu.sizeHint().height()));
+    popup.move(pos.x(), pos.y() - popup.sizeHint().height());
+    popup.exec();
 }
 
 void Dashboard::on_shutdown_clicked() {

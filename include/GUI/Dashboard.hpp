@@ -132,6 +132,21 @@ private:
 };
 
 // ═══════════════════════════════════════════
+// Game port whitelist editor dialog
+// ═══════════════════════════════════════════
+class PortWhitelistDialog : public QDialog {
+    Q_OBJECT
+public:
+    explicit PortWhitelistDialog(QWidget* parent = nullptr);
+    QTableWidget* table() { return table_; }
+private slots:
+    void on_add_port();
+    void on_remove_port();
+private:
+    QTableWidget* table_;
+};
+
+// ═══════════════════════════════════════════
 // QoS traffic control page
 // ═══════════════════════════════════════════
 class QosPage : public QWidget {
@@ -139,8 +154,7 @@ class QosPage : public QWidget {
 public:
     explicit QosPage(QWidget* parent = nullptr);
 private slots:
-    void on_add_port();
-    void on_remove_port();
+    void on_edit_whitelist();
     void on_toggle_accel();
     void on_throttle_changed(int value);
 private:
