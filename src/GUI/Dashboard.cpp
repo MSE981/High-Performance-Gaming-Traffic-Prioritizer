@@ -557,17 +557,28 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     wl_lay->addWidget(whitelist_table);
 
     struct PortEntry { const char* port; const char* proto; const char* desc; };
+    // 20 entries, sorted A-Z by description
     static constexpr PortEntry defaults[] = {
-        {"27015",      "UDP",     "Steam / Valve"},
+        {"1119",       "TCP/UDP", "Blizzard Battle.net"},
+        {"6112",       "TCP/UDP", "Blizzard / StarCraft"},
         {"3074",       "UDP",     "Call of Duty"},
         {"3659",       "UDP",     "EA / Origin"},
-        {"3478-3480",  "UDP",     "PlayStation Network"},
-        {"5223",       "TCP",     "PlayStation Network"},
-        {"7777",       "UDP",     "Unreal Engine games"},
-        {"25565",      "TCP",     "Minecraft"},
-        {"6112",       "TCP/UDP", "Blizzard / StarCraft"},
-        {"1119",       "TCP/UDP", "Blizzard Battle.net"},
         {"8080",       "TCP",     "Game HTTP services"},
+        {"7777-7778",  "UDP",     "Garena / Arena games"},
+        {"4380",       "UDP",     "Steam (In-Home Streaming)"},
+        {"27031-27036","UDP",     "Steam Remote Play"},
+        {"27015",      "UDP",     "Steam / Valve"},
+        {"443",        "TCP",     "HTTPS / Secure game APIs"},
+        {"25565",      "TCP",     "Minecraft Java Edition"},
+        {"19132-19133","UDP",     "Minecraft Bedrock Edition"},
+        {"9308",       "UDP",     "Nintendo Switch Online"},
+        {"1935",       "TCP",     "PS Remote Play / RTMP"},
+        {"3478-3480",  "UDP",     "PlayStation Network"},
+        {"5223",       "TCP",     "PlayStation Network (XMPP)"},
+        {"500",        "UDP",     "STUN / ICE (NAT traversal)"},
+        {"3658-3659",  "UDP",     "Xbox / EA cross-platform"},
+        {"3074",       "TCP",     "Xbox Live"},
+        {"53",         "UDP",     "DNS (game server lookup)"},
     };
     for (auto& e : defaults) {
         int r = whitelist_table->rowCount();
