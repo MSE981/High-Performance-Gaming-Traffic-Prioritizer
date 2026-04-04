@@ -30,7 +30,8 @@ extern "C" void signal_handler(int signal) {
 int main(int argc, char* argv[]) {
     // Ignore SIGPIPE
     std::signal(SIGPIPE, SIG_IGN);
-    ::setenv("QT_QPA_EGLFS_HIDECURSOR", "1", 0); // DSI2 has no DRM cursor plane; prevents segfault on QApplication init
+    ::setenv("QT_QPA_EGLFS_HIDECURSOR",   "1",                0); // DSI2 has no DRM cursor plane
+    ::setenv("QT_QPA_EGLFS_KMS_CONFIG", "config/kms.json", 0); // disable hwcursor at KMS level: QEglFSKmsGbmIntegration ignores HIDECURSOR
 
     // 1. Load router and system config
     // Requires the working directory to be the project root (i.e. run as: ./build/app from project root)

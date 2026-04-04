@@ -138,8 +138,9 @@ echo ""
 
 # Qt eglfs: drive the DRM framebuffer directly — no Wayland compositor required.
 # Native portrait resolution 800×1280 is used as-is; no rotation applied.
-export QT_QPA_PLATFORM=eglfs              # direct DRM framebuffer, no compositor
-export QT_QPA_EGLFS_HIDECURSOR=1          # DSI2 DRM driver does not support hw cursor plane (ENXIO/-14)
-export QT_LOGGING_RULES="qt.qpa.*=false"  # suppress platform plugin verbose output
+export QT_QPA_PLATFORM=eglfs                              # direct DRM framebuffer, no compositor
+export QT_QPA_EGLFS_HIDECURSOR=1                          # DSI2 has no DRM cursor plane
+export QT_QPA_EGLFS_KMS_CONFIG="$SCRIPT_DIR/config/kms.json"  # hwcursor:false — disables QEglFSKmsGbmCursor entirely
+export QT_LOGGING_RULES="qt.qpa.*=false"                  # suppress platform plugin verbose output
 
 exec "$BINARY"
