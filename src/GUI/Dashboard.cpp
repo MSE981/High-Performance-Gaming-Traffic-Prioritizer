@@ -259,11 +259,10 @@ OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
 
     auto* info_group = new QGroupBox("Hardware & Runtime");
     auto* info_form = new QFormLayout(info_group);
-    info_form->setSpacing(16);
-    info_form->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    info_form->setSpacing(8);
+    info_form->setRowWrapPolicy(QFormLayout::DontWrapRows);
     lbl_hostname = new QLabel("--");
     lbl_kernel   = new QLabel("--");
-    lbl_kernel->setWordWrap(true);
     lbl_cpu_temp = new QLabel("--");
     lbl_uptime   = new QLabel("--");
     lbl_memory   = new QLabel("--");
@@ -285,10 +284,6 @@ OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
     btn_save->setObjectName("btn_primary");
     connect(btn_save, &QPushButton::clicked, this, &OverviewPage::on_save_config);
     cfg_btn_row->addWidget(btn_save);
-    auto* btn_restart = new QPushButton("Restart Engine");
-    btn_restart->setObjectName("btn_danger");
-    connect(btn_restart, &QPushButton::clicked, this, &OverviewPage::on_restart_engine);
-    cfg_btn_row->addWidget(btn_restart);
     cfg_lay->addLayout(cfg_btn_row);
     layout->addWidget(cfg_group);
 
@@ -647,12 +642,17 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
         {"3074",       "TCP",     "Xbox Live"},
         {"53",         "UDP",     "DNS (game server lookup)"},
     };
+    auto make_item = [](const char* text) {
+        auto* it = new QTableWidgetItem(text);
+        it->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        return it;
+    };
     for (auto& e : defaults) {
         int r = whitelist_table->rowCount();
         whitelist_table->insertRow(r);
-        whitelist_table->setItem(r, 0, new QTableWidgetItem(e.port));
-        whitelist_table->setItem(r, 1, new QTableWidgetItem(e.proto));
-        whitelist_table->setItem(r, 2, new QTableWidgetItem(e.desc));
+        whitelist_table->setItem(r, 0, make_item(e.port));
+        whitelist_table->setItem(r, 1, make_item(e.proto));
+        whitelist_table->setItem(r, 2, make_item(e.desc));
     }
     // Size table to show all rows without internal scrolling
     {
@@ -766,11 +766,16 @@ void PortWhitelistDialog::on_add_port() {
 
     if (dlg.exec() != QDialog::Accepted) return;
 
+    auto make_left = [](const QString& text) {
+        auto* it = new QTableWidgetItem(text);
+        it->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        return it;
+    };
     int row = table_->rowCount();
     table_->insertRow(row);
-    table_->setItem(row, 0, new QTableWidgetItem(""));
-    table_->setItem(row, 1, new QTableWidgetItem(chosen));
-    table_->setItem(row, 2, new QTableWidgetItem(""));
+    table_->setItem(row, 0, make_left(""));
+    table_->setItem(row, 1, make_left(chosen));
+    table_->setItem(row, 2, make_left(""));
     table_->editItem(table_->item(row, 0));
 }
 
@@ -781,13 +786,18 @@ void PortWhitelistDialog::on_remove_port() {
 
 void QosPage::on_edit_whitelist() {
     PortWhitelistDialog dlg(this);
+    auto make_aligned = [](const QString& text) {
+        auto* it = new QTableWidgetItem(text);
+        it->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        return it;
+    };
     // Pre-populate dialog from the page display table
     for (int r = 0; r < whitelist_table->rowCount(); ++r) {
         dlg.table()->insertRow(dlg.table()->rowCount());
         for (int c = 0; c < 3; ++c) {
             auto* src = whitelist_table->item(r, c);
             dlg.table()->setItem(dlg.table()->rowCount() - 1, c,
-                new QTableWidgetItem(src ? src->text() : ""));
+                make_aligned(src ? src->text() : ""));
         }
     }
     if (dlg.exec() != QDialog::Accepted) return;
@@ -799,7 +809,7 @@ void QosPage::on_edit_whitelist() {
         whitelist_table->insertRow(nr);
         for (int c = 0; c < 3; ++c) {
             auto* src = dlg.table()->item(r, c);
-            whitelist_table->setItem(nr, c, new QTableWidgetItem(src ? src->text() : ""));
+            whitelist_table->setItem(nr, c, make_aligned(src ? src->text() : ""));
         }
     }
     // Resize display table to show all rows without internal scrolling
@@ -1158,10 +1168,6 @@ void OverviewPage::on_save_config() {
             edit_config_path->setPlaceholderText(QString("Saved: %1").arg(QString::fromStdString(path)));
         }, Qt::QueuedConnection);
     }).detach();
-}
-
-void OverviewPage::on_restart_engine() {
-    std::println("[GUI] Engine restart triggered (requires manual execution)");
 }
 
 void OverviewPage::on_speedtest_clicked() {

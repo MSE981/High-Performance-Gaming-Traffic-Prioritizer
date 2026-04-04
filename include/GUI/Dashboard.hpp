@@ -96,7 +96,6 @@ public:
     void refresh_info();
 private slots:
     void on_save_config();
-    void on_restart_engine();
     void on_speedtest_clicked();
     void on_speedtest_done(double dl_mbps, double ul_mbps);
 private:
