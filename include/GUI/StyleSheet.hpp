@@ -11,7 +11,7 @@ namespace Scalpel::GUI {
     QWidget {
         background-color: #1a1a2e;
         color: #e0e0e0;
-        font-family: "Noto Sans", "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif;
+        font-family: "Times New Roman", Times, serif;
         font-size: 15px;
     }
 
@@ -68,7 +68,7 @@ namespace Scalpel::GUI {
     /* ===== Labels ===== */
     QLabel {
         color: #c0c0d0;
-        padding: 2px 0px;
+        padding: 2px 0px 8px 0px;
     }
 
     QLabel#section_title {

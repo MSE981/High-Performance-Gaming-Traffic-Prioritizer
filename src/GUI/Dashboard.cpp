@@ -301,6 +301,10 @@ OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
     btn_speedtest = new QPushButton("▶ Run Test");
     btn_speedtest->setObjectName("btn_primary");
     btn_speedtest->setFixedWidth(130);
+    btn_speedtest->setStyleSheet(
+        "QPushButton#btn_primary { background-color: #0077ff; border: 2px solid #0066dd; color: #ffffff; }"
+        "QPushButton#btn_primary:pressed { background-color: #0055cc; }"
+        "QPushButton#btn_primary:disabled { background-color: #1a3a6a; border: 2px solid #1a3a6a; color: #607090; }");
     lbl_speedtest_status = new QLabel("Ready");
     lbl_speedtest_status->setStyleSheet("color: #808090; font-size: 12px;");
     spd_btn_row->addWidget(btn_speedtest);
