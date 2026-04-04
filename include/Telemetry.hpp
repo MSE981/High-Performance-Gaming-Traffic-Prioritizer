@@ -15,6 +15,7 @@ namespace Scalpel {
         std::atomic<uint64_t> prio_bytes[3]{ 0, 0, 0 };
         std::atomic<uint64_t> dropped[3]{ 0, 0, 0 };
         std::atomic<uint64_t> last_heartbeat{ 0 };
+        std::atomic<int>      cpu_load_pct{ 0 };  // 0-100, updated by watchdog 1Hz via /proc/stat
     };
 
     struct Telemetry {

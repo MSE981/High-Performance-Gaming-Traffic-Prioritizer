@@ -242,15 +242,73 @@ OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
     plot_row->addWidget(bps_group);
     layout->addLayout(plot_row);
 
-    // 4-core status row
+    // 4-core CPU load row
     auto* cores_row = new QHBoxLayout();
     for (int i = 0; i < 4; ++i) {
-        core_labels[i] = new QLabel(QString("Core %1: idle").arg(i));
+        core_labels[i] = new QLabel(QString("Core %1\n0%").arg(i));
         core_labels[i]->setStyleSheet("background-color: #22223a; border: 1px solid #2a2a4a; border-radius: 6px; padding: 10px; font-size: 13px;");
         core_labels[i]->setAlignment(Qt::AlignCenter);
         cores_row->addWidget(core_labels[i]);
     }
     layout->addLayout(cores_row);
+
+    // ── System info (merged from SystemPage) ──
+    auto* sys_title = new QLabel("System Info");
+    sys_title->setObjectName("section_title");
+    layout->addWidget(sys_title);
+
+    auto* info_group = new QGroupBox("Hardware & Runtime");
+    auto* info_form = new QFormLayout(info_group);
+    info_form->setSpacing(16);
+    info_form->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    lbl_hostname = new QLabel("--");
+    lbl_kernel   = new QLabel("--");
+    lbl_kernel->setWordWrap(true);
+    lbl_cpu_temp = new QLabel("--");
+    lbl_uptime   = new QLabel("--");
+    lbl_memory   = new QLabel("--");
+    info_form->addRow("Hostname:", lbl_hostname);
+    info_form->addRow("Kernel:",   lbl_kernel);
+    info_form->addRow("CPU Temp:", lbl_cpu_temp);
+    info_form->addRow("Uptime:",   lbl_uptime);
+    info_form->addRow("Memory:",   lbl_memory);
+    layout->addWidget(info_group);
+
+    auto* cfg_group = new QGroupBox("Configuration");
+    auto* cfg_lay = new QVBoxLayout(cfg_group);
+    auto* cfg_form = new QFormLayout();
+    edit_config_path = new QLineEdit("config.txt");
+    cfg_form->addRow("Config File:", edit_config_path);
+    cfg_lay->addLayout(cfg_form);
+    auto* cfg_btn_row = new QHBoxLayout();
+    auto* btn_save = new QPushButton("Save Config");
+    btn_save->setObjectName("btn_primary");
+    connect(btn_save, &QPushButton::clicked, this, &OverviewPage::on_save_config);
+    cfg_btn_row->addWidget(btn_save);
+    auto* btn_restart = new QPushButton("Restart Engine");
+    btn_restart->setObjectName("btn_danger");
+    connect(btn_restart, &QPushButton::clicked, this, &OverviewPage::on_restart_engine);
+    cfg_btn_row->addWidget(btn_restart);
+    cfg_lay->addLayout(cfg_btn_row);
+    layout->addWidget(cfg_group);
+
+    auto* spd_group = new QGroupBox("Speed Test");
+    auto* spd_lay   = new QVBoxLayout(spd_group);
+    auto* spd_desc  = new QLabel("Measures real ISP throughput via speedtest-cli. Routing continues during test.");
+    spd_desc->setStyleSheet("color: #808090; font-size: 12px;");
+    spd_lay->addWidget(spd_desc);
+    auto* spd_btn_row = new QHBoxLayout();
+    btn_speedtest = new QPushButton("▶ Run Test");
+    btn_speedtest->setObjectName("btn_primary");
+    btn_speedtest->setFixedWidth(130);
+    lbl_speedtest_status = new QLabel("Ready");
+    lbl_speedtest_status->setStyleSheet("color: #808090; font-size: 12px;");
+    spd_btn_row->addWidget(btn_speedtest);
+    spd_btn_row->addWidget(lbl_speedtest_status);
+    spd_btn_row->addStretch();
+    spd_lay->addLayout(spd_btn_row);
+    connect(btn_speedtest, &QPushButton::clicked, this, &OverviewPage::on_speedtest_clicked);
+    layout->addWidget(spd_group);
     layout->addStretch();
 }
 
@@ -260,10 +318,15 @@ void OverviewPage::refresh(const Telemetry& tel, const std::array<uint64_t, 4>& 
         uint64_t cp = tel.core_metrics[i].pkts.load(std::memory_order_relaxed);
         uint64_t cb = tel.core_metrics[i].bytes.load(std::memory_order_relaxed);
         uint64_t dp = cp - last_p[i], db = cb - last_b[i];
-        total_pps += dp * 60.0;   // 60Hz tick: scale 16ms delta to per-second rate
+        total_pps += dp * 60.0;
         total_bps += db * 60.0;
-        core_labels[i]->setText(QString("Core %1\n%2 Pkts\n%3 KB")
-            .arg(i).arg(cp).arg(cb / 1024));
+        int load = tel.core_metrics[i].cpu_load_pct.load(std::memory_order_relaxed);
+        // Colour: green <50%, orange 50-80%, red >80%
+        const char* colour = load < 50 ? "#00cc66" : (load < 80 ? "#ffaa00" : "#ff4444");
+        core_labels[i]->setText(QString("Core %1\n%2%").arg(i).arg(load));
+        core_labels[i]->setStyleSheet(
+            QString("background-color: #22223a; border: 1px solid #2a2a4a; border-radius: 6px;"
+                    " padding: 10px; font-size: 13px; color: %1;").arg(colour));
     }
 
     // Lock Y-axis ceiling to configured ISP bandwidth limits (Mbps → Bytes/s and PPS)
@@ -1060,102 +1123,21 @@ void ServicePage::refresh_status() {
 }
 
 // ═════════════════════════════════════════════════════════════
-// SystemPage: system management page
+// OverviewPage: system info refresh + config/speedtest slots (merged from SystemPage)
 // ═════════════════════════════════════════════════════════════
-SystemPage::SystemPage(QWidget* parent) : QWidget(parent) {
-    auto* layout = new QVBoxLayout(this);
-    auto* title = new QLabel("System Info");
-    title->setObjectName("section_title");
-    layout->addWidget(title);
-
-    auto* info_group = new QGroupBox("Hardware & Runtime");
-    auto* info_form = new QFormLayout(info_group);
-    info_form->setSpacing(16);
-    info_form->setRowWrapPolicy(QFormLayout::WrapAllRows);
-    lbl_hostname = new QLabel("--");
-    lbl_kernel = new QLabel("--");
-    lbl_kernel->setWordWrap(true);
-    lbl_cpu_temp = new QLabel("--");
-    lbl_uptime = new QLabel("--");
-    lbl_memory = new QLabel("--");
-    info_form->addRow("Hostname:", lbl_hostname);
-    info_form->addRow("Kernel:", lbl_kernel);
-    info_form->addRow("CPU Temp:", lbl_cpu_temp);
-    info_form->addRow("Uptime:", lbl_uptime);
-    info_form->addRow("Memory:", lbl_memory);
-    layout->addWidget(info_group);
-
-    auto* cfg_group = new QGroupBox("Configuration");
-    auto* cfg_lay = new QVBoxLayout(cfg_group);
-    auto* cfg_form = new QFormLayout();
-    edit_config_path = new QLineEdit("config.txt");
-    cfg_form->addRow("Config File:", edit_config_path);
-    cfg_lay->addLayout(cfg_form);
-
-    auto* btn_row = new QHBoxLayout();
-    auto* btn_save = new QPushButton("Save Config");
-    btn_save->setObjectName("btn_primary");
-    connect(btn_save, &QPushButton::clicked, this, &SystemPage::on_save_config);
-    btn_row->addWidget(btn_save);
-    auto* btn_restart = new QPushButton("Restart Engine");
-    btn_restart->setObjectName("btn_danger");
-    connect(btn_restart, &QPushButton::clicked, this, &SystemPage::on_restart_engine);
-    btn_row->addWidget(btn_restart);
-    cfg_lay->addLayout(btn_row);
-    layout->addWidget(cfg_group);
-
-    // Network speedtest group
-    auto* spd_group = new QGroupBox("Speed Test");
-    auto* spd_lay   = new QVBoxLayout(spd_group);
-    auto* spd_desc  = new QLabel("Runs speedtest-cli asynchronously to measure real ISP throughput.\nThe routing engine continues running during the test.");
-    spd_desc->setStyleSheet("color: #808090; font-size: 12px;");
-    spd_lay->addWidget(spd_desc);
-
-    auto* spd_btn_row = new QHBoxLayout();
-    btn_speedtest = new QPushButton("▶ Run Test");
-    btn_speedtest->setObjectName("btn_primary");
-    btn_speedtest->setFixedWidth(130);
-    lbl_speedtest_status = new QLabel("Ready");
-    lbl_speedtest_status->setStyleSheet("color: #808090; font-size: 12px;");
-    spd_btn_row->addWidget(btn_speedtest);
-    spd_btn_row->addWidget(lbl_speedtest_status);
-    spd_btn_row->addStretch();
-    spd_lay->addLayout(spd_btn_row);
-
-    connect(btn_speedtest, &QPushButton::clicked, this, &SystemPage::on_speedtest_clicked);
-    layout->addWidget(spd_group);
-
-    // Shutdown — deliberate bottom placement to reduce accidental tap
-    auto* btn_shutdown = new QPushButton("⏻  Shutdown");
-    btn_shutdown->setObjectName("btn_danger");
-    btn_shutdown->setFixedHeight(56);
-    connect(btn_shutdown, &QPushButton::clicked, qApp, &QApplication::quit);
-    layout->addStretch();
-    layout->addWidget(btn_shutdown);
-}
-
-void SystemPage::refresh_info() {
-    // All system info is pre-fetched by Core 1 watchdog_loop every 5 seconds into Telemetry::sys_info.
-    // This UI callback only reads from atomics and pre-allocated char arrays — no file I/O on Core 0.
+void OverviewPage::refresh_info() {
     auto& tel = Telemetry::instance();
     auto& si  = tel.sys_info;
-
     lbl_hostname->setText(si.hostname[0] ? QString(si.hostname.data()) : "--");
     lbl_kernel->setText(si.kernel_short[0] ? QString(si.kernel_short.data()) : "--");
-
     double t = tel.cpu_temp_celsius.load(std::memory_order_relaxed);
     if (t > 0) {
         lbl_cpu_temp->setText(QString("%1 °C").arg(t, 0, 'f', 1));
         lbl_cpu_temp->setStyleSheet(t > 70 ? "color: #ff4444; font-weight: bold;" : "color: #00cc66;");
     }
-
     uint64_t secs = si.uptime_seconds.load(std::memory_order_relaxed);
-    if (secs > 0) {
-        int h = static_cast<int>(secs / 3600);
-        int m = static_cast<int>((secs % 3600) / 60);
-        lbl_uptime->setText(QString("%1h %2m").arg(h).arg(m));
-    }
-
+    if (secs > 0)
+        lbl_uptime->setText(QString("%1h %2m").arg(secs / 3600).arg((secs % 3600) / 60));
     uint64_t total = si.mem_total_kb.load(std::memory_order_relaxed);
     uint64_t avail = si.mem_avail_kb.load(std::memory_order_relaxed);
     if (total > 0)
@@ -1163,11 +1145,10 @@ void SystemPage::refresh_info() {
             .arg((total - avail) / 1024).arg(total / 1024));
 }
 
-void SystemPage::on_save_config() {
+void OverviewPage::on_save_config() {
     std::string path = edit_config_path->text().toStdString();
-    // §3.1: async task with completion callback — notify UI thread on finish (QueuedConnection)
     std::thread([this, path](){
-        Scalpel::System::Optimizer::set_current_thread_affinity(1); // Core 1: Control Plane
+        Scalpel::System::Optimizer::set_current_thread_affinity(1);
         Config::save_config(path);
         QMetaObject::invokeMethod(edit_config_path, [this, path](){
             edit_config_path->setPlaceholderText(QString("Saved: %1").arg(QString::fromStdString(path)));
@@ -1175,17 +1156,14 @@ void SystemPage::on_save_config() {
     }).detach();
 }
 
-void SystemPage::on_restart_engine() {
+void OverviewPage::on_restart_engine() {
     std::println("[GUI] Engine restart triggered (requires manual execution)");
 }
 
-void SystemPage::on_speedtest_clicked() {
+void OverviewPage::on_speedtest_clicked() {
     btn_speedtest->setEnabled(false);
     lbl_speedtest_status->setText("Testing, please wait…");
     lbl_speedtest_status->setStyleSheet("color: #f0a500; font-size: 12px;");
-
-    // run_async_real_isp_probe internally detaches a thread; callback fires from that thread.
-    // QueuedConnection marshals the result back to the Qt event loop (Core 0).
     Probe::Manager::run_async_real_isp_probe([this](double dl, double ul) {
         QMetaObject::invokeMethod(this, [this, dl, ul]() {
             on_speedtest_done(dl, ul);
@@ -1193,26 +1171,20 @@ void SystemPage::on_speedtest_clicked() {
     });
 }
 
-void SystemPage::on_speedtest_done(double dl_mbps, double ul_mbps) {
+void OverviewPage::on_speedtest_done(double dl_mbps, double ul_mbps) {
     btn_speedtest->setEnabled(true);
     lbl_speedtest_status->setText(
-        QString("↓ %1 Mbps / ↑ %2 Mbps")
-            .arg(dl_mbps, 0, 'f', 1)
-            .arg(ul_mbps, 0, 'f', 1));
+        QString("↓ %1 Mbps / ↑ %2 Mbps").arg(dl_mbps, 0, 'f', 1).arg(ul_mbps, 0, 'f', 1));
     lbl_speedtest_status->setStyleSheet("color: #00cc66; font-size: 12px;");
-
     auto* dlg = new QMessageBox(this);
     dlg->setWindowTitle("Speed Test Complete");
-    dlg->setText(
-        QString("Download: <b>%1 Mbps</b>&nbsp;&nbsp;&nbsp;Upload: <b>%2 Mbps</b>")
-            .arg(dl_mbps, 0, 'f', 1)
-            .arg(ul_mbps, 0, 'f', 1));
+    dlg->setText(QString("Download: <b>%1 Mbps</b>&nbsp;&nbsp;&nbsp;Upload: <b>%2 Mbps</b>")
+        .arg(dl_mbps, 0, 'f', 1).arg(ul_mbps, 0, 'f', 1));
     dlg->setInformativeText("Write these results as the QoS baseline?\n(The throttle slider will be recalculated against the new baseline)");
     dlg->setStandardButtons(QMessageBox::Yes | QMessageBox::No);
     dlg->setDefaultButton(QMessageBox::Yes);
     dlg->button(QMessageBox::Yes)->setText("Apply");
     dlg->button(QMessageBox::No)->setText("Ignore");
-
     if (dlg->exec() == QMessageBox::Yes) {
         auto& tel = Telemetry::instance();
         tel.isp_down_limit_mbps.store(dl_mbps, std::memory_order_relaxed);
@@ -1446,7 +1418,6 @@ void Dashboard::setup_ui() {
     page_qos        = new QosPage();
     page_services   = new ServicePage();
     page_devices    = new DevicePage();
-    page_system     = new SystemPage();
 
     auto wrap = [](QWidget* page) -> QScrollArea* {
         auto* sa = new QScrollArea();
@@ -1461,7 +1432,6 @@ void Dashboard::setup_ui() {
     page_stack->addWidget(wrap(page_qos));         // 2
     page_stack->addWidget(wrap(page_services));    // 3
     page_stack->addWidget(wrap(page_devices));     // 4
-    page_stack->addWidget(wrap(page_system));      // 5
     root_layout->addWidget(page_stack, 1);
 
     // ── Bottom tab bar ──
@@ -1510,8 +1480,8 @@ void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
         {"⚡\nQoS",         2},
         {"🔧\nServices",    3},
         {"📡\nDevices",     4},
-        {"💻\nSystem",      5},
         {"🌐\nInterfaces",  1},
+        {"💻\nSystem",      0},  // System info now lives in Overview
     };
 
     auto* grp = new QButtonGroup(bar);
@@ -1537,7 +1507,6 @@ void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
 void Dashboard::on_tab_clicked(int page_index) {
     page_stack->setCurrentIndex(page_index);
     if (page_index == 4) page_devices->refresh();
-    if (page_index == 5) page_system->refresh_info();
 }
 
 
@@ -1606,9 +1575,11 @@ void Dashboard::timerEvent(QTimerEvent* event) {
         .arg(ul, 0, 'f', 1)
         .arg(t > 0 ? t : 0.0, 0, 'f', 0));
 
-    // Refresh overview plots if visible
+    // Refresh overview plots if visible; update system info every 60 ticks (1s)
     if (page_stack->currentIndex() == 0)
         page_overview->refresh(tel, last_pkts, last_bytes);
+    if (data_tick_ % 60 == 0)
+        page_overview->refresh_info();
 
     // Sync service page status indicators if visible
     if (page_stack->currentIndex() == 3)

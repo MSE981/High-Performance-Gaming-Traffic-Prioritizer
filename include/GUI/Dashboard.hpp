@@ -86,19 +86,35 @@ private:
 };
 
 // ═══════════════════════════════════════════
-// Overview page: real-time charts + core metrics
+// Overview + System page (merged)
 // ═══════════════════════════════════════════
 class OverviewPage : public QWidget {
     Q_OBJECT
 public:
     explicit OverviewPage(QWidget* parent = nullptr);
     void refresh(const Telemetry& tel, const std::array<uint64_t, 4>& last_pkts, const std::array<uint64_t, 4>& last_bytes);
+    void refresh_info();
+private slots:
+    void on_save_config();
+    void on_restart_engine();
+    void on_speedtest_clicked();
+    void on_speedtest_done(double dl_mbps, double ul_mbps);
 private:
+    // Overview section
     RealTimePlot* pps_plot;
     RealTimePlot* bps_plot;
     QLabel* core_labels[4];
     QLabel* lbl_cpu_capacity;
     QLabel* lbl_mode;
+    // System info section
+    QLabel* lbl_hostname;
+    QLabel* lbl_kernel;
+    QLabel* lbl_cpu_temp;
+    QLabel* lbl_uptime;
+    QLabel* lbl_memory;
+    QLineEdit* edit_config_path;
+    QPushButton* btn_speedtest;
+    QLabel*      lbl_speedtest_status;
 };
 
 // ═══════════════════════════════════════════
@@ -246,31 +262,6 @@ private:
 };
 
 // ═══════════════════════════════════════════
-// System management page
-// ═══════════════════════════════════════════
-class SystemPage : public QWidget {
-    Q_OBJECT
-public:
-    explicit SystemPage(QWidget* parent = nullptr);
-    void refresh_info();
-private slots:
-    void on_save_config();
-    void on_restart_engine();
-    void on_speedtest_clicked();
-    // Called on Qt thread when speedtest completes (via QueuedConnection)
-    void on_speedtest_done(double dl_mbps, double ul_mbps);
-private:
-    QLabel* lbl_hostname;
-    QLabel* lbl_kernel;
-    QLabel* lbl_cpu_temp;
-    QLabel* lbl_uptime;
-    QLabel* lbl_memory;
-    QLineEdit* edit_config_path;
-    QPushButton* btn_speedtest;
-    QLabel*      lbl_speedtest_status;
-};
-
-// ═══════════════════════════════════════════
 // Main control panel: navigation + stack + status bar
 // ═══════════════════════════════════════════
 class Dashboard : public QMainWindow {
@@ -295,7 +286,6 @@ private:
     QosPage*         page_qos;
     ServicePage*     page_services;
     DevicePage*      page_devices;
-    SystemPage*      page_system;
 
     // Notification panel
     NotificationPanel* notif_panel_;

@@ -537,6 +537,9 @@ namespace Scalpel {
             uint64_t expirations;
             uint64_t last_bytes[4] = {0, 0, 0, 0};
             uint64_t last_ticks[4] = {0, 0, 0, 0};
+            // /proc/stat CPU accounting: {user,nice,system,idle,iowait,irq,softirq}
+            uint64_t stat_idle[4]  = {0, 0, 0, 0};
+            uint64_t stat_total[4] = {0, 0, 0, 0};
             uint64_t watchdog_tick = 0;
             int last_throttle_pct = 100;
 
@@ -612,6 +615,38 @@ namespace Scalpel {
                         ssize_t n = ::read(thermal_fd, tbuf, sizeof(tbuf) - 1);
                         ::close(thermal_fd);
                         if (n > 0) tel.cpu_temp_celsius.store(atof(tbuf) / 1000.0, std::memory_order_relaxed);
+                    }
+                }
+
+                // Read per-core CPU load from /proc/stat (1Hz)
+                {
+                    char sbuf[1024]{};
+                    int sfd = ::open("/proc/stat", O_RDONLY);
+                    if (sfd >= 0) {
+                        ssize_t n = ::read(sfd, sbuf, sizeof(sbuf) - 1);
+                        ::close(sfd);
+                        if (n > 0) {
+                            sbuf[n] = '\0';
+                            const char* p = sbuf;
+                            for (int ci = 0; ci < 4; ++ci) {
+                                // Find line "cpuN user nice system idle iowait irq softirq"
+                                char tag[8]; snprintf(tag, sizeof(tag), "cpu%d ", ci);
+                                const char* ln = strstr(p, tag);
+                                if (!ln) break;
+                                ln += strlen(tag);
+                                uint64_t user, nice, sys, idle, iowait, irq, softirq;
+                                if (sscanf(ln, "%lu %lu %lu %lu %lu %lu %lu",
+                                        &user, &nice, &sys, &idle, &iowait, &irq, &softirq) == 7) {
+                                    uint64_t total = user + nice + sys + idle + iowait + irq + softirq;
+                                    uint64_t dt = total - stat_total[ci];
+                                    uint64_t di = idle  - stat_idle[ci];
+                                    int pct = (dt > 0) ? static_cast<int>(100 * (dt - di) / dt) : 0;
+                                    tel.core_metrics[ci].cpu_load_pct.store(pct, std::memory_order_relaxed);
+                                    stat_total[ci] = total;
+                                    stat_idle[ci]  = idle;
+                                }
+                            }
+                        }
                     }
                 }
 
