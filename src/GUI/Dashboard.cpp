@@ -1246,23 +1246,6 @@ void DevicePage::on_apply_all() {
 }
 
 // ═════════════════════════════════════════════════════════════
-// PlaceholderPage: placeholder (VPN / future features)
-// ═════════════════════════════════════════════════════════════
-PlaceholderPage::PlaceholderPage(const QString& name, QWidget* parent) : QWidget(parent) {
-    auto* layout = new QVBoxLayout(this);
-    auto* title = new QLabel(name);
-    title->setObjectName("section_title");
-    layout->addWidget(title);
-    
-    auto* msg = new QLabel(QString("'%1' is under construction.\n\nThis module will include:\n - Container lifecycle management\n - Fast image deployment\n - Virtualised network isolation").arg(name));
-    msg->setStyleSheet("color: #707080; font-size: 15px;");
-    msg->setAlignment(Qt::AlignCenter);
-    layout->addStretch();
-    layout->addWidget(msg);
-    layout->addStretch();
-}
-
-// ═════════════════════════════════════════════════════════════
 // Dashboard: main control panel frame
 // ═════════════════════════════════════════════════════════════
 Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
@@ -1313,7 +1296,6 @@ void Dashboard::setup_ui() {
     page_qos        = new QosPage();
     page_services   = new ServicePage();
     page_devices    = new DevicePage();
-    page_vpn        = new PlaceholderPage("🔐 VPN / IPsec");
     page_system     = new SystemPage();
 
     auto wrap = [](QWidget* page) -> QScrollArea* {
@@ -1329,8 +1311,7 @@ void Dashboard::setup_ui() {
     page_stack->addWidget(wrap(page_qos));         // 2
     page_stack->addWidget(wrap(page_services));    // 3
     page_stack->addWidget(wrap(page_devices));     // 4
-    page_stack->addWidget(wrap(page_vpn));         // 5
-    page_stack->addWidget(wrap(page_system));      // 6
+    page_stack->addWidget(wrap(page_system));      // 5
     root_layout->addWidget(page_stack, 1);
 
     // ── Bottom tab bar ──
@@ -1358,7 +1339,7 @@ void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
         {"⚡\nQoS",       2},
         {"🔧\nServices",  3},
         {"📡\nDevices",   4},
-        {"💻\nSystem",    6},
+        {"💻\nSystem",    5},
     };
 
     auto* grp = new QButtonGroup(bar);
@@ -1389,7 +1370,7 @@ void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
 void Dashboard::on_tab_clicked(int page_index) {
     page_stack->setCurrentIndex(page_index);
     if (page_index == 4) page_devices->refresh();
-    if (page_index == 6) page_system->refresh_info();
+    if (page_index == 5) page_system->refresh_info();
 }
 
 void Dashboard::on_more_clicked() {
@@ -1398,10 +1379,6 @@ void Dashboard::on_more_clicked() {
     menu.addAction("🌐  Interfaces", this, [this]() {
         for (auto* b : tab_btns_) b->setChecked(false);
         page_stack->setCurrentIndex(1);
-    });
-    menu.addAction("🔐  VPN / IPsec", this, [this]() {
-        for (auto* b : tab_btns_) b->setChecked(false);
-        page_stack->setCurrentIndex(5);
     });
     menu.addSeparator();
     menu.addAction("⏻  Shutdown", this, &Dashboard::on_shutdown_clicked);

@@ -254,15 +254,6 @@ private:
 };
 
 // ═══════════════════════════════════════════
-// Placeholder pages: VPN, etc.
-// ═══════════════════════════════════════════
-class PlaceholderPage : public QWidget {
-    Q_OBJECT
-public:
-    explicit PlaceholderPage(const QString& name, QWidget* parent = nullptr);
-};
-
-// ═══════════════════════════════════════════
 // Main control panel: navigation + stack + status bar
 // ═══════════════════════════════════════════
 class Dashboard : public QMainWindow {
@@ -284,7 +275,6 @@ private:
     QosPage*         page_qos;
     ServicePage*     page_services;
     DevicePage*      page_devices;
-    PlaceholderPage* page_vpn;
     SystemPage*      page_system;
 
     // Notification panel
