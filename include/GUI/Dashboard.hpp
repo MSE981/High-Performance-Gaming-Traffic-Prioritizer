@@ -276,16 +276,16 @@ private:
     void setup_ui();
     void setup_tabbar(QBoxLayout* root_layout);
 
-    QStackedWidget* page_stack;
-    QFrame*         header_ = nullptr;  // header frame — watched for swipe-down gesture
-    int             hdr_swipe_y0_ = -1; // -1 = not tracking
+    QStackedWidget* page_stack       = nullptr;
+    QFrame*         header_          = nullptr;  // header frame — watched for swipe-down gesture
+    int             hdr_swipe_y0_    = -1;       // -1 = not tracking
 
     // Feature pages
-    OverviewPage*    page_overview;
-    InterfacePage*   page_interfaces;
-    QosPage*         page_qos;
-    ServicePage*     page_services;
-    DevicePage*      page_devices;
+    OverviewPage*    page_overview   = nullptr;
+    InterfacePage*   page_interfaces = nullptr;
+    QosPage*         page_qos        = nullptr;
+    ServicePage*     page_services   = nullptr;
+    DevicePage*      page_devices    = nullptr;
 
     // Notification panel
     NotificationPanel* notif_panel_ = nullptr;
