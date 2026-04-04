@@ -30,6 +30,7 @@ extern "C" void signal_handler(int signal) {
 int main(int argc, char* argv[]) {
     // Ignore SIGPIPE
     std::signal(SIGPIPE, SIG_IGN);
+    ::setenv("QT_QPA_EGLFS_HIDECURSOR", "1", 0); // DSI2 has no DRM cursor plane; prevents segfault on QApplication init
 
     // 1. Load router and system config
     // Requires the working directory to be the project root (i.e. run as: ./build/app from project root)
