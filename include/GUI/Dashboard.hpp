@@ -288,7 +288,7 @@ private:
     DevicePage*      page_devices;
 
     // Notification panel
-    NotificationPanel* notif_panel_;
+    NotificationPanel* notif_panel_ = nullptr;
 
     // Header info (speed + cpu temp)
     QLabel* hdr_info_ = nullptr;
