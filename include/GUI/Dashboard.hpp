@@ -303,9 +303,8 @@ private:
     // Header info (speed + cpu temp)
     QLabel* hdr_info_ = nullptr;
 
-    // Bottom tab bar — 5 main tabs (index maps to TAB_PAGE_MAP)
-    std::array<QPushButton*, 5> tab_btns_{};
-    QPushButton* btn_more_ = nullptr;
+    // Bottom tab bar — 6 tabs (5 feature pages + Interfaces)
+    std::array<QPushButton*, 6> tab_btns_{};
 
     // 60Hz unified render + data refresh timer
     int data_timer_id_ = -1;
@@ -315,9 +314,7 @@ private:
 
 private slots:
     void on_tab_clicked(int page_index);
-    void on_more_clicked();
     void on_shutdown_clicked();
-    void on_notif_toggle_clicked();
 };
 
 } // namespace Scalpel::GUI

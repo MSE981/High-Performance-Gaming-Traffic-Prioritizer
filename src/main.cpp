@@ -66,6 +66,7 @@ int main(int argc, char* argv[]) {
         // §2.2.1: register std::function functor as completion callback
         // §2.2.3: callback receives Report struct (not multi-arg)
         selftest.registerCallback([](const Scalpel::SelfTest::Report& r) {
+            Scalpel::SelfTest::LAST_REPORT = r;   // store for GUI notification panel
             std::println("\n╔══ 启动自检结果 ({}/{} 项通过) ══╗", r.passed, r.count);
             for (size_t i = 0; i < r.count; ++i) {
                 std::println("  [{}] {}  —  {}",

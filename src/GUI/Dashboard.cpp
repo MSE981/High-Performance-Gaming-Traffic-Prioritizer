@@ -1,6 +1,7 @@
 #include "GUI/Dashboard.hpp"
 #include "GUI/StyleSheet.hpp"
 #include "Config.hpp"
+#include "SelfTest.hpp"
 #include "SystemOptimizer.hpp"
 #include <QApplication>
 #include <QScreen>
@@ -1407,10 +1408,13 @@ void Dashboard::setup_ui() {
     header_lay->setContentsMargins(12, 0, 12, 0);
     header_lay->setSpacing(8);
 
-    auto* btn_notif = new QPushButton("🔔");
-    btn_notif->setObjectName("btn_header_icon");
-    connect(btn_notif, &QPushButton::clicked, this, &Dashboard::on_notif_toggle_clicked);
-    header_lay->addWidget(btn_notif);
+    auto* btn_shutdown_hdr = new QPushButton("⏻");
+    btn_shutdown_hdr->setObjectName("btn_header_icon");
+    btn_shutdown_hdr->setStyleSheet(
+        "QPushButton#btn_header_icon { color: #cc4444; }"
+        "QPushButton#btn_header_icon:pressed { background-color: rgba(204,68,68,40); }");
+    connect(btn_shutdown_hdr, &QPushButton::clicked, this, &Dashboard::on_shutdown_clicked);
+    header_lay->addWidget(btn_shutdown_hdr);
 
     auto* title = new QLabel("HPGTP");
     title->setObjectName("header_title");
@@ -1456,7 +1460,28 @@ void Dashboard::setup_ui() {
     notif_panel_ = new NotificationPanel(centralWidget());
     notif_panel_->setFixedSize(centralWidget()->width(), centralWidget()->height());
     notif_panel_->raise();
-    notif_panel_->push_notification("Router Ready", "Data plane Cores 2/3 attached. Forwarding engine running.");
+
+    // Populate from startup self-test results
+    const auto& rep = SelfTest::LAST_REPORT;
+    size_t failures = rep.count - rep.passed;
+    if (failures == 0) {
+        notif_panel_->push_notification(
+            "Self-Test Passed",
+            QString("All %1 checks passed. Data plane ready.").arg(rep.count));
+    } else {
+        notif_panel_->push_notification(
+            QString("Self-Test: %1 failure(s)").arg(failures),
+            QString("%1/%2 checks passed. See details below.").arg(rep.passed).arg(rep.count));
+    }
+    for (size_t i = 0; i < rep.count; ++i) {
+        const auto& c = rep.cases[i];
+        if (!c.pass) {
+            notif_panel_->push_notification(
+                QString("[FAIL] %1").arg(c.name.data()),
+                c.detail.data());
+        }
+    }
+    notif_panel_->push_notification("Engine Ready", "Data plane Cores 2/3 attached. Forwarding engine running.");
 }
 
 void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
@@ -1467,20 +1492,21 @@ void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(0);
 
-    // 5 main tabs: label → page_stack index
+    // 6 tabs: label → page_stack index
     struct TabDef { const char* label; int page; };
     static constexpr TabDef TABS[] = {
-        {"📊\nOverview",  0},
-        {"⚡\nQoS",       2},
-        {"🔧\nServices",  3},
-        {"📡\nDevices",   4},
-        {"💻\nSystem",    5},
+        {"📊\nOverview",    0},
+        {"⚡\nQoS",         2},
+        {"🔧\nServices",    3},
+        {"📡\nDevices",     4},
+        {"💻\nSystem",      5},
+        {"🌐\nInterfaces",  1},
     };
 
     auto* grp = new QButtonGroup(bar);
     grp->setExclusive(true);
 
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 6; ++i) {
         auto* btn = new QPushButton(TABS[i].label);
         btn->setObjectName("nav_tab_btn");
         btn->setCheckable(true);
@@ -1494,11 +1520,6 @@ void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
     }
     tab_btns_[0]->setChecked(true);
 
-    btn_more_ = new QPushButton("···\nMore");
-    btn_more_->setObjectName("nav_tab_btn");
-    connect(btn_more_, &QPushButton::clicked, this, &Dashboard::on_more_clicked);
-    lay->addWidget(btn_more_, 1);
-
     root_layout->addWidget(bar);
 }
 
@@ -1508,48 +1529,6 @@ void Dashboard::on_tab_clicked(int page_index) {
     if (page_index == 5) page_system->refresh_info();
 }
 
-void Dashboard::on_more_clicked() {
-    QDialog popup(this);
-    popup.setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
-    popup.setStyleSheet(DARK_STYLESHEET);
-    popup.setFixedWidth(440);
-
-    auto* lay = new QVBoxLayout(&popup);
-    lay->setContentsMargins(10, 10, 10, 10);
-    lay->setSpacing(8);
-
-    auto* btn_iface = new QPushButton("🌐  Interfaces");
-    btn_iface->setFixedHeight(80);
-    btn_iface->setStyleSheet("QPushButton { font-size: 22px; }"
-                             "QPushButton:pressed { background-color: #0055cc; }");
-    lay->addWidget(btn_iface);
-
-    auto* btn_shutdown = new QPushButton("⏻  Shutdown");
-    btn_shutdown->setFixedHeight(80);
-    btn_shutdown->setObjectName("btn_danger");
-    btn_shutdown->setStyleSheet("QPushButton#btn_danger { font-size: 22px; }"
-                                "QPushButton#btn_danger:pressed { background-color: #aa2222; }");
-    lay->addWidget(btn_shutdown);
-
-    connect(btn_iface, &QPushButton::clicked, &popup, [this, &popup]() {
-        for (auto* b : tab_btns_) b->setChecked(false);
-        page_stack->setCurrentIndex(1);
-        popup.accept();
-    });
-    connect(btn_shutdown, &QPushButton::clicked, &popup, [this, &popup]() {
-        popup.accept();
-        on_shutdown_clicked();
-    });
-
-    popup.adjustSize();
-    QSize  sz  = popup.sizeHint();
-    QPoint pos = btn_more_->mapToGlobal(QPoint(btn_more_->width(), 0));
-    QRect  screen = QApplication::primaryScreen()->geometry();
-    int x = std::clamp(pos.x() - sz.width(), screen.left(), screen.right() - sz.width());
-    int y = pos.y() - sz.height();
-    popup.move(x, y);
-    popup.exec();
-}
 
 void Dashboard::on_shutdown_clicked() {
     // QApplication::quit() unblocks qapp.exec(); shutdown sequence in main.cpp
@@ -1557,11 +1536,6 @@ void Dashboard::on_shutdown_clicked() {
     QApplication::quit();
 }
 
-void Dashboard::on_notif_toggle_clicked() {
-    bool will_expand = !notif_panel_->is_expanded();
-    notif_panel_->kick(will_expand ? 12.0 : -12.0);
-    notif_panel_->set_expanded(will_expand);
-}
 
 bool Dashboard::eventFilter(QObject* obj, QEvent* event) {
     if (obj == header_ && !notif_panel_->is_expanded()) {

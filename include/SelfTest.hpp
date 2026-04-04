@@ -460,4 +460,7 @@ private:
     std::thread    uthread_;
 };
 
+// Last self-test report — written once before GUI starts, read by Dashboard on init
+inline Report LAST_REPORT{};
+
 } // namespace Scalpel::SelfTest
