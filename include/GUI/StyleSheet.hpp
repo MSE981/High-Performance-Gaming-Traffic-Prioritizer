@@ -11,52 +11,48 @@ namespace Scalpel::GUI {
     QWidget {
         background-color: #1a1a2e;
         color: #e0e0e0;
-        font-family: "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif;
-        font-size: 14px;
+        font-family: "Noto Sans", "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif;
+        font-size: 15px;
     }
 
     QMainWindow {
         background-color: #0f0f1a;
     }
 
-    /* ===== Left Navigation ===== */
+    /* ===== Left Navigation (touch: 220px wide, 64px items) ===== */
     QListWidget#nav_list {
         background-color: #12122a;
         border: none;
         border-right: 1px solid #2a2a4a;
         outline: none;
-        padding: 4px 0px;
+        padding: 8px 0px;
     }
 
     QListWidget#nav_list::item {
         color: #a0a0c0;
-        padding: 14px 16px;
-        border-left: 3px solid transparent;
+        padding: 20px 18px;
+        border-left: 4px solid transparent;
         font-size: 15px;
+        min-height: 64px;
     }
 
     QListWidget#nav_list::item:selected {
         background-color: #1e1e3a;
         color: #ffffff;
-        border-left: 3px solid #0077ff;
+        border-left: 4px solid #0077ff;
         font-weight: bold;
     }
 
-    QListWidget#nav_list::item:hover:!selected {
-        background-color: #1a1a35;
-        color: #c0c0e0;
-    }
-
-    /* ===== Header Bar ===== */
+    /* ===== Header Bar (64px tall) ===== */
     QFrame#header_frame {
         background-color: #12122a;
         border-bottom: 1px solid #2a2a4a;
-        min-height: 48px;
+        min-height: 64px;
     }
 
     QLabel#header_title {
         color: #ffffff;
-        font-size: 18px;
+        font-size: 16px;
         font-weight: bold;
     }
 
@@ -65,10 +61,11 @@ namespace Scalpel::GUI {
         background-color: #12122a;
         border-top: 1px solid #2a2a4a;
         color: #808090;
-        font-size: 12px;
+        font-size: 13px;
+        min-height: 32px;
     }
 
-    /* ===== Form Controls ===== */
+    /* ===== Labels ===== */
     QLabel {
         color: #c0c0d0;
         padding: 2px 0px;
@@ -76,31 +73,32 @@ namespace Scalpel::GUI {
 
     QLabel#section_title {
         color: #ffffff;
-        font-size: 16px;
+        font-size: 17px;
         font-weight: bold;
-        padding: 8px 0px 4px 0px;
+        padding: 10px 0px 6px 0px;
         border-bottom: 1px solid #2a2a4a;
-        margin-bottom: 8px;
+        margin-bottom: 10px;
     }
 
     QLabel#field_label {
         color: #a0a0b0;
-        font-size: 13px;
+        font-size: 14px;
         min-width: 120px;
     }
 
+    /* ===== Text Inputs (touch: min-height 48px) ===== */
     QLineEdit {
         background-color: #22223a;
         border: 1px solid #3a3a5a;
-        border-radius: 4px;
-        padding: 8px 12px;
+        border-radius: 8px;
+        padding: 0px 14px;
         color: #ffffff;
-        font-size: 14px;
-        min-height: 20px;
+        font-size: 15px;
+        min-height: 48px;
     }
 
     QLineEdit:focus {
-        border: 1px solid #0077ff;
+        border: 2px solid #0077ff;
     }
 
     QLineEdit:disabled {
@@ -108,19 +106,81 @@ namespace Scalpel::GUI {
         color: #606070;
     }
 
-    /* ===== Checkboxes (touchscreen-friendly 48px) ===== */
+    /* ===== SpinBox (touch: min-height 48px) ===== */
+    QSpinBox, QDoubleSpinBox {
+        background-color: #22223a;
+        border: 1px solid #3a3a5a;
+        border-radius: 8px;
+        padding: 0px 10px;
+        color: #ffffff;
+        font-size: 15px;
+        min-height: 48px;
+    }
+
+    QSpinBox:focus, QDoubleSpinBox:focus {
+        border: 2px solid #0077ff;
+    }
+
+    QSpinBox::up-button, QDoubleSpinBox::up-button,
+    QSpinBox::down-button, QDoubleSpinBox::down-button {
+        width: 36px;
+        border-radius: 6px;
+        background-color: #2a2a4a;
+    }
+
+    QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
+    QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {
+        background-color: #0055cc;
+    }
+
+    /* ===== ComboBox (touch: min-height 48px) ===== */
+    QComboBox {
+        background-color: #22223a;
+        border: 1px solid #3a3a5a;
+        border-radius: 8px;
+        padding: 0px 14px;
+        color: #ffffff;
+        font-size: 15px;
+        min-height: 48px;
+    }
+
+    QComboBox:focus {
+        border: 2px solid #0077ff;
+    }
+
+    QComboBox::drop-down {
+        width: 40px;
+        border-left: 1px solid #3a3a5a;
+        border-top-right-radius: 8px;
+        border-bottom-right-radius: 8px;
+    }
+
+    QComboBox QAbstractItemView {
+        background-color: #22223a;
+        border: 1px solid #3a3a5a;
+        selection-background-color: #0077ff;
+        font-size: 15px;
+    }
+
+    QComboBox QAbstractItemView::item {
+        min-height: 48px;
+        padding: 0px 14px;
+    }
+
+    /* ===== Checkboxes (touch: 26px indicator, 48px row) ===== */
     QCheckBox {
-        spacing: 10px;
+        spacing: 14px;
         color: #c0c0d0;
-        font-size: 14px;
-        padding: 6px 4px;
+        font-size: 15px;
+        padding: 10px 4px;
+        min-height: 48px;
     }
 
     QCheckBox::indicator {
-        width: 22px;
-        height: 22px;
+        width: 26px;
+        height: 26px;
         border: 2px solid #4a4a6a;
-        border-radius: 4px;
+        border-radius: 6px;
         background-color: #22223a;
     }
 
@@ -129,29 +189,27 @@ namespace Scalpel::GUI {
         border-color: #0077ff;
     }
 
-    QCheckBox::indicator:hover {
-        border-color: #0077ff;
-    }
-
-    /* ===== Buttons (touchscreen-friendly) ===== */
+    /* ===== Buttons (touch: min-height 52px) ===== */
     QPushButton {
         background-color: #2a2a4a;
         border: 1px solid #3a3a5a;
-        border-radius: 6px;
-        padding: 10px 20px;
+        border-radius: 10px;
+        padding: 0px 24px;
         color: #e0e0e0;
-        font-size: 14px;
+        font-size: 15px;
         font-weight: bold;
-        min-height: 28px;
-    }
-
-    QPushButton:hover {
-        background-color: #3a3a5a;
-        border-color: #0077ff;
+        min-height: 52px;
     }
 
     QPushButton:pressed {
-        background-color: #0055cc;
+        background-color: #1a1a3a;
+        border-color: #0077ff;
+    }
+
+    QPushButton:disabled {
+        background-color: #1e1e30;
+        border-color: #2a2a3a;
+        color: #505060;
     }
 
     QPushButton#btn_primary {
@@ -160,12 +218,14 @@ namespace Scalpel::GUI {
         color: #ffffff;
     }
 
-    QPushButton#btn_primary:hover {
-        background-color: #0088ff;
-    }
-
     QPushButton#btn_primary:pressed {
         background-color: #0055cc;
+    }
+
+    QPushButton#btn_primary:disabled {
+        background-color: #1a3a6a;
+        border-color: #1a3a6a;
+        color: #607090;
     }
 
     QPushButton#btn_danger {
@@ -174,52 +234,47 @@ namespace Scalpel::GUI {
         color: #ffffff;
     }
 
-    QPushButton#btn_danger:hover {
-        background-color: #dd4444;
+    QPushButton#btn_danger:pressed {
+        background-color: #aa2222;
     }
 
-    /* ===== Tab Component ===== */
-    QTabWidget::pane {
-        border: 1px solid #2a2a4a;
-        border-radius: 4px;
-        background-color: #1a1a2e;
-    }
-
-    QTabBar::tab {
-        background-color: #22223a;
-        border: 1px solid #2a2a4a;
-        border-bottom: none;
-        padding: 10px 20px;
-        color: #a0a0b0;
-        font-size: 14px;
-        border-top-left-radius: 4px;
-        border-top-right-radius: 4px;
-        margin-right: 2px;
-    }
-
-    QTabBar::tab:selected {
-        background-color: #1a1a2e;
-        color: #ffffff;
-        font-weight: bold;
-        border-bottom: 2px solid #0077ff;
-    }
-
-    QTabBar::tab:hover:!selected {
+    /* ===== Slider (touch: 14px groove, 36px handle) ===== */
+    QSlider::groove:horizontal {
         background-color: #2a2a4a;
-        color: #c0c0d0;
+        height: 14px;
+        border-radius: 7px;
     }
 
-    /* ===== Tables ===== */
+    QSlider::sub-page:horizontal {
+        background-color: #0077ff;
+        border-radius: 7px;
+    }
+
+    QSlider::handle:horizontal {
+        background-color: #ffffff;
+        border: 2px solid #0077ff;
+        width: 36px;
+        height: 36px;
+        margin: -11px 0;
+        border-radius: 18px;
+    }
+
+    QSlider::handle:horizontal:pressed {
+        background-color: #0077ff;
+    }
+
+    /* ===== Tables (touch: 52px rows) ===== */
     QTableWidget {
         background-color: #1a1a2e;
         border: 1px solid #2a2a4a;
         gridline-color: #2a2a4a;
         color: #e0e0e0;
-        font-size: 13px;
+        font-size: 15px;
     }
 
     QTableWidget::item {
-        padding: 6px;
+        padding: 14px 10px;
+        min-height: 52px;
     }
 
     QTableWidget::item:selected {
@@ -229,48 +284,109 @@ namespace Scalpel::GUI {
     QHeaderView::section {
         background-color: #22223a;
         color: #a0a0b0;
-        padding: 8px;
+        padding: 0px 10px;
+        min-height: 44px;
         border: 1px solid #2a2a4a;
         font-weight: bold;
-        font-size: 13px;
+        font-size: 14px;
     }
 
-    /* ===== Scrollbars (touchscreen-friendly, wide) ===== */
+    /* ===== Scrollbars (touch: 16px wide, large handle) ===== */
     QScrollBar:vertical {
         background-color: #12122a;
-        width: 12px;
+        width: 16px;
         border: none;
+        margin: 0px;
     }
 
     QScrollBar::handle:vertical {
         background-color: #3a3a5a;
-        border-radius: 6px;
-        min-height: 40px;
+        border-radius: 8px;
+        min-height: 48px;
+        margin: 2px;
     }
 
-    QScrollBar::handle:vertical:hover {
-        background-color: #4a4a6a;
+    QScrollBar::handle:vertical:pressed {
+        background-color: #5a5a7a;
     }
 
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         height: 0px;
     }
 
+    QScrollBar:horizontal {
+        background-color: #12122a;
+        height: 16px;
+        border: none;
+    }
+
+    QScrollBar::handle:horizontal {
+        background-color: #3a3a5a;
+        border-radius: 8px;
+        min-width: 48px;
+        margin: 2px;
+    }
+
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+        width: 0px;
+    }
+
     /* ===== GroupBox ===== */
     QGroupBox {
         border: 1px solid #2a2a4a;
-        border-radius: 6px;
-        margin-top: 12px;
-        padding-top: 16px;
-        font-size: 14px;
+        border-radius: 8px;
+        margin-top: 16px;
+        padding-top: 20px;
+        font-size: 15px;
         font-weight: bold;
         color: #ffffff;
     }
 
     QGroupBox::title {
         subcontrol-origin: margin;
-        left: 12px;
-        padding: 0 6px;
+        left: 14px;
+        padding: 0 8px;
+    }
+
+    /* ===== Tab Component ===== */
+    QTabWidget::pane {
+        border: 1px solid #2a2a4a;
+        border-radius: 6px;
+        background-color: #1a1a2e;
+    }
+
+    QTabBar::tab {
+        background-color: #22223a;
+        border: 1px solid #2a2a4a;
+        border-bottom: none;
+        padding: 0px 24px;
+        min-height: 52px;
+        color: #a0a0b0;
+        font-size: 15px;
+        border-top-left-radius: 6px;
+        border-top-right-radius: 6px;
+        margin-right: 2px;
+    }
+
+    QTabBar::tab:selected {
+        background-color: #1a1a2e;
+        color: #ffffff;
+        font-weight: bold;
+        border-bottom: 3px solid #0077ff;
+    }
+
+    /* ===== Dialogs ===== */
+    QDialog {
+        background-color: #1a1a2e;
+    }
+
+    QMessageBox {
+        background-color: #1a1a2e;
+        font-size: 15px;
+    }
+
+    QMessageBox QPushButton {
+        min-width: 100px;
     }
 
     )QSS";

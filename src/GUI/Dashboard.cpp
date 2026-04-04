@@ -243,6 +243,7 @@ InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
     iface_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     iface_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     iface_table->verticalHeader()->setVisible(false);
+    iface_table->verticalHeader()->setDefaultSectionSize(52);
     iface_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     iface_table->setSelectionMode(QAbstractItemView::NoSelection);
     layout->addWidget(iface_table);
@@ -474,6 +475,7 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     whitelist_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
     whitelist_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     whitelist_table->verticalHeader()->setVisible(false);
+    whitelist_table->verticalHeader()->setDefaultSectionSize(52);
     wl_lay->addWidget(whitelist_table);
 
     struct PortEntry { const char* port; const char* proto; const char* desc; };
@@ -659,7 +661,9 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
     static_dns_table->setHorizontalHeaderLabels({"Hostname", "IP Address"});
     static_dns_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     static_dns_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    static_dns_table->setFixedHeight(160);
+    static_dns_table->verticalHeader()->setVisible(false);
+    static_dns_table->verticalHeader()->setDefaultSectionSize(52);
+    static_dns_table->setFixedHeight(220);
     static_dns_table->setStyleSheet("QTableWidget { background: #1a1a2e; }");
 
     for (size_t i = 0; i < Config::STATIC_DNS_COUNT; ++i) {
@@ -857,7 +861,8 @@ SystemPage::SystemPage(QWidget* parent) : QWidget(parent) {
 
     auto* info_group = new QGroupBox("Hardware & Runtime");
     auto* info_form = new QFormLayout(info_group);
-    info_form->setSpacing(10);
+    info_form->setSpacing(16);
+    info_form->setRowWrapPolicy(QFormLayout::WrapAllRows);
     lbl_hostname = new QLabel("--");
     lbl_kernel = new QLabel("--");
     lbl_kernel->setWordWrap(true);
@@ -1261,11 +1266,16 @@ void Dashboard::setup_ui() {
 void Dashboard::setup_nav() {
     nav_list = new QListWidget();
     nav_list->setObjectName("nav_list");
-    nav_list->setFixedWidth(160);
+    nav_list->setFixedWidth(220);
     nav_list->setIconSize(QSize(0, 0));
+    nav_list->setSpacing(2);
 
     QStringList items = {"📊 Overview", "🌐 Interfaces", "⚡ QoS", "🔧 Services", "📡 Devices", "🔐 VPN / IPsec", "💻 System"};
-    for (auto& label : items) nav_list->addItem(label);
+    for (auto& label : items) {
+        auto* item = new QListWidgetItem(label);
+        item->setSizeHint(QSize(220, 64));
+        nav_list->addItem(item);
+    }
 
     nav_list->setCurrentRow(0);
     connect(nav_list, &QListWidget::currentRowChanged, this, &Dashboard::on_nav_changed);
