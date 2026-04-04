@@ -389,6 +389,99 @@ namespace Scalpel::GUI {
         min-width: 100px;
     }
 
+    /* ===== Bottom Tab Bar ===== */
+    QFrame#tab_bar_frame {
+        background-color: #12122a;
+        border-top: 1px solid #2a2a4a;
+    }
+
+    QPushButton#nav_tab_btn {
+        background: transparent;
+        border: none;
+        border-top: 3px solid transparent;
+        border-radius: 0px;
+        padding: 6px 4px 2px 4px;
+        min-height: 72px;
+        min-width: 0px;
+        color: #606080;
+        font-size: 12px;
+        font-weight: normal;
+    }
+
+    QPushButton#nav_tab_btn:checked {
+        color: #0077ff;
+        border-top-color: #0077ff;
+        font-weight: bold;
+    }
+
+    QPushButton#nav_tab_btn:pressed {
+        background-color: rgba(0,119,255,25);
+    }
+
+    /* ===== Header icon buttons (notif, hamburger) ===== */
+    QPushButton#btn_header_icon {
+        background: transparent;
+        border: none;
+        border-radius: 8px;
+        min-width: 52px;
+        min-height: 52px;
+        font-size: 22px;
+        color: #c0c0d0;
+        padding: 0;
+    }
+
+    QPushButton#btn_header_icon:pressed {
+        background-color: rgba(255,255,255,18);
+    }
+
+    /* ===== Interface role buttons (4-way segmented) ===== */
+    QPushButton#role_btn {
+        background-color: #22223a;
+        border: 1px solid #3a3a5a;
+        border-radius: 6px;
+        padding: 0;
+        min-height: 52px;
+        font-size: 14px;
+        font-weight: normal;
+        color: #a0a0c0;
+    }
+
+    QPushButton#role_btn:checked {
+        background-color: #0077ff;
+        border-color: #0055cc;
+        color: #ffffff;
+        font-weight: bold;
+    }
+
+    QPushButton#role_btn:pressed {
+        background-color: #0055cc;
+    }
+
+    /* ===== Device ± spinner buttons ===== */
+    QPushButton#spin_btn {
+        background-color: #2a2a4a;
+        border: 1px solid #3a3a5a;
+        border-radius: 8px;
+        min-width: 48px;
+        min-height: 48px;
+        max-width: 48px;
+        max-height: 48px;
+        font-size: 20px;
+        font-weight: bold;
+        padding: 0;
+        color: #c0c0e0;
+    }
+
+    QPushButton#spin_btn:pressed {
+        background-color: #0055cc;
+        border-color: #0077ff;
+    }
+
+    QPushButton#spin_btn:disabled {
+        color: #404050;
+        border-color: #252535;
+    }
+
     )QSS";
 
 } // namespace Scalpel::GUI

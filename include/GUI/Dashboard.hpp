@@ -24,6 +24,8 @@
 #include <QValidator>
 #include <QRegularExpressionValidator>
 #include <QDialog>
+#include <QButtonGroup>
+#include <QMenu>
 #include <array>
 #include <string>
 #include <vector>
@@ -103,22 +105,18 @@ private slots:
     void on_scan_done();
 private:
     void on_role_changed(const QString& iface, int index);
-    QTableWidget* iface_table;
-    struct RoleComboEntry {
-        std::array<char, 16> name{};
-        QComboBox* combo = nullptr;
-    };
-    std::array<RoleComboEntry, Telemetry::SystemInfo::MAX_IFACES> role_combos{};
-    size_t role_combos_count = 0;
 
-    QComboBox* find_combo(const std::string& name) const {
-        for (size_t i = 0; i < role_combos_count; ++i)
-            if (name == role_combos[i].name.data()) return role_combos[i].combo;
-        return nullptr;
-    }
-    QCheckBox* chk_stp;
-    QCheckBox* chk_igmp;
-    QPushButton* btn_refresh = nullptr;
+    QVBoxLayout* iface_cards_layout_ = nullptr;
+    struct RoleEntry {
+        std::array<char, 16> name{};
+        QButtonGroup* group = nullptr;
+    };
+    std::array<RoleEntry, Telemetry::SystemInfo::MAX_IFACES> role_entries_{};
+    size_t role_entries_count_ = 0;
+
+    QCheckBox*       chk_stp;
+    QCheckBox*       chk_igmp;
+    QPushButton*     btn_refresh = nullptr;
     QSocketNotifier* scan_done_notifier_ = nullptr;
 };
 
@@ -209,10 +207,12 @@ private:
     struct DeviceRow {
         uint32_t ip;
         std::array<uint8_t, 6> mac{};
-        QCheckBox*      chk_allow;
-        QCheckBox*      chk_rate;
-        QDoubleSpinBox* spin_dl;
-        QDoubleSpinBox* spin_ul;
+        QCheckBox* chk_allow;
+        QCheckBox* chk_rate;
+        QLabel*    lbl_dl;
+        QLabel*    lbl_ul;
+        double     val_dl = 100.0;
+        double     val_ul = 10.0;
     };
 
     QVBoxLayout*         cards_layout;
@@ -266,10 +266,8 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
 private:
     void setup_ui();
-    void setup_nav();
-    void setup_statusbar();
-    // Navigation and pages
-    QListWidget*    nav_list;
+    void setup_tabbar(QBoxLayout* root_layout);
+
     QStackedWidget* page_stack;
 
     // Feature pages
@@ -284,21 +282,22 @@ private:
     // Notification panel
     NotificationPanel* notif_panel_;
 
-    // Status bar labels
-    QLabel* status_cpu;
-    QLabel* status_ram;
-    QLabel* status_uptime;
-    QLabel* status_dl;
-    QLabel* status_ul;
+    // Header info (speed + cpu temp)
+    QLabel* hdr_info_ = nullptr;
 
-    // Adaptive dual-timer
-    int data_timer_id_ = -1;   // 60Hz: unified render + data refresh timer
+    // Bottom tab bar — 5 main tabs (index maps to TAB_PAGE_MAP)
+    std::array<QPushButton*, 5> tab_btns_{};
+    QPushButton* btn_more_ = nullptr;
+
+    // 60Hz unified render + data refresh timer
+    int data_timer_id_ = -1;
     std::array<uint64_t, 4> last_pkts  = {};
     std::array<uint64_t, 4> last_bytes = {};
-    uint64_t data_tick_    = 0;
+    uint64_t data_tick_ = 0;
 
 private slots:
-    void on_nav_changed(int index);
+    void on_tab_clicked(int page_index);
+    void on_more_clicked();
     void on_shutdown_clicked();
     void on_notif_toggle_clicked();
 };

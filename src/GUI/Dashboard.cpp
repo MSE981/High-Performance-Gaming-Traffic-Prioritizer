@@ -4,6 +4,9 @@
 #include "SystemOptimizer.hpp"
 #include <QApplication>
 #include <QMetaObject>
+#include <QButtonGroup>
+#include <QMenu>
+#include <QBoxLayout>
 #include <QPainter>
 #include <QPainterPath>
 #include <QLinearGradient>
@@ -21,7 +24,6 @@
 #include <unistd.h>
 #include <sys/eventfd.h>
 #include <arpa/inet.h>
-#include <QSignalBlocker>
 
 namespace Scalpel::GUI {
 
@@ -236,17 +238,13 @@ InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
     desc->setWordWrap(true);
     layout->addWidget(desc);
 
-    // Role table: Interface | Role | Link state
-    iface_table = new QTableWidget(0, 3);
-    iface_table->setHorizontalHeaderLabels({"Interface", "Role", "Link State"});
-    iface_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    iface_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-    iface_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-    iface_table->verticalHeader()->setVisible(false);
-    iface_table->verticalHeader()->setDefaultSectionSize(52);
-    iface_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    iface_table->setSelectionMode(QAbstractItemView::NoSelection);
-    layout->addWidget(iface_table);
+    // Scrollable card list
+    auto* cards_container = new QWidget();
+    iface_cards_layout_ = new QVBoxLayout(cards_container);
+    iface_cards_layout_->setSpacing(10);
+    iface_cards_layout_->setContentsMargins(0, 4, 0, 4);
+    iface_cards_layout_->addStretch();
+    layout->addWidget(cards_container);
 
     scan_interfaces();
 
@@ -285,27 +283,30 @@ InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
 }
 
 void InterfacePage::scan_interfaces() {
-    iface_table->setRowCount(0);
-    role_combos_count = 0;
+    // Clear existing cards (keep trailing stretch)
+    role_entries_count_ = 0;
+    while (iface_cards_layout_->count() > 1) {
+        auto* item = iface_cards_layout_->takeAt(0);
+        if (item->widget()) item->widget()->deleteLater();
+        delete item;
+    }
 
-    // Read interface list from Core 1 watchdog pre-cache — zero file I/O on Core 0 (§7.7)
     auto& si = Telemetry::instance().sys_info;
     uint8_t cnt = si.iface_count.load(std::memory_order_acquire);
 
-    using IfacePair = std::pair<std::string, std::string>; // {name, operstate}
+    using IfacePair = std::pair<std::string, std::string>;
     std::array<IfacePair, Telemetry::SystemInfo::MAX_IFACES> buf;
     uint8_t valid = 0;
     if (cnt > 0) {
         for (uint8_t i = 0; i < cnt; ++i)
             buf[valid++] = { si.ifaces[i].name.data(), si.ifaces[i].operstate.data() };
     } else {
-        // Watchdog not yet populated (startup race): static fallback
-        buf[0] = {"eth0", "unknown"}; buf[1] = {"eth1", "unknown"};
-        buf[2] = {"eth2", "unknown"}; buf[3] = {"eth3", "unknown"};
+        buf[0] = {"eth0","unknown"}; buf[1] = {"eth1","unknown"};
+        buf[2] = {"eth2","unknown"}; buf[3] = {"eth3","unknown"};
         valid = 4;
     }
     std::sort(buf.begin(), buf.begin() + valid,
-        [](const IfacePair& a, const IfacePair& b) { return a.first < b.first; });
+        [](const IfacePair& a, const IfacePair& b){ return a.first < b.first; });
 
     for (uint8_t i = 0; i < valid; ++i) {
         const auto& [name, state] = buf[i];
@@ -316,71 +317,87 @@ void InterfacePage::scan_interfaces() {
             else if (name == "eth1") role = Config::IfaceRole::LAN;
         }
 
-        int row = iface_table->rowCount();
-        iface_table->insertRow(row);
+        // ── Card ──
+        auto* card = new QFrame();
+        card->setStyleSheet("QFrame { background:#1e1e3a; border:1px solid #2a2a4a; border-radius:10px; }");
+        auto* cl = new QVBoxLayout(card);
+        cl->setSpacing(10);
+        cl->setContentsMargins(16, 12, 16, 12);
 
-        auto* name_item = new QTableWidgetItem(QString::fromStdString(name));
-        name_item->setTextAlignment(Qt::AlignCenter);
-        iface_table->setItem(row, 0, name_item);
-
-        auto* combo = new QComboBox();
-        combo->addItems({"WAN (Uplink)", "LAN (Local)", "Default Gateway", "Disabled"});
-        combo->setCurrentIndex(static_cast<int>(role));
-        if (role_combos_count < role_combos.size()) {
-            strncpy(role_combos[role_combos_count].name.data(), name.c_str(), 15);
-            role_combos[role_combos_count].name[15] = '\0';
-            role_combos[role_combos_count].combo = combo;
-            ++role_combos_count;
-        }
-        iface_table->setCellWidget(row, 1, combo);
-
+        // Header: name + link state
+        auto* hdr = new QHBoxLayout();
+        auto* lbl_name = new QLabel(QString::fromStdString(name));
+        lbl_name->setStyleSheet("font-size:17px; font-weight:bold; color:#ffffff;");
         bool is_up = (state == "up");
-        auto* state_lbl = new QLabel(is_up ? "● Connected" : "○ Down");
-        state_lbl->setAlignment(Qt::AlignCenter);
-        state_lbl->setStyleSheet(is_up ? "color: #00cc66;" : "color: #888888;");
-        iface_table->setCellWidget(row, 2, state_lbl);
+        auto* lbl_state = new QLabel(is_up ? "● Connected" : "○ Down");
+        lbl_state->setStyleSheet(is_up ? "color:#00cc66; font-weight:bold;" : "color:#888888;");
+        hdr->addWidget(lbl_name);
+        hdr->addStretch();
+        hdr->addWidget(lbl_state);
+        cl->addLayout(hdr);
 
-        connect(combo, &QComboBox::currentIndexChanged, this, [this, name](int index) {
-            on_role_changed(QString::fromStdString(name), index);
+        // Role buttons (4-way segmented)
+        auto* btn_group = new QButtonGroup(card);
+        btn_group->setExclusive(true);
+        auto* role_row = new QHBoxLayout();
+        role_row->setSpacing(6);
+        const char* role_labels[] = {"WAN", "LAN", "Gateway", "Disabled"};
+        for (int r = 0; r < 4; ++r) {
+            auto* btn = new QPushButton(role_labels[r]);
+            btn->setObjectName("role_btn");
+            btn->setCheckable(true);
+            btn->setChecked(static_cast<int>(role) == r);
+            btn_group->addButton(btn, r);
+            role_row->addWidget(btn);
+        }
+        cl->addLayout(role_row);
+
+        // Store entry
+        if (role_entries_count_ < role_entries_.size()) {
+            strncpy(role_entries_[role_entries_count_].name.data(), name.c_str(), 15);
+            role_entries_[role_entries_count_].name[15] = '\0';
+            role_entries_[role_entries_count_].group = btn_group;
+            ++role_entries_count_;
+        }
+
+        connect(btn_group, &QButtonGroup::idClicked, this, [this, name](int id) {
+            on_role_changed(QString::fromStdString(name), id);
         });
+
+        iface_cards_layout_->insertWidget(iface_cards_layout_->count() - 1, card);
     }
 }
 
 void InterfacePage::on_role_changed(const QString& iface, int index) {
-    if (index != 2) return; // Only enforce when a combo is set to GATEWAY
-    // Demote any other gateway combo to WAN to maintain single-gateway invariant
+    if (index != 2) return;
     std::string iface_str = iface.toStdString();
-    for (size_t i = 0; i < role_combos_count; ++i) {
-        if (iface_str != role_combos[i].name.data() && role_combos[i].combo->currentIndex() == 2) {
-            QSignalBlocker blocker(role_combos[i].combo);
-            role_combos[i].combo->setCurrentIndex(0); // demote to WAN
-        }
+    for (size_t i = 0; i < role_entries_count_; ++i) {
+        if (iface_str != role_entries_[i].name.data() && role_entries_[i].group->checkedId() == 2)
+            role_entries_[i].group->button(0)->setChecked(true); // demote to WAN
     }
 }
 
 void InterfacePage::on_save_clicked() {
-    // Validate: exactly one gateway must be assigned
     int gw_count = 0;
     std::string gw_iface;
-    for (size_t i = 0; i < role_combos_count; ++i) {
-        if (role_combos[i].combo->currentIndex() == 2) { ++gw_count; gw_iface = role_combos[i].name.data(); }
+    for (size_t i = 0; i < role_entries_count_; ++i) {
+        if (role_entries_[i].group->checkedId() == 2) { ++gw_count; gw_iface = role_entries_[i].name.data(); }
     }
     if (gw_count == 0) {
         QMessageBox::warning(this, "Config Error", "No Default Gateway assigned.");
         return;
     }
 
-    // Persist role table
     Config::clear_roles();
-    for (size_t i = 0; i < role_combos_count; ++i)
-        Config::set_role(role_combos[i].name.data(), static_cast<Config::IfaceRole>(role_combos[i].combo->currentIndex()));
+    for (size_t i = 0; i < role_entries_count_; ++i)
+        Config::set_role(role_entries_[i].name.data(),
+            static_cast<Config::IfaceRole>(role_entries_[i].group->checkedId()));
 
-    // Derive legacy variables consumed by App
     Config::IFACE_GATEWAY = gw_iface;
-    Config::IFACE_WAN = gw_iface;
+    Config::IFACE_WAN     = gw_iface;
     Config::clear_bridged();
-    for (size_t i = 0; i < role_combos_count; ++i)
-        if (role_combos[i].combo->currentIndex() == 1) Config::add_bridged(role_combos[i].name.data());
+    for (size_t i = 0; i < role_entries_count_; ++i)
+        if (role_entries_[i].group->checkedId() == 1) Config::add_bridged(role_entries_[i].name.data());
     Config::IFACE_LAN = Config::BRIDGED_IFACES_COUNT == 0 ? "" : std::string(Config::BRIDGED_INTERFACES[0].name.data());
 
     Config::ENABLE_STP.store(chk_stp->isChecked(), std::memory_order_relaxed);
@@ -545,7 +562,7 @@ void QosPage::on_remove_port() {
 // ═════════════════════════════════════════════════════════════
 DhcpConfigDialog::DhcpConfigDialog(QWidget* parent) : QDialog(parent) {
     setWindowTitle("DHCP Pool Configuration");
-    setMinimumWidth(360);
+    setMinimumSize(700, 520);
     auto* layout = new QVBoxLayout(this);
     auto* form = new QFormLayout();
     form->setRowWrapPolicy(QFormLayout::WrapAllRows);
@@ -624,7 +641,7 @@ void DhcpConfigDialog::on_apply() {
 // ═════════════════════════════════════════════════════════════
 DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
     setWindowTitle("DNS Configuration");
-    setMinimumWidth(420);
+    setMinimumSize(720, 900);
     auto* layout = new QVBoxLayout(this);
     auto* form = new QFormLayout();
     form->setRowWrapPolicy(QFormLayout::WrapAllRows);
@@ -915,7 +932,14 @@ SystemPage::SystemPage(QWidget* parent) : QWidget(parent) {
 
     connect(btn_speedtest, &QPushButton::clicked, this, &SystemPage::on_speedtest_clicked);
     layout->addWidget(spd_group);
+
+    // Shutdown — deliberate bottom placement to reduce accidental tap
+    auto* btn_shutdown = new QPushButton("⏻  Shutdown");
+    btn_shutdown->setObjectName("btn_danger");
+    btn_shutdown->setFixedHeight(56);
+    connect(btn_shutdown, &QPushButton::clicked, qApp, &QApplication::quit);
     layout->addStretch();
+    layout->addWidget(btn_shutdown);
 }
 
 void SystemPage::refresh_info() {
@@ -1104,40 +1128,61 @@ void DevicePage::refresh() {
         chk_row->addStretch();
         cl->addLayout(chk_row);
 
-        // Row 2: speed spinboxes
-        auto* spin_row = new QHBoxLayout();
-        auto* spin_dl = new QDoubleSpinBox();
-        spin_dl->setRange(0.1, 10000.0);
-        spin_dl->setDecimals(1);
-        spin_dl->setPrefix("↓ ");
-        spin_dl->setSuffix(" Mbps");
-        spin_dl->setValue(dl);
-        auto* spin_ul = new QDoubleSpinBox();
-        spin_ul->setRange(0.1, 10000.0);
-        spin_ul->setDecimals(1);
-        spin_ul->setPrefix("↑ ");
-        spin_ul->setSuffix(" Mbps");
-        spin_ul->setValue(ul);
-        spin_row->addWidget(spin_dl);
-        spin_row->addSpacing(12);
-        spin_row->addWidget(spin_ul);
-        spin_row->addStretch();
-        cl->addLayout(spin_row);
+        // Row 2: custom ± speed controls (48×48px buttons, tap-friendly)
+        auto make_spin_row = [](const QString& arrow, double init_val) {
+            auto* row   = new QHBoxLayout();
+            auto* btn_m = new QPushButton("−");
+            auto* lbl   = new QLabel(QString("%1 %2 Mbps").arg(arrow).arg(init_val, 0, 'f', 1));
+            auto* btn_p = new QPushButton("+");
+            btn_m->setObjectName("spin_btn");
+            btn_p->setObjectName("spin_btn");
+            lbl->setAlignment(Qt::AlignCenter);
+            lbl->setStyleSheet("font-size:14px; color:#c0c0e0; min-width:110px;");
+            row->addWidget(btn_m);
+            row->addWidget(lbl, 1);
+            row->addWidget(btn_p);
+            return std::tuple{row, lbl, btn_m, btn_p};
+        };
+
+        auto [dl_row, lbl_dl, btn_dl_m, btn_dl_p] = make_spin_row("↓", dl);
+        auto [ul_row, lbl_ul, btn_ul_m, btn_ul_p] = make_spin_row("↑", ul);
+        cl->addLayout(dl_row);
+        cl->addLayout(ul_row);
 
         cards_layout->insertWidget(cards_layout->count() - 1, card);
 
-        // Store widget references for on_apply_all
+        // Push row — capture index so lambdas can safely reference rows_[idx]
         DeviceRow r;
         r.ip        = ip;
         r.chk_allow = chk_allow;
         r.chk_rate  = chk_rate;
-        r.spin_dl   = spin_dl;
-        r.spin_ul   = spin_ul;
+        r.lbl_dl    = lbl_dl;
+        r.lbl_ul    = lbl_ul;
+        r.val_dl    = dl;
+        r.val_ul    = ul;
         unsigned int m[6]{};
         if (sscanf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x",
                    &m[0],&m[1],&m[2],&m[3],&m[4],&m[5]) == 6)
             for (int k = 0; k < 6; ++k) r.mac[k] = static_cast<uint8_t>(m[k]);
+        size_t idx = rows_.size();
         rows_.push_back(r);
+
+        connect(btn_dl_m, &QPushButton::clicked, this, [this, idx]() {
+            rows_[idx].val_dl = std::max(0.1, rows_[idx].val_dl - 1.0);
+            rows_[idx].lbl_dl->setText(QString("↓ %1 Mbps").arg(rows_[idx].val_dl, 0, 'f', 1));
+        });
+        connect(btn_dl_p, &QPushButton::clicked, this, [this, idx]() {
+            rows_[idx].val_dl = std::min(10000.0, rows_[idx].val_dl + 1.0);
+            rows_[idx].lbl_dl->setText(QString("↓ %1 Mbps").arg(rows_[idx].val_dl, 0, 'f', 1));
+        });
+        connect(btn_ul_m, &QPushButton::clicked, this, [this, idx]() {
+            rows_[idx].val_ul = std::max(0.1, rows_[idx].val_ul - 1.0);
+            rows_[idx].lbl_ul->setText(QString("↑ %1 Mbps").arg(rows_[idx].val_ul, 0, 'f', 1));
+        });
+        connect(btn_ul_p, &QPushButton::clicked, this, [this, idx]() {
+            rows_[idx].val_ul = std::min(10000.0, rows_[idx].val_ul + 1.0);
+            rows_[idx].lbl_ul->setText(QString("↑ %1 Mbps").arg(rows_[idx].val_ul, 0, 'f', 1));
+        });
     }
 }
 
@@ -1146,8 +1191,8 @@ void DevicePage::on_apply_all() {
         Config::upsert_device_policy(r.ip, r.mac.data(),
             !r.chk_allow->isChecked(),
             r.chk_rate->isChecked(),
-            r.spin_dl->value(),
-            r.spin_ul->value());
+            r.val_dl,
+            r.val_ul);
     }
     Config::DEVICE_POLICY_DIRTY.store(true, std::memory_order_release);
     std::println("[GUI] Device policies applied for {} device(s)", rows_.size());
@@ -1184,6 +1229,7 @@ Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
 void Dashboard::setup_ui() {
     QWidget* central = new QWidget(this);
     setCentralWidget(central);
+    statusBar()->hide();
 
     auto* root_layout = new QVBoxLayout(central);
     root_layout->setContentsMargins(0, 0, 0, 0);
@@ -1193,47 +1239,36 @@ void Dashboard::setup_ui() {
     auto* header = new QFrame();
     header->setObjectName("header_frame");
     auto* header_lay = new QHBoxLayout(header);
-    header_lay->setContentsMargins(16, 8, 16, 8);
-    auto* title = new QLabel("High-Performance-Gaming-Traffic-Prioritizer");
-    title->setObjectName("header_title");
-    header_lay->addWidget(title);
-    header_lay->addStretch();
-    auto* status_dot = new QLabel("● Running");
-    status_dot->setStyleSheet("color: #00cc66; font-weight: bold; font-size: 14px;");
-    header_lay->addWidget(status_dot);
+    header_lay->setContentsMargins(12, 0, 12, 0);
+    header_lay->setSpacing(8);
 
     auto* btn_notif = new QPushButton("🔔");
-    btn_notif->setFixedSize(36, 36);
-    btn_notif->setStyleSheet("QPushButton { background: transparent; font-size: 18px; border: none; }");
+    btn_notif->setObjectName("btn_header_icon");
     connect(btn_notif, &QPushButton::clicked, this, &Dashboard::on_notif_toggle_clicked);
     header_lay->addWidget(btn_notif);
 
-    auto* btn_shutdown = new QPushButton("Shutdown");
-    btn_shutdown->setObjectName("btn_danger");
-    connect(btn_shutdown, &QPushButton::clicked, this, &Dashboard::on_shutdown_clicked);
-    header_lay->addWidget(btn_shutdown);
+    auto* title = new QLabel("HPGTP");
+    title->setObjectName("header_title");
+    header_lay->addWidget(title);
+
+    header_lay->addStretch();
+
+    hdr_info_ = new QLabel("↓ --  ↑ --  🌡 --");
+    hdr_info_->setStyleSheet("color: #a0b8d0; font-size: 13px;");
+    header_lay->addWidget(hdr_info_);
 
     root_layout->addWidget(header);
 
-    // ── Center area: navigation + stack ──
-    auto* body_layout = new QHBoxLayout();
-    body_layout->setContentsMargins(0, 0, 0, 0);
-    body_layout->setSpacing(0);
-
-    setup_nav();
-    body_layout->addWidget(nav_list);
-
+    // ── Page stack (full width) ──
     page_stack = new QStackedWidget();
-    page_overview = new OverviewPage();
+    page_overview   = new OverviewPage();
     page_interfaces = new InterfacePage();
-    page_qos = new QosPage();
-    page_services = new ServicePage();
-    page_devices = new DevicePage();
-    page_vpn = new PlaceholderPage("🔐 VPN / IPsec");
-    page_system = new SystemPage();
+    page_qos        = new QosPage();
+    page_services   = new ServicePage();
+    page_devices    = new DevicePage();
+    page_vpn        = new PlaceholderPage("🔐 VPN / IPsec");
+    page_system     = new SystemPage();
 
-    // Wrap each page in QScrollArea to prevent oversized content from
-    // inflating QStackedWidget's minimumSize and distorting the layout.
     auto wrap = [](QWidget* page) -> QScrollArea* {
         auto* sa = new QScrollArea();
         sa->setWidget(page);
@@ -1242,64 +1277,90 @@ void Dashboard::setup_ui() {
         sa->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         return sa;
     };
-    page_stack->addWidget(wrap(page_overview));
-    page_stack->addWidget(wrap(page_interfaces));
-    page_stack->addWidget(wrap(page_qos));
-    page_stack->addWidget(wrap(page_services));
-    page_stack->addWidget(wrap(page_devices));
-    page_stack->addWidget(wrap(page_vpn));
-    page_stack->addWidget(wrap(page_system));
-    body_layout->addWidget(page_stack, 1);
+    page_stack->addWidget(wrap(page_overview));    // 0
+    page_stack->addWidget(wrap(page_interfaces));  // 1
+    page_stack->addWidget(wrap(page_qos));         // 2
+    page_stack->addWidget(wrap(page_services));    // 3
+    page_stack->addWidget(wrap(page_devices));     // 4
+    page_stack->addWidget(wrap(page_vpn));         // 5
+    page_stack->addWidget(wrap(page_system));      // 6
+    root_layout->addWidget(page_stack, 1);
 
-    root_layout->addLayout(body_layout, 1);
+    // ── Bottom tab bar ──
+    setup_tabbar(root_layout);
 
-    // ── Bottom status bar ──
-    setup_statusbar();
-
-    // ── Notification panel: floats above all content, initially hidden above screen ──
+    // ── Notification panel: floats above all content ──
     notif_panel_ = new NotificationPanel(centralWidget());
     notif_panel_->setFixedWidth(centralWidget()->width());
     notif_panel_->raise();
     notif_panel_->push_notification("Router Ready", "Data plane Cores 2/3 attached. Forwarding engine running.");
 }
 
-void Dashboard::setup_nav() {
-    nav_list = new QListWidget();
-    nav_list->setObjectName("nav_list");
-    nav_list->setFixedWidth(220);
-    nav_list->setIconSize(QSize(0, 0));
-    nav_list->setSpacing(2);
+void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
+    auto* bar = new QFrame();
+    bar->setObjectName("tab_bar_frame");
+    bar->setFixedHeight(72);
+    auto* lay = new QHBoxLayout(bar);
+    lay->setContentsMargins(0, 0, 0, 0);
+    lay->setSpacing(0);
 
-    QStringList items = {"📊 Overview", "🌐 Interfaces", "⚡ QoS", "🔧 Services", "📡 Devices", "🔐 VPN / IPsec", "💻 System"};
-    for (auto& label : items) {
-        auto* item = new QListWidgetItem(label);
-        item->setSizeHint(QSize(220, 64));
-        nav_list->addItem(item);
+    // 5 main tabs: label → page_stack index
+    struct TabDef { const char* label; int page; };
+    static constexpr TabDef TABS[] = {
+        {"📊\nOverview",  0},
+        {"⚡\nQoS",       2},
+        {"🔧\nServices",  3},
+        {"📡\nDevices",   4},
+        {"💻\nSystem",    6},
+    };
+
+    auto* grp = new QButtonGroup(bar);
+    grp->setExclusive(true);
+
+    for (int i = 0; i < 5; ++i) {
+        auto* btn = new QPushButton(TABS[i].label);
+        btn->setObjectName("nav_tab_btn");
+        btn->setCheckable(true);
+        int page_idx = TABS[i].page;
+        connect(btn, &QPushButton::clicked, this, [this, page_idx]() {
+            on_tab_clicked(page_idx);
+        });
+        grp->addButton(btn);
+        lay->addWidget(btn, 1);
+        tab_btns_[i] = btn;
     }
+    tab_btns_[0]->setChecked(true);
 
-    nav_list->setCurrentRow(0);
-    connect(nav_list, &QListWidget::currentRowChanged, this, &Dashboard::on_nav_changed);
+    btn_more_ = new QPushButton("···\nMore");
+    btn_more_->setObjectName("nav_tab_btn");
+    connect(btn_more_, &QPushButton::clicked, this, &Dashboard::on_more_clicked);
+    lay->addWidget(btn_more_, 1);
+
+    root_layout->addWidget(bar);
 }
 
-void Dashboard::setup_statusbar() {
-    auto* bar = statusBar();
-    status_cpu = new QLabel("CPU: --");
-    status_ram = new QLabel("RAM: --");
-    status_uptime = new QLabel("Uptime: --");
-    status_dl = new QLabel("↓ 0.00 Mbps");
-    status_ul = new QLabel("↑ 0.00 Mbps");
-
-    bar->addWidget(status_cpu);
-    bar->addWidget(status_ram);
-    bar->addWidget(status_uptime);
-    bar->addPermanentWidget(status_dl);
-    bar->addPermanentWidget(status_ul);
+void Dashboard::on_tab_clicked(int page_index) {
+    page_stack->setCurrentIndex(page_index);
+    if (page_index == 4) page_devices->refresh();
+    if (page_index == 6) page_system->refresh_info();
 }
 
-void Dashboard::on_nav_changed(int index) {
-    page_stack->setCurrentIndex(index);
-    if (index == 4) page_devices->refresh();      // force immediate device list refresh
-    if (index == 6) page_system->refresh_info();
+void Dashboard::on_more_clicked() {
+    QMenu menu(this);
+    menu.setStyleSheet(DARK_STYLESHEET);
+    menu.addAction("🌐  Interfaces", this, [this]() {
+        for (auto* b : tab_btns_) b->setChecked(false);
+        page_stack->setCurrentIndex(1);
+    });
+    menu.addAction("🔐  VPN / IPsec", this, [this]() {
+        for (auto* b : tab_btns_) b->setChecked(false);
+        page_stack->setCurrentIndex(5);
+    });
+    menu.addSeparator();
+    menu.addAction("⏻  Shutdown", this, &Dashboard::on_shutdown_clicked);
+    // Show above the more button
+    QPoint pos = btn_more_->mapToGlobal(QPoint(0, 0));
+    menu.exec(QPoint(pos.x(), pos.y() - menu.sizeHint().height()));
 }
 
 void Dashboard::on_shutdown_clicked() {
@@ -1337,25 +1398,15 @@ void Dashboard::timerEvent(QTimerEvent* event) {
     uint64_t cur_b3 = tel.core_metrics[3].bytes.load(std::memory_order_relaxed);
     double dl = (cur_b2 - last_bytes[2]) * 8.0 * 60.0 / 1e6;
     double ul = (cur_b3 - last_bytes[3]) * 8.0 * 60.0 / 1e6;
-    status_dl->setText(QString("↓ %1 Mbps").arg(dl, 0, 'f', 2));
-    status_ul->setText(QString("↑ %1 Mbps").arg(ul, 0, 'f', 2));
 
-    // CPU temperature from watchdog atomic — no file I/O on UI thread
+    // CPU temperature
     double t = tel.cpu_temp_celsius.load(std::memory_order_relaxed);
-    if (t > 0) status_cpu->setText(QString("CPU: %1°C").arg(t, 0, 'f', 0));
 
-    // RAM usage — read from Core 1 watchdog pre-cache
-    uint64_t mem_total = tel.sys_info.mem_total_kb.load(std::memory_order_relaxed);
-    uint64_t mem_avail = tel.sys_info.mem_avail_kb.load(std::memory_order_relaxed);
-    if (mem_total > 0)
-        status_ram->setText(QString("RAM: %1/%2 MB")
-            .arg((mem_total - mem_avail) / 1024).arg(mem_total / 1024));
-
-    // Uptime — read from Core 1 watchdog pre-cache
-    uint64_t secs = tel.sys_info.uptime_seconds.load(std::memory_order_relaxed);
-    if (secs > 0)
-        status_uptime->setText(QString("Up: %1h %2m")
-            .arg(secs / 3600).arg((secs % 3600) / 60));
+    // Update header info label: ↓ DL  ↑ UL  🌡 temp
+    hdr_info_->setText(QString("↓%1  ↑%2  🌡%3°C")
+        .arg(dl, 0, 'f', 1)
+        .arg(ul, 0, 'f', 1)
+        .arg(t > 0 ? t : 0.0, 0, 'f', 0));
 
     // Refresh overview plots if visible
     if (page_stack->currentIndex() == 0)
