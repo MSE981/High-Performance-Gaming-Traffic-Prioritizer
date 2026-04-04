@@ -549,7 +549,8 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     whitelist_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     whitelist_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     whitelist_table->verticalHeader()->setVisible(false);
-    whitelist_table->verticalHeader()->setDefaultSectionSize(78);
+    const int wl_row_h = qRound(whitelist_table->fontMetrics().height() * 1.2);
+    whitelist_table->verticalHeader()->setDefaultSectionSize(wl_row_h);
     whitelist_table->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     wl_lay->addWidget(whitelist_table);
 
@@ -576,7 +577,7 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     // Size table to show all rows without internal scrolling
     {
         int header_h = whitelist_table->horizontalHeader()->height();
-        int rows_h   = whitelist_table->rowCount() * 78;
+        int rows_h   = whitelist_table->rowCount() * wl_row_h;
         whitelist_table->setMinimumHeight(header_h + rows_h + 4);
     }
 
@@ -623,7 +624,7 @@ PortWhitelistDialog::PortWhitelistDialog(QWidget* parent) : QDialog(parent) {
     table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
     table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     table_->verticalHeader()->setVisible(false);
-    table_->verticalHeader()->setDefaultSectionSize(78);
+    table_->verticalHeader()->setDefaultSectionSize(qRound(table_->fontMetrics().height() * 1.2));
     lay->addWidget(table_, 1);
 
     auto* btn_row = new QHBoxLayout();
@@ -722,8 +723,10 @@ void QosPage::on_edit_whitelist() {
         }
     }
     // Resize display table to show all rows without internal scrolling
-    int rows_h   = whitelist_table->rowCount() * 78;
+    int wl_row_h = qRound(whitelist_table->fontMetrics().height() * 1.2);
+    int rows_h   = whitelist_table->rowCount() * wl_row_h;
     int header_h = whitelist_table->horizontalHeader()->height();
+    whitelist_table->verticalHeader()->setDefaultSectionSize(wl_row_h);
     whitelist_table->setMinimumHeight(header_h + rows_h + 4);
 }
 
@@ -1514,16 +1517,16 @@ void Dashboard::on_more_clicked() {
     lay->setContentsMargins(10, 10, 10, 10);
     lay->setSpacing(8);
 
-    auto* btn_iface = new QPushButton("🌐  Interfaces");
+    auto* btn_iface = new QPushButton("Interfaces  🌐");
     btn_iface->setFixedHeight(80);
-    btn_iface->setStyleSheet("QPushButton { font-size: 22px; text-align: left; padding-left: 20px; }"
+    btn_iface->setStyleSheet("QPushButton { font-size: 22px; text-align: right; padding-right: 20px; }"
                              "QPushButton:pressed { background-color: #0055cc; }");
     lay->addWidget(btn_iface);
 
-    auto* btn_shutdown = new QPushButton("⏻  Shutdown");
+    auto* btn_shutdown = new QPushButton("Shutdown  ⏻");
     btn_shutdown->setFixedHeight(80);
     btn_shutdown->setObjectName("btn_danger");
-    btn_shutdown->setStyleSheet("QPushButton#btn_danger { font-size: 22px; text-align: left; padding-left: 20px; }"
+    btn_shutdown->setStyleSheet("QPushButton#btn_danger { font-size: 22px; text-align: right; padding-right: 20px; }"
                                 "QPushButton#btn_danger:pressed { background-color: #aa2222; }");
     lay->addWidget(btn_shutdown);
 
