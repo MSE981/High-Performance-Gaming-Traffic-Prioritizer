@@ -125,7 +125,8 @@ int main(int argc, char* argv[]) {
     }
 
     global_app = nullptr;
-    Scalpel::Config::save_config("config/config.txt");
+    if (Scalpel::Config::SAVE_ON_EXIT.load(std::memory_order_relaxed))
+        Scalpel::Config::save_config("config/config.txt");
     std::println("[System] Application cleanly exited. Kernel resources fully released.");
 
     return ret;

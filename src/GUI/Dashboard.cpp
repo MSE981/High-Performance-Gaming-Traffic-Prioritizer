@@ -1391,7 +1391,7 @@ void Dashboard::setup_ui() {
     header_lay->setContentsMargins(12, 0, 12, 0);
     header_lay->setSpacing(8);
 
-    auto* btn_shutdown_hdr = new QPushButton("⏻");
+    auto* btn_shutdown_hdr = new QPushButton("Shutdown");
     btn_shutdown_hdr->setObjectName("btn_header_icon");
     btn_shutdown_hdr->setStyleSheet(
         "QPushButton#btn_header_icon { color: #cc4444; }"
@@ -1473,7 +1473,7 @@ void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(0);
 
-    // 6 tabs: label → page_stack index
+    // 5 tabs: label → page_stack index
     struct TabDef { const char* label; int page; };
     static constexpr TabDef TABS[] = {
         {"📊\nOverview",    0},
@@ -1481,13 +1481,12 @@ void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
         {"🔧\nServices",    3},
         {"📡\nDevices",     4},
         {"🌐\nInterfaces",  1},
-        {"💻\nSystem",      0},  // System info now lives in Overview
     };
 
     auto* grp = new QButtonGroup(bar);
     grp->setExclusive(true);
 
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 5; ++i) {
         auto* btn = new QPushButton(TABS[i].label);
         btn->setObjectName("nav_tab_btn");
         btn->setCheckable(true);
@@ -1511,9 +1510,45 @@ void Dashboard::on_tab_clicked(int page_index) {
 
 
 void Dashboard::on_shutdown_clicked() {
-    // QApplication::quit() unblocks qapp.exec(); shutdown sequence in main.cpp
-    // calls app.stop() and waits for all jthreads to exit cleanly.
-    QApplication::quit();
+    QDialog dlg(this);
+    dlg.setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
+    dlg.setStyleSheet(DARK_STYLESHEET);
+    dlg.setFixedWidth(420);
+
+    auto* lay = new QVBoxLayout(&dlg);
+    lay->setContentsMargins(24, 24, 24, 24);
+    lay->setSpacing(12);
+
+    auto* lbl = new QLabel("Exit application?");
+    lbl->setAlignment(Qt::AlignCenter);
+    lbl->setStyleSheet("font-size: 17px; font-weight: bold; color: #ffffff; padding: 8px 0 16px 0;");
+    lay->addWidget(lbl);
+
+    auto* btn_save   = new QPushButton("Yes — Save Settings");
+    auto* btn_nosave = new QPushButton("Yes — Don't Save");
+    auto* btn_cancel = new QPushButton("Cancel");
+    btn_save->setObjectName("btn_primary");
+    btn_nosave->setObjectName("btn_danger");
+    lay->addWidget(btn_save);
+    lay->addWidget(btn_nosave);
+    lay->addWidget(btn_cancel);
+
+    // Save settings then exit — skip redundant save in main()
+    connect(btn_save, &QPushButton::clicked, &dlg, [&dlg]() {
+        Config::save_config("config/config.txt");
+        Config::SAVE_ON_EXIT.store(false, std::memory_order_relaxed);
+        dlg.accept();
+        QApplication::quit();
+    });
+    // Exit without saving
+    connect(btn_nosave, &QPushButton::clicked, &dlg, [&dlg]() {
+        Config::SAVE_ON_EXIT.store(false, std::memory_order_relaxed);
+        dlg.accept();
+        QApplication::quit();
+    });
+    connect(btn_cancel, &QPushButton::clicked, &dlg, &QDialog::reject);
+
+    dlg.exec();
 }
 
 

@@ -293,8 +293,8 @@ private:
     // Header info (speed + cpu temp)
     QLabel* hdr_info_ = nullptr;
 
-    // Bottom tab bar — 6 tabs (5 feature pages + Interfaces)
-    std::array<QPushButton*, 6> tab_btns_{};
+    // Bottom tab bar — 5 tabs
+    std::array<QPushButton*, 5> tab_btns_{};
 
     // 60Hz unified render + data refresh timer
     int data_timer_id_ = -1;

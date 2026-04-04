@@ -51,6 +51,9 @@ namespace Scalpel::Config {
 
     inline std::string IFACE_GATEWAY = "eth0";
 
+    // Set to false by GUI shutdown dialog to skip the post-exit config save
+    inline std::atomic<bool> SAVE_ON_EXIT{true};
+
     // Dynamic runtime switch states
     struct DynamicState {
         std::atomic<bool> enable_nat{true};
