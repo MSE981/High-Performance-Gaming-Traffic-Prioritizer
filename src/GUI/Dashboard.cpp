@@ -3,6 +3,7 @@
 #include "Config.hpp"
 #include "SystemOptimizer.hpp"
 #include <QApplication>
+#include <QScreen>
 #include <QMetaObject>
 #include <QButtonGroup>
 #include <QMenu>
@@ -1517,16 +1518,16 @@ void Dashboard::on_more_clicked() {
     lay->setContentsMargins(10, 10, 10, 10);
     lay->setSpacing(8);
 
-    auto* btn_iface = new QPushButton("Interfaces  🌐");
+    auto* btn_iface = new QPushButton("🌐  Interfaces");
     btn_iface->setFixedHeight(80);
-    btn_iface->setStyleSheet("QPushButton { font-size: 22px; text-align: right; padding-right: 20px; }"
+    btn_iface->setStyleSheet("QPushButton { font-size: 22px; }"
                              "QPushButton:pressed { background-color: #0055cc; }");
     lay->addWidget(btn_iface);
 
-    auto* btn_shutdown = new QPushButton("Shutdown  ⏻");
+    auto* btn_shutdown = new QPushButton("⏻  Shutdown");
     btn_shutdown->setFixedHeight(80);
     btn_shutdown->setObjectName("btn_danger");
-    btn_shutdown->setStyleSheet("QPushButton#btn_danger { font-size: 22px; text-align: right; padding-right: 20px; }"
+    btn_shutdown->setStyleSheet("QPushButton#btn_danger { font-size: 22px; }"
                                 "QPushButton#btn_danger:pressed { background-color: #aa2222; }");
     lay->addWidget(btn_shutdown);
 
@@ -1541,8 +1542,12 @@ void Dashboard::on_more_clicked() {
     });
 
     popup.adjustSize();
-    QPoint pos = btn_more_->mapToGlobal(QPoint(0, 0));
-    popup.move(pos.x(), pos.y() - popup.sizeHint().height());
+    QSize  sz  = popup.sizeHint();
+    QPoint pos = btn_more_->mapToGlobal(QPoint(btn_more_->width(), 0));
+    QRect  screen = QApplication::primaryScreen()->geometry();
+    int x = std::clamp(pos.x() - sz.width(), screen.left(), screen.right() - sz.width());
+    int y = pos.y() - sz.height();
+    popup.move(x, y);
     popup.exec();
 }
 
