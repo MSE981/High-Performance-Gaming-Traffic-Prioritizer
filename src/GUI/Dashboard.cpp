@@ -12,6 +12,7 @@
 #include <QLinearGradient>
 #include <QTimerEvent>
 #include <QResizeEvent>
+#include <QMouseEvent>
 #include <QFormLayout>
 #include <QScrollArea>
 #include <QRegularExpressionValidator>
@@ -32,48 +33,93 @@ namespace Scalpel::GUI {
 // Spring constants tuned for a snappy-but-not-bouncy feel
 // ═════════════════════════════════════════════════════════════
 NotificationPanel::NotificationPanel(QWidget* parent) : QFrame(parent) {
-    setFixedHeight(260);
-    setStyleSheet(
-        "NotificationPanel {"
-        "  background: rgba(20,20,32,220);"
-        "  border-bottom-left-radius: 20px;"
-        "  border-bottom-right-radius: 20px;"
-        "}"
-    );
+    // Height set dynamically by Dashboard (full-screen overlay)
+    setAttribute(Qt::WA_TranslucentBackground);
+    setStyleSheet("NotificationPanel { background: transparent; }");
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 16, 20, 16);
-    root->setSpacing(8);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
 
+    // ── Notification card area (top 360px, rounded bottom corners) ──
+    auto* card_panel = new QFrame();
+    card_panel->setObjectName("notif_card_panel");
+    card_panel->setStyleSheet(
+        "QFrame#notif_card_panel {"
+        "  background: transparent;"
+        "  border-bottom-left-radius: 24px;"
+        "  border-bottom-right-radius: 24px;"
+        "}"
+    );
+    card_panel->setFixedHeight(360);
+
+    auto* card_lay = new QVBoxLayout(card_panel);
+    card_lay->setContentsMargins(20, 14, 20, 16);
+    card_lay->setSpacing(8);
+
+    // Drag handle indicator
     auto* handle = new QFrame();
-    handle->setFixedSize(40, 4);
-    handle->setStyleSheet("background: rgba(255,255,255,60); border-radius: 2px;");
+    handle->setFixedSize(44, 5);
+    handle->setStyleSheet("background: rgba(255,255,255,70); border-radius: 2px;");
     auto* handle_row = new QHBoxLayout();
     handle_row->addStretch();
     handle_row->addWidget(handle);
     handle_row->addStretch();
-    root->addLayout(handle_row);
+    card_lay->addLayout(handle_row);
 
-    auto* header_lbl = new QLabel("Notification Centre");
-    header_lbl->setStyleSheet("color: rgba(255,255,255,180); font-size: 13px; font-weight: bold;");
-    root->addWidget(header_lbl);
+    auto* header_lbl = new QLabel("Notifications");
+    header_lbl->setStyleSheet("color: rgba(255,255,255,200); font-size: 14px; font-weight: bold; padding: 4px 0;");
+    card_lay->addWidget(header_lbl);
 
-    notif_list_ = new QVBoxLayout();
+    // Scrollable notification list
+    auto* scroll = new QScrollArea();
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setWidgetResizable(true);
+    scroll->setStyleSheet("QScrollArea { background: transparent; } QWidget { background: transparent; }");
+
+    auto* list_container = new QWidget();
+    list_container->setStyleSheet("background: transparent;");
+    notif_list_ = new QVBoxLayout(list_container);
+    notif_list_->setContentsMargins(0, 0, 0, 0);
     notif_list_->setSpacing(6);
-    root->addLayout(notif_list_);
-    root->addStretch();
+    notif_list_->addStretch();
+    scroll->setWidget(list_container);
+    card_lay->addWidget(scroll, 1);
+
+    root->addWidget(card_panel);
+    // Transparent remainder — absorbs touch to prevent pass-through to pages below
+    root->addStretch(1);
 
     // Start hidden above screen
     move(0, -height());
+}
+
+void NotificationPanel::set_backdrop_alpha(int alpha) {
+    backdrop_alpha_ = std::clamp(alpha, 0, 255);
+    update();
+}
+
+void NotificationPanel::paintEvent(QPaintEvent*) {
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    // Full-screen dark backdrop (simulated blur via opacity)
+    p.fillRect(rect(), QColor(12, 12, 22, backdrop_alpha_));
+}
+
+void NotificationPanel::mousePressEvent(QMouseEvent* event) {
+    // Tap anywhere on the panel (outside the card area) dismisses it.
+    // Tap on the card area is also handled here so any touch collapses the panel.
+    set_expanded(false);
+    event->accept();
 }
 
 void NotificationPanel::push_notification(const QString& title, const QString& body) {
     auto* card = new QFrame();
     card->setStyleSheet(
         "QFrame {"
-        "  background: rgba(255,255,255,12);"
-        "  border-radius: 12px;"
-        "  padding: 8px;"
+        "  background: rgba(255,255,255,14);"
+        "  border-radius: 14px;"
         "}"
     );
     auto* lay = new QVBoxLayout(card);
@@ -86,7 +132,8 @@ void NotificationPanel::push_notification(const QString& title, const QString& b
     b->setWordWrap(true);
     lay->addWidget(t);
     lay->addWidget(b);
-    notif_list_->addWidget(card);
+    // Insert before the trailing stretch so cards stack from the top
+    notif_list_->insertWidget(notif_list_->count() - 1, card);
 }
 
 void NotificationPanel::set_expanded(bool expanded) {
@@ -94,8 +141,8 @@ void NotificationPanel::set_expanded(bool expanded) {
 }
 
 void NotificationPanel::advance_spring() {
-    constexpr double k    = 0.18;   // spring stiffness
-    constexpr double damp = 0.12;   // damping ratio
+    constexpr double k    = 0.14;   // spring stiffness
+    constexpr double damp = 0.30;   // damping — higher = less bounce, faster settle
     double target = expanded_ ? 0.0 : -(double)height();
     double force  = k * (target - pos_y_);
     vel_y_ = (vel_y_ + force) * (1.0 - damp);
@@ -1291,7 +1338,7 @@ void Dashboard::setup_ui() {
 
     // ── Notification panel: floats above all content ──
     notif_panel_ = new NotificationPanel(centralWidget());
-    notif_panel_->setFixedWidth(centralWidget()->width());
+    notif_panel_->setFixedSize(centralWidget()->width(), centralWidget()->height());
     notif_panel_->raise();
     notif_panel_->push_notification("Router Ready", "Data plane Cores 2/3 attached. Forwarding engine running.");
 }
@@ -1375,8 +1422,13 @@ void Dashboard::on_notif_toggle_clicked() {
 
 void Dashboard::resizeEvent(QResizeEvent* event) {
     QMainWindow::resizeEvent(event);
-    if (notif_panel_)
-        notif_panel_->setFixedWidth(centralWidget()->width());
+    if (notif_panel_) {
+        auto* cw = centralWidget();
+        notif_panel_->setFixedSize(cw->width(), cw->height());
+        // If collapsed, snap to just off-screen top so position stays correct
+        if (!notif_panel_->is_expanded())
+            notif_panel_->move(0, -cw->height());
+    }
 }
 
 void Dashboard::timerEvent(QTimerEvent* event) {

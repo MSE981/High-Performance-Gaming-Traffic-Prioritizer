@@ -47,11 +47,19 @@ public:
     bool is_expanded() const { return expanded_; }
     bool is_settled() const;
     void advance_spring();   // called every anim frame (16ms)
+    // Backdrop opacity: 0 = transparent, 255 = fully opaque dark
+    void set_backdrop_alpha(int alpha);
+    int  backdrop_alpha() const { return backdrop_alpha_; }
+
+protected:
+    void mousePressEvent(QMouseEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
 
 private:
-    bool    expanded_  = false;
-    double  pos_y_     = 0.0;   // current real Y position (float)
-    double  vel_y_     = 0.0;   // spring velocity
+    bool    expanded_      = false;
+    double  pos_y_         = 0.0;   // current real Y position (float)
+    double  vel_y_         = 0.0;   // spring velocity
+    int     backdrop_alpha_ = 210;  // default translucency
     QVBoxLayout* notif_list_;
 };
 
