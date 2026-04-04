@@ -46,20 +46,23 @@ public:
     void set_expanded(bool expanded);
     bool is_expanded() const { return expanded_; }
     bool is_settled() const;
-    void advance_spring();   // called every anim frame (16ms)
+    void advance_spring();          // called every anim frame (16ms)
+    void kick(double initial_vel);  // inject velocity for swipe-triggered motion
     // Backdrop opacity: 0 = transparent, 255 = fully opaque dark
     void set_backdrop_alpha(int alpha);
     int  backdrop_alpha() const { return backdrop_alpha_; }
 
 protected:
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
 
 private:
-    bool    expanded_      = false;
-    double  pos_y_         = 0.0;   // current real Y position (float)
-    double  vel_y_         = 0.0;   // spring velocity
-    int     backdrop_alpha_ = 210;  // default translucency
+    bool    expanded_       = false;
+    double  pos_y_          = 0.0;   // current real Y position (float)
+    double  vel_y_          = 0.0;   // spring velocity
+    int     backdrop_alpha_ = 210;   // default translucency
+    int     swipe_start_y_  = 0;     // press Y for swipe gesture detection
     QVBoxLayout* notif_list_;
 };
 
@@ -263,11 +266,14 @@ public:
 protected:
     void timerEvent(QTimerEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    bool eventFilter(QObject* obj, QEvent* event) override;
 private:
     void setup_ui();
     void setup_tabbar(QBoxLayout* root_layout);
 
     QStackedWidget* page_stack;
+    QFrame*         header_ = nullptr;  // header frame — watched for swipe-down gesture
+    int             hdr_swipe_y0_ = -1; // -1 = not tracking
 
     // Feature pages
     OverviewPage*    page_overview;

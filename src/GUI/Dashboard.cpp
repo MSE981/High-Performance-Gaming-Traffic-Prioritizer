@@ -108,9 +108,17 @@ void NotificationPanel::paintEvent(QPaintEvent*) {
 }
 
 void NotificationPanel::mousePressEvent(QMouseEvent* event) {
-    // Tap anywhere on the panel (outside the card area) dismisses it.
-    // Tap on the card area is also handled here so any touch collapses the panel.
-    set_expanded(false);
+    swipe_start_y_ = event->pos().y();
+    event->accept();
+}
+
+void NotificationPanel::mouseReleaseEvent(QMouseEvent* event) {
+    int dy = event->pos().y() - swipe_start_y_;
+    // Upward swipe (dy < -24px) → collapse with fast-start kick
+    if (dy < -24) {
+        kick(-12.0);
+        set_expanded(false);
+    }
     event->accept();
 }
 
@@ -141,13 +149,18 @@ void NotificationPanel::set_expanded(bool expanded) {
 }
 
 void NotificationPanel::advance_spring() {
-    constexpr double k    = 0.14;   // spring stiffness
-    constexpr double damp = 0.30;   // damping — higher = less bounce, faster settle
+    // k=0.20 + damp=0.55: ease-out feel (fast start → rapid deceleration, <1/4 original overshoot)
+    constexpr double k    = 0.20;
+    constexpr double damp = 0.55;
     double target = expanded_ ? 0.0 : -(double)height();
     double force  = k * (target - pos_y_);
     vel_y_ = (vel_y_ + force) * (1.0 - damp);
     pos_y_ += vel_y_;
     move(0, (int)pos_y_);
+}
+
+void NotificationPanel::kick(double initial_vel) {
+    vel_y_ = initial_vel;
 }
 
 bool NotificationPanel::is_settled() const {
@@ -539,7 +552,7 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     whitelist_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
     whitelist_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     whitelist_table->verticalHeader()->setVisible(false);
-    whitelist_table->verticalHeader()->setDefaultSectionSize(52);
+    whitelist_table->verticalHeader()->setDefaultSectionSize(78);
     wl_lay->addWidget(whitelist_table);
 
     struct PortEntry { const char* port; const char* proto; const char* desc; };
@@ -586,10 +599,51 @@ void QosPage::on_toggle_accel() {
 }
 
 void QosPage::on_add_port() {
+    // Protocol selection dialog
+    QDialog dlg(this);
+    dlg.setWindowTitle("Select Protocol");
+    dlg.setFixedSize(560, 300);
+    dlg.setStyleSheet(Scalpel::GUI::DARK_STYLESHEET);
+
+    auto* lay = new QVBoxLayout(&dlg);
+    lay->setContentsMargins(24, 20, 24, 20);
+    lay->setSpacing(16);
+
+    auto* lbl = new QLabel("Select protocol for the new port rule:");
+    lbl->setStyleSheet("color: #c0c0d0; font-size: 15px;");
+    lay->addWidget(lbl);
+
+    auto* btn_row = new QHBoxLayout();
+    btn_row->setSpacing(12);
+
+    QString chosen;
+    auto make_btn = [&](const QString& proto) {
+        auto* btn = new QPushButton(proto);
+        btn->setObjectName("btn_primary");
+        btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        btn->setFixedHeight(64);
+        connect(btn, &QPushButton::clicked, &dlg, [&dlg, &chosen, proto]() {
+            chosen = proto;
+            dlg.accept();
+        });
+        btn_row->addWidget(btn);
+    };
+    make_btn("UDP");
+    make_btn("TCP");
+    make_btn("TCP & UDP");
+    lay->addLayout(btn_row);
+
+    auto* btn_cancel = new QPushButton("Cancel");
+    btn_cancel->setFixedHeight(52);
+    connect(btn_cancel, &QPushButton::clicked, &dlg, &QDialog::reject);
+    lay->addWidget(btn_cancel);
+
+    if (dlg.exec() != QDialog::Accepted) return;
+
     int row = whitelist_table->rowCount();
     whitelist_table->insertRow(row);
     whitelist_table->setItem(row, 0, new QTableWidgetItem(""));
-    whitelist_table->setItem(row, 1, new QTableWidgetItem("UDP"));
+    whitelist_table->setItem(row, 1, new QTableWidgetItem(chosen));
     whitelist_table->setItem(row, 2, new QTableWidgetItem(""));
     whitelist_table->editItem(whitelist_table->item(row, 0));
 }
@@ -1266,8 +1320,10 @@ void Dashboard::setup_ui() {
     root_layout->setSpacing(0);
 
     // ── Header bar ──
-    auto* header = new QFrame();
+    header_ = new QFrame();
+    auto* header = header_;
     header->setObjectName("header_frame");
+    header->installEventFilter(this);  // detect swipe-down to expand notification panel
     auto* header_lay = new QHBoxLayout(header);
     header_lay->setContentsMargins(12, 0, 12, 0);
     header_lay->setSpacing(8);
@@ -1327,7 +1383,7 @@ void Dashboard::setup_ui() {
 void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
     auto* bar = new QFrame();
     bar->setObjectName("tab_bar_frame");
-    bar->setFixedHeight(72);
+    bar->setFixedHeight(96);
     auto* lay = new QHBoxLayout(bar);
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(0);
@@ -1394,7 +1450,27 @@ void Dashboard::on_shutdown_clicked() {
 }
 
 void Dashboard::on_notif_toggle_clicked() {
-    notif_panel_->set_expanded(!notif_panel_->is_expanded());
+    bool will_expand = !notif_panel_->is_expanded();
+    notif_panel_->kick(will_expand ? 12.0 : -12.0);
+    notif_panel_->set_expanded(will_expand);
+}
+
+bool Dashboard::eventFilter(QObject* obj, QEvent* event) {
+    if (obj == header_ && !notif_panel_->is_expanded()) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            hdr_swipe_y0_ = static_cast<QMouseEvent*>(event)->pos().y();
+        } else if (event->type() == QEvent::MouseMove && hdr_swipe_y0_ >= 0) {
+            int dy = static_cast<QMouseEvent*>(event)->pos().y() - hdr_swipe_y0_;
+            if (dy > 28) {
+                hdr_swipe_y0_ = -1;
+                notif_panel_->kick(12.0);
+                notif_panel_->set_expanded(true);
+            }
+        } else if (event->type() == QEvent::MouseButtonRelease) {
+            hdr_swipe_y0_ = -1;
+        }
+    }
+    return QMainWindow::eventFilter(obj, event);
 }
 
 void Dashboard::resizeEvent(QResizeEvent* event) {

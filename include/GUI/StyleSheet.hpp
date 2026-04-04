@@ -401,10 +401,10 @@ namespace Scalpel::GUI {
         border-top: 3px solid transparent;
         border-radius: 0px;
         padding: 6px 4px 2px 4px;
-        min-height: 72px;
+        min-height: 96px;
         min-width: 0px;
         color: #606080;
-        font-size: 12px;
+        font-size: 24px;
         font-weight: normal;
     }
 
