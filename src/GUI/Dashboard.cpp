@@ -1518,7 +1518,7 @@ void Dashboard::on_shutdown_clicked() {
 
 
 bool Dashboard::eventFilter(QObject* obj, QEvent* event) {
-    if (obj == header_ && !notif_panel_->is_expanded()) {
+    if (obj == header_ && notif_panel_ && !notif_panel_->is_expanded()) {
         if (event->type() == QEvent::MouseButtonPress) {
             hdr_swipe_y0_ = static_cast<QMouseEvent*>(event)->pos().y();
         } else if (event->type() == QEvent::MouseMove && hdr_swipe_y0_ >= 0) {
