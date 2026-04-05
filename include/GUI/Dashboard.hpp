@@ -7,6 +7,7 @@
 #include <QWidget>
 #include <QLabel>
 #include <QPushButton>
+#include <QAbstractButton>
 #include <QStatusBar>
 #include <QFrame>
 #include <QLineEdit>
@@ -293,7 +294,7 @@ private:
     QLabel* hdr_info_ = nullptr;
 
     // Bottom tab bar — 5 tabs
-    std::array<QPushButton*, 5> tab_btns_{};
+    std::array<QAbstractButton*, 5> tab_btns_{};
 
     // 60Hz unified render + data refresh timer
     int data_timer_id_ = -1;

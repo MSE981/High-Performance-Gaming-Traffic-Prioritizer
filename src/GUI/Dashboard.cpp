@@ -1477,6 +1477,56 @@ void Dashboard::setup_ui() {
     notif_panel_->push_notification("Engine Ready", "Data plane Cores 2/3 attached. Forwarding engine running.");
 }
 
+// Tab button with independently-sized icon and text label.
+// Intentionally has no Q_OBJECT — uses only inherited QAbstractButton signals.
+class NavTabButton final : public QAbstractButton {
+public:
+    NavTabButton(const QString& icon_ch, const QString& label_text, QWidget* parent = nullptr)
+        : QAbstractButton(parent), icon_(icon_ch), text_(label_text)
+    {
+        setCheckable(true);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setFixedHeight(96);
+    }
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+
+        // Background
+        p.fillRect(rect(), QColor("#12122a"));
+
+        // Pressed tint
+        if (isDown())
+            p.fillRect(rect(), QColor(0, 119, 255, 25));
+
+        const bool chk = isChecked();
+        const QColor ink = chk ? QColor("#0077ff") : QColor("#606080");
+
+        // Active top border
+        if (chk)
+            p.fillRect(0, 0, width(), 3, QColor("#0077ff"));
+
+        p.setPen(ink);
+
+        // Icon — 30px
+        QFont fi = font();
+        fi.setPixelSize(30);
+        p.setFont(fi);
+        p.drawText(QRect(0, 4, width(), 44), Qt::AlignCenter, icon_);
+
+        // Label — 20px
+        QFont ft = font();
+        ft.setPixelSize(20);
+        if (chk) ft.setBold(true);
+        p.setFont(ft);
+        p.drawText(QRect(0, 52, width(), 38), Qt::AlignCenter, text_);
+    }
+private:
+    QString icon_;
+    QString text_;
+};
+
 void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
     auto* bar = new QFrame();
     bar->setObjectName("tab_bar_frame");
@@ -1485,25 +1535,22 @@ void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(0);
 
-    // 5 tabs: label → page_stack index
-    struct TabDef { const char* label; int page; };
+    struct TabDef { const char* icon; const char* label; int page; };
     static constexpr TabDef TABS[] = {
-        {"⌂\nOverview",    0},
-        {"⊕\nQoS",         2},
-        {"🔧\nServices",    3},
-        {"▭\nDevices",     4},
-        {"△\nInterfaces",  1},
+        {"⌂",  "Overview",   0},
+        {"⚡",  "QoS",        2},
+        {"⚙",  "Services",   3},
+        {"▭",  "Devices",    4},
+        {"🌐", "Interfaces", 1},
     };
 
     auto* grp = new QButtonGroup(bar);
     grp->setExclusive(true);
 
     for (int i = 0; i < 5; ++i) {
-        auto* btn = new QPushButton(TABS[i].label);
-        btn->setObjectName("nav_tab_btn");
-        btn->setCheckable(true);
+        auto* btn = new NavTabButton(TABS[i].icon, TABS[i].label, bar);
         int page_idx = TABS[i].page;
-        connect(btn, &QPushButton::clicked, this, [this, page_idx]() {
+        connect(btn, &QAbstractButton::clicked, this, [this, page_idx]() {
             on_tab_clicked(page_idx);
         });
         grp->addButton(btn);

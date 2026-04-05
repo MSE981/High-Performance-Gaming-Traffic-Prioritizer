@@ -395,29 +395,6 @@ namespace Scalpel::GUI {
         border-top: 1px solid #2a2a4a;
     }
 
-    QPushButton#nav_tab_btn {
-        background: transparent;
-        border: none;
-        border-top: 3px solid transparent;
-        border-radius: 0px;
-        padding: 6px 4px 2px 4px;
-        min-height: 96px;
-        min-width: 0px;
-        color: #606080;
-        font-size: 22px;
-        font-weight: normal;
-    }
-
-    QPushButton#nav_tab_btn:checked {
-        color: #0077ff;
-        border-top-color: #0077ff;
-        font-weight: bold;
-    }
-
-    QPushButton#nav_tab_btn:pressed {
-        background-color: rgba(0,119,255,25);
-    }
-
     /* ===== Header icon buttons (notif, hamburger) ===== */
     QPushButton#btn_header_icon {
         background: transparent;
