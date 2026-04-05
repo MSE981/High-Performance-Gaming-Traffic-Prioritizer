@@ -319,8 +319,8 @@ void OverviewPage::refresh(const Telemetry& tel, const std::array<uint64_t, 4>& 
         uint64_t cp = tel.core_metrics[i].pkts.load(std::memory_order_relaxed);
         uint64_t cb = tel.core_metrics[i].bytes.load(std::memory_order_relaxed);
         uint64_t dp = cp - last_p[i], db = cb - last_b[i];
-        total_pps += dp * 60.0;
-        total_bps += db * 60.0;
+        total_pps += dp * 20.0;
+        total_bps += db * 20.0;
         int load = tel.core_metrics[i].cpu_load_pct.load(std::memory_order_relaxed);
         // Colour: green <50%, orange 50-80%, red >80%
         const char* colour = load < 50 ? "#00cc66" : (load < 80 ? "#ffaa00" : "#ff4444");
@@ -1382,7 +1382,7 @@ Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
     setStyleSheet(DARK_STYLESHEET);
     setup_ui();
     // Unified 60Hz timer: drives spring animation and data refresh on every frame
-    data_timer_id_ = startTimer(16, Qt::PreciseTimer);
+    data_timer_id_ = startTimer(50, Qt::PreciseTimer);
 }
 
 void Dashboard::setup_ui() {
@@ -1643,7 +1643,7 @@ void Dashboard::resizeEvent(QResizeEvent* event) {
 void Dashboard::timerEvent(QTimerEvent* event) {
     if (event->timerId() != data_timer_id_) return;
 
-    // 60Hz unified tick: spring animation + data refresh
+    // 20Hz unified tick: spring animation + data refresh
     data_tick_++;
 
     // Advance notification panel spring physics every frame (no-op when settled)
@@ -1654,11 +1654,11 @@ void Dashboard::timerEvent(QTimerEvent* event) {
 
     auto& tel = Telemetry::instance();
 
-    // Bandwidth: delta over 16ms tick, scaled to Mbps (×60 = per-second rate)
+    // Bandwidth: delta over 50ms tick, scaled to Mbps (×20 = per-second rate)
     uint64_t cur_b2 = tel.core_metrics[2].bytes.load(std::memory_order_relaxed);
     uint64_t cur_b3 = tel.core_metrics[3].bytes.load(std::memory_order_relaxed);
-    double dl = (cur_b2 - last_bytes[2]) * 8.0 * 60.0 / 1e6;
-    double ul = (cur_b3 - last_bytes[3]) * 8.0 * 60.0 / 1e6;
+    double dl = (cur_b2 - last_bytes[2]) * 8.0 * 20.0 / 1e6;
+    double ul = (cur_b3 - last_bytes[3]) * 8.0 * 20.0 / 1e6;
 
     // CPU temperature
     double t = tel.cpu_temp_celsius.load(std::memory_order_relaxed);
@@ -1669,10 +1669,10 @@ void Dashboard::timerEvent(QTimerEvent* event) {
         .arg(ul, 0, 'f', 1)
         .arg(t > 0 ? t : 0.0, 0, 'f', 0));
 
-    // Refresh overview plots if visible; update system info every 60 ticks (1s)
+    // Refresh overview plots if visible; update system info every 20 ticks (1s)
     if (page_stack->currentIndex() == 0)
         page_overview->refresh(tel, last_pkts, last_bytes);
-    if (data_tick_ % 60 == 0)
+    if (data_tick_ % 20 == 0)
         page_overview->refresh_info();
 
     // Sync service page status indicators if visible
