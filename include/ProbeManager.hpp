@@ -1,7 +1,6 @@
 #pragma once
 #include <chrono>
 #include <cstring>
-#include <vector>
 #include <print>
 #include <array>
 #include <memory>
@@ -32,7 +31,8 @@ namespace Scalpel::Probe {
 
     public:
         // Mode A: internal compute stress test
-        static void run_internal_stress() {
+        // on_complete(mbps): fired when benchmark finishes; caller stores result (§1.1 callbacks not getters)
+        static void run_internal_stress(std::function<void(double)> on_complete = nullptr) {
             auto& tel = Telemetry::instance();
             tel.is_probing.store(true, std::memory_order_relaxed);
             std::println("[Probe A] Benchmarking internal logic...");
@@ -53,9 +53,10 @@ namespace Scalpel::Probe {
             }
 
             double pps = count / 5.0;
-            tel.internal_limit_mbps.store((pps * 64 * 8) / 1e6, std::memory_order_relaxed);
-            std::println("[Probe A] CPU capacity: {:.2f} Mbps ({} PPS)", tel.internal_limit_mbps.load(), pps);
+            double mbps = (pps * 64 * 8) / 1e6;
+            std::println("[Probe A] CPU capacity: {:.2f} Mbps ({} PPS)", mbps, pps);
             tel.is_probing.store(false, std::memory_order_relaxed);
+            if (on_complete) on_complete(mbps);
         }
 
         // Mode B: ISP PPS probing (deterministic precise rate limiting via timerfd)
@@ -107,8 +108,8 @@ namespace Scalpel::Probe {
         static void run_async_real_isp_probe(std::function<void(double, double)> on_complete) {
             std::println("[Probe C] Spawning asynchronous speedtest thread. Realtime engine will NOT block.");
 
-            // Spawn background thread for blocking task; fire-and-forget, no stop-token needed
-            std::jthread([cb = std::move(on_complete)]() {
+            // Fire-and-forget: use std::thread + detach, not jthread (no stop-token needed)
+            std::thread([cb = std::move(on_complete)]() {
                 std::array<char, 128> buffer{};
                 std::string result;
 
@@ -127,15 +128,21 @@ namespace Scalpel::Probe {
                 double upload_mbps = 0.0;
 
                 auto pos_down = result.find("Download:");
-                if (pos_down != std::string::npos) {
-                    try { download_mbps = std::stod(result.substr(pos_down + 9)); }
-                    catch (...) {}
+                if (pos_down != std::string::npos && pos_down + 9 < result.size()) {
+                    const char* p = result.c_str() + pos_down + 9;
+                    while (*p == ' ') ++p; // skip whitespace
+                    if (*p >= '0' && *p <= '9') {
+                        try { download_mbps = std::stod(p); } catch (...) {}
+                    }
                 }
 
                 auto pos_up = result.find("Upload:");
-                if (pos_up != std::string::npos) {
-                    try { upload_mbps = std::stod(result.substr(pos_up + 8)); }
-                    catch (...) {}
+                if (pos_up != std::string::npos && pos_up + 8 < result.size()) {
+                    const char* p = result.c_str() + pos_up + 8;
+                    while (*p == ' ') ++p;
+                    if (*p >= '0' && *p <= '9') {
+                        try { upload_mbps = std::stod(p); } catch (...) {}
+                    }
                 }
 
                 if (download_mbps > 0.0 && upload_mbps > 0.0) {

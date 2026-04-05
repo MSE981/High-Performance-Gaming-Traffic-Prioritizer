@@ -1,11 +1,13 @@
 #pragma once
 #include <thread>
 #include <stop_token>
+#include <atomic>
 #include <memory>
 #include <expected>
 #include <chrono>
 #include <ctime>
 #include <sys/socket.h>
+#include <arpa/inet.h>
 #include "NetworkUtils.hpp"
 #include "NetworkEngine.hpp"
 #include "Processor.hpp"
@@ -16,8 +18,8 @@
 #include "SystemOptimizer.hpp"
 #include "Telemetry.hpp"
 #include "ProbeManager.hpp"
-#include "Indicator.hpp"
 #include "Scheduler.hpp"
+#include "FirewallEngine.hpp"
 #include <print>
 #include <iostream>
 #include <cstdio>
@@ -25,12 +27,14 @@
 #include <span>
 #include <poll.h> 
 #include <future>
+#include <functional>
 #include <array>
-#include <map>
 #include <sys/timerfd.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <cstring>
+#include <dirent.h>
+#include <sys/eventfd.h>
 
 namespace Scalpel {
 
@@ -111,15 +115,29 @@ namespace Scalpel {
         std::array<StaticIpMap<std::shared_ptr<Traffic::Shaper>, 256>, 2> buffers;
         alignas(64) std::atomic<size_t> active_idx{0};
 
-        void update(const std::map<uint32_t, double>& limits) {
+        void update(const std::array<Config::IpLimitEntry, Config::MAX_IP_LIMITS>& table, size_t count) {
             size_t active = active_idx.load(std::memory_order_relaxed);
             size_t inactive = 1 - active;
             buffers[inactive] = {}; // Zero Allocation Refresh
-            for (auto const& [ip, rate] : limits) {
-                buffers[inactive].insert(ip, std::make_shared<Traffic::Shaper>(rate));
+            for (size_t i = 0; i < count; ++i) {
+                buffers[inactive].insert(table[i].ip, std::make_shared<Traffic::Shaper>(table[i].rate));
             }
             active_idx.store(inactive, std::memory_order_release);
         }
+    };
+
+    // Configuration bundle for a packet worker thread (§2.2.3: use struct not loads of arguments)
+    struct PacketWorkerConfig {
+        int tx_fd;
+        int core_id;
+        std::shared_ptr<Traffic::Shaper> global_shaper;
+        std::shared_ptr<Logic::NatEngine> nat_engine;
+        std::shared_ptr<Logic::DnsEngine> dns_engine;
+        std::shared_ptr<QoSConfig> qos_config;
+        std::shared_ptr<QoSConfig> device_shaper;  // per-device hard rate cap (DL for core2, UL for core3) — independent of QoS
+        std::shared_ptr<Logic::DhcpEngine> dhcp_engine;
+        std::shared_ptr<Logic::FirewallEngine> firewall_engine;
+        uint32_t gateway_ip;
     };
 
     // Data plane: event-consumer model — core packet processing
@@ -135,17 +153,24 @@ namespace Scalpel {
         std::shared_ptr<Logic::NatEngine> nat_engine;
         std::shared_ptr<Logic::DnsEngine> dns_engine;
         std::shared_ptr<QoSConfig> qos_config;
+        std::shared_ptr<QoSConfig> device_shaper;
         std::shared_ptr<Logic::DhcpEngine> dhcp_engine;
+        std::shared_ptr<Logic::FirewallEngine> firewall_engine;
         uint32_t gateway_ip = 0;
 
         std::array<std::array<RouteFunc, 3>, 2> routes;
 
         // Callback-based pipeline — eliminates all runtime if-else branching
-        using PipelineStep = bool (*)(PacketConsumer& self, Net::ParsedPacket& pkt);
-        std::array<PipelineStep, 7> pipeline;
+        using PipelineStep = std::function<bool(PacketConsumer&, Net::ParsedPacket&)>;
+        std::array<PipelineStep, 10> pipeline;
 
-        PacketConsumer(int rx_fd, int tx_fd, int cid, std::shared_ptr<Traffic::Shaper> global_shaper, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp, uint32_t gw_ip)
-            : rx_fd(rx_fd), tx_fd(tx_fd), core_id(cid), ctx{tx_fd, global_shaper}, nat_engine(nat), dns_engine(dns), qos_config(qos), dhcp_engine(dhcp), gateway_ip(gw_ip) {
+        PacketConsumer(int rx_fd, const PacketWorkerConfig& cfg)
+            : rx_fd(rx_fd), tx_fd(cfg.tx_fd), core_id(cfg.core_id),
+              ctx{cfg.tx_fd, cfg.global_shaper},
+              nat_engine(cfg.nat_engine), dns_engine(cfg.dns_engine),
+              qos_config(cfg.qos_config), device_shaper(cfg.device_shaper),
+              dhcp_engine(cfg.dhcp_engine),
+              firewall_engine(cfg.firewall_engine), gateway_ip(cfg.gateway_ip) {
 
             routes = {{
                 { fast_path_handler, fast_path_handler, shaper_handler }, // acceleration mode
@@ -156,9 +181,18 @@ namespace Scalpel {
             // Core 2 (WAN -> LAN, downstream): apply per-IP download shaper before QoS routing.
             // Core 3 (LAN -> WAN, upstream):   apply per-IP upload shaper before QoS routing.
             if (core_id == 2) {
-                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_nat_downstream, step_ip_shaper_downstream, step_qos_routing };
+                // step_block_device_downstream runs after DNAT so daddr is the real LAN IP.
+                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_firewall_inbound,
+                             step_nat_downstream, step_block_device_downstream,
+                             step_device_shaper_downstream, step_ip_shaper_downstream,
+                             step_qos_routing };
             } else {
-                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_local_delivery_blocker, step_nat_downstream, step_nat_upstream, step_ip_shaper_upstream, step_qos_routing };
+                // step_block_device_upstream checks saddr (LAN IP) before SNAT.
+                pipeline = { step_dhcp_interceptor, step_dns_interceptor, step_local_delivery_blocker,
+                             step_block_device_upstream, step_firewall_track_outbound,
+                             step_nat_downstream, step_nat_upstream,
+                             step_device_shaper_upstream, step_ip_shaper_upstream,
+                             step_qos_routing };
             }
         } // end PacketConsumer constructor
 
@@ -253,6 +287,62 @@ namespace Scalpel {
             return false;
         }
 
+        // Core 2 (WAN→LAN): drop unsolicited inbound packets when firewall is enabled
+        static bool step_firewall_inbound(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (!Config::global_state.enable_firewall.load(std::memory_order_relaxed)) return false;
+            if (!self.firewall_engine) return false;
+            // check_inbound returns true=allow, false=block; negate to decide whether to cut pipeline
+            if (!self.firewall_engine->check_inbound(pkt)) {
+                return true; // drop — cut pipeline, packet is not forwarded
+            }
+            return false; // established session — continue pipeline
+        }
+
+        // Core 3 (LAN→WAN): register outbound flow in conntrack table BEFORE SNAT
+        static bool step_firewall_track_outbound(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (!Config::global_state.enable_firewall.load(std::memory_order_relaxed)) return false;
+            if (self.firewall_engine) self.firewall_engine->track_outbound(pkt);
+            return false; // never blocks forwarding
+        }
+
+        // Core 2 (WAN→LAN): drop if LAN destination device is blocked (runs after DNAT)
+        static bool step_block_device_downstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (!pkt.is_valid_ipv4() || !self.firewall_engine) return false;
+            return self.firewall_engine->is_blocked_ip(pkt.ipv4->daddr);
+        }
+
+        // Core 3 (LAN→WAN): drop if LAN source device is blocked (runs before SNAT)
+        static bool step_block_device_upstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (!pkt.is_valid_ipv4() || !self.firewall_engine) return false;
+            return self.firewall_engine->is_blocked_ip(pkt.ipv4->saddr);
+        }
+
+        // Core 2 (WAN→LAN): per-device download rate shaping (daddr = LAN device)
+        static bool step_device_shaper_downstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (!pkt.is_valid_ipv4() || !self.device_shaper) return false;
+            size_t active_idx = self.device_shaper->active_idx.load(std::memory_order_acquire);
+            auto shaper = self.device_shaper->buffers[active_idx].find(pkt.ipv4->daddr);
+            if (shaper) {
+                RouteContext ctx{self.tx_fd, shaper};
+                shaper_handler(ctx, pkt.raw_span, 2, self.core_id);
+                return true;
+            }
+            return false;
+        }
+
+        // Core 3 (LAN→WAN): per-device upload rate shaping (saddr = LAN device)
+        static bool step_device_shaper_upstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
+            if (!pkt.is_valid_ipv4() || !self.device_shaper) return false;
+            size_t active_idx = self.device_shaper->active_idx.load(std::memory_order_acquire);
+            auto shaper = self.device_shaper->buffers[active_idx].find(pkt.ipv4->saddr);
+            if (shaper) {
+                RouteContext ctx{self.tx_fd, shaper};
+                shaper_handler(ctx, pkt.raw_span, 2, self.core_id);
+                return true;
+            }
+            return false;
+        }
+
         static bool step_qos_routing(PacketConsumer& self, Net::ParsedPacket& pkt) {
             auto prio = self.processor.process(pkt);
             const size_t p_idx = static_cast<size_t>(prio);
@@ -290,10 +380,17 @@ namespace Scalpel {
         std::shared_ptr<Logic::NatEngine> nat_engine;
         std::shared_ptr<Logic::DnsEngine> dns_engine;
         std::shared_ptr<Logic::DhcpEngine> dhcp_engine;
+        std::shared_ptr<Logic::FirewallEngine> firewall_engine;
         std::shared_ptr<Logic::UpnpEngine> upnp_engine;
         std::shared_ptr<QoSConfig> qos_config;
-        HW::RGBLed led;
         int lan_fd_ = -1; // cached LAN fd for use by watchdog_loop
+
+        std::shared_ptr<Traffic::Shaper> shaper_dl;
+        std::shared_ptr<Traffic::Shaper> shaper_ul;
+        double base_dl_mbps = 500.0;
+        double base_ul_mbps = 50.0;
+        std::shared_ptr<QoSConfig> device_shaper_dl;
+        std::shared_ptr<QoSConfig> device_shaper_ul;
 
         std::jthread worker_downstream;
         std::jthread worker_upstream;
@@ -310,17 +407,20 @@ namespace Scalpel {
             // Do NOT override service flags here — they are loaded from config.txt
             // before App is constructed (see main.cpp: Config::load_config() precedes App app).
 
-            nat_engine  = std::make_shared<Logic::NatEngine>();
-            dns_engine  = std::make_shared<Logic::DnsEngine>();
-            dhcp_engine = std::make_shared<Logic::DhcpEngine>(Config::ROUTER_IP);
+            nat_engine      = std::make_shared<Logic::NatEngine>();
+            dns_engine      = std::make_shared<Logic::DnsEngine>();
+            dhcp_engine     = std::make_shared<Logic::DhcpEngine>(Config::ROUTER_IP);
+            firewall_engine = std::make_shared<Logic::FirewallEngine>();
             // UpnpEngine constructor starts threads immediately; only create it when the
             // service is enabled so that enable_upnp=false actually suppresses the daemon.
             if (Config::global_state.enable_upnp.load(std::memory_order_relaxed))
                 upnp_engine = std::make_shared<Logic::UpnpEngine>(nat_engine, Config::ROUTER_IP);
-            qos_config = std::make_shared<QoSConfig>();
+            qos_config    = std::make_shared<QoSConfig>();
+            device_shaper_dl = std::make_shared<QoSConfig>();
+            device_shaper_ul = std::make_shared<QoSConfig>();
 
             // Initialize QoS lock-free double-buffer table
-            qos_config->update(Config::IP_LIMIT_MAP);
+            qos_config->update(Config::IP_LIMIT_TABLE, Config::IP_LIMIT_COUNT);
             nat_engine->set_wan_ip(Config::parse_ip_str(Config::ROUTER_IP));
         }
         std::expected<void, std::string> init() {
@@ -343,31 +443,37 @@ namespace Scalpel {
 
             watchdog = std::jthread([this](std::stop_token st) { watchdog_loop(st); });
 
-            std::string gw_ip = Utils::Network::get_gateway_ip();
-            Utils::Network::force_arp_resolution(gw_ip);
+            Utils::Network::force_arp_resolution(Utils::Network::get_gateway_ip());
 
-            Probe::Manager::run_internal_stress();
+            std::thread([]{
+                Probe::Manager::run_internal_stress([](double mbps) {
+                    Telemetry::instance().internal_limit_mbps.store(mbps, std::memory_order_relaxed);
+                });
+            }).detach();
 
             int fd_wan = iface_wan->get_fd();
             int fd_lan = iface_lan->get_fd();
             lan_fd_ = fd_lan; // cache before iface_lan is moved into the worker thread
 
             auto& tel = Telemetry::instance();
-            double dl = tel.isp_down_limit_mbps.load() > 1.0 ? tel.isp_down_limit_mbps.load() : 500.0;
-            double ul = tel.isp_up_limit_mbps.load() > 1.0 ? tel.isp_up_limit_mbps.load() : 50.0;
+            double dl = tel.isp_down_limit_mbps.load(std::memory_order_relaxed) > 1.0 ? tel.isp_down_limit_mbps.load(std::memory_order_relaxed) : 500.0;
+            double ul = tel.isp_up_limit_mbps.load(std::memory_order_relaxed) > 1.0 ? tel.isp_up_limit_mbps.load(std::memory_order_relaxed) : 50.0;
 
-            auto shaper_dl = std::make_shared<Traffic::Shaper>(dl * 0.85);
-            auto shaper_ul = std::make_shared<Traffic::Shaper>(ul * 0.85);
+            base_dl_mbps = dl;
+            base_ul_mbps = ul;
+            shaper_dl = std::make_shared<Traffic::Shaper>(base_dl_mbps);
+            shaper_ul = std::make_shared<Traffic::Shaper>(base_ul_mbps);
 
+            uint32_t gw_ip = Config::parse_ip_str(Config::ROUTER_IP);
             worker_downstream = std::jthread(
-                [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, int tx, int c, std::shared_ptr<Traffic::Shaper> sh, std::shared_ptr<Logic::NatEngine> ne, std::shared_ptr<Logic::DnsEngine> de, std::shared_ptr<QoSConfig> qc, std::shared_ptr<Logic::DhcpEngine> d) {
-                    worker_event_loop(std::move(st), std::move(iface), tx, c, sh, ne, de, qc, d);
-                }, std::move(iface_wan), fd_lan, 2, shaper_dl, nat_engine, dns_engine, qos_config, dhcp_engine);
+                [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, PacketWorkerConfig cfg) {
+                    worker_event_loop(std::move(st), std::move(iface), std::move(cfg));
+                }, std::move(iface_wan), PacketWorkerConfig{fd_lan, 2, shaper_dl, nat_engine, dns_engine, qos_config, device_shaper_dl, dhcp_engine, firewall_engine, gw_ip});
 
             worker_upstream = std::jthread(
-                [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, int tx, int c, std::shared_ptr<Traffic::Shaper> sh, std::shared_ptr<Logic::NatEngine> ne, std::shared_ptr<Logic::DnsEngine> de, std::shared_ptr<QoSConfig> qc, std::shared_ptr<Logic::DhcpEngine> d) {
-                    worker_event_loop(std::move(st), std::move(iface), tx, c, sh, ne, de, qc, d);
-                }, std::move(iface_lan), fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config, dhcp_engine);
+                [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, PacketWorkerConfig cfg) {
+                    worker_event_loop(std::move(st), std::move(iface), std::move(cfg));
+                }, std::move(iface_lan), PacketWorkerConfig{fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config, device_shaper_ul, dhcp_engine, firewall_engine, gw_ip});
 
             std::println("[App] Data plane and control plane started.");
         }
@@ -376,17 +482,17 @@ namespace Scalpel {
 
         void wait_for_shutdown() {
             shutdown_future.wait();
-            std::println("\n[System] 收到退出信号，核心服务已优雅关闭.");
+            std::println("\n[System] Shutdown signal received, core services terminated gracefully.");
         }
 
     private:
-        void worker_event_loop(std::stop_token st, std::unique_ptr<Engine::RawSocketManager> rx_mgr, int tx_fd, int core, std::shared_ptr<Traffic::Shaper> shpr, std::shared_ptr<Logic::NatEngine> nat, std::shared_ptr<Logic::DnsEngine> dns, std::shared_ptr<QoSConfig> qos, std::shared_ptr<Logic::DhcpEngine> dhcp) {
-            Scalpel::System::Optimizer::set_current_thread_affinity(core);
+        void worker_event_loop(std::stop_token st, std::unique_ptr<Engine::RawSocketManager> rx_mgr, PacketWorkerConfig cfg) {
+            Scalpel::System::Optimizer::set_current_thread_affinity(cfg.core_id);
             Scalpel::System::Optimizer::set_realtime_priority();
-            std::println("[App] Core {} Pipeline 挂载就绪.", core);
+            std::println("[App] Core {} pipeline mounted and ready.", cfg.core_id);
 
             int rx_fd = rx_mgr->get_fd();
-            PacketConsumer consumer(rx_fd, tx_fd, core, shpr, nat, dns, qos, dhcp, Config::parse_ip_str(Config::ROUTER_IP));
+            PacketConsumer consumer(rx_fd, cfg);
 
             while (!st.stop_requested()) {
                 rx_mgr->poll_and_dispatch([&consumer](std::span<uint8_t> raw_span) {
@@ -395,18 +501,18 @@ namespace Scalpel {
                 }, 1);
 
                 // Periodic QoS queue drain and hardware TX unblock
-                if (shpr) shpr->process_queue(tx_fd);
+                if (cfg.global_shaper) cfg.global_shaper->process_queue(cfg.tx_fd);
                 // Only scan per-IP shaper table when at least one IP limit is configured,
                 // avoiding 256 empty-slot iterations per poll cycle when no limits are active.
-                if (consumer.qos_config && !Config::IP_LIMIT_MAP.empty()) {
+                if (consumer.qos_config && Config::IP_LIMIT_ACTIVE.load(std::memory_order_relaxed)) {
                     size_t active_idx = consumer.qos_config->active_idx.load(std::memory_order_relaxed);
                     consumer.qos_config->buffers[active_idx].for_each_occupied([&](auto& shaper) {
-                        shaper->process_queue(tx_fd);
+                        shaper->process_queue(cfg.tx_fd);
                     });
                 }
-                
+
                 // Lock-free heartbeat tick: single atomic add, zero syscalls
-                Telemetry::instance().core_metrics[core].last_heartbeat.fetch_add(1, std::memory_order_relaxed);
+                Telemetry::instance().core_metrics[cfg.core_id].last_heartbeat.fetch_add(1, std::memory_order_relaxed);
             }
         }
 
@@ -418,9 +524,9 @@ namespace Scalpel {
             if (tfd == -1) return;
 
             struct itimerspec its{};
-            its.it_value.tv_sec = 1;      // 1秒后启动
+            its.it_value.tv_sec = 1;      // first expiration after 1 second
             its.it_value.tv_nsec = 0;
-            its.it_interval.tv_sec = 1;   // 每隔1秒触发一次
+            its.it_interval.tv_sec = 1;   // fire every 1 second
             its.it_interval.tv_nsec = 0;
 
             if (timerfd_settime(tfd, 0, &its, NULL) == -1) {
@@ -431,18 +537,75 @@ namespace Scalpel {
             uint64_t expirations;
             uint64_t last_bytes[4] = {0, 0, 0, 0};
             uint64_t last_ticks[4] = {0, 0, 0, 0};
+            // /proc/stat CPU accounting: {user,nice,system,idle,iowait,irq,softirq}
+            uint64_t stat_idle[4]  = {0, 0, 0, 0};
+            uint64_t stat_total[4] = {0, 0, 0, 0};
             uint64_t watchdog_tick = 0;
+            int last_throttle_pct = 100;
 
-            struct pollfd pfd{};
-            pfd.fd = tfd;
-            pfd.events = POLLIN;
+            auto& si = tel.sys_info;
+            struct pollfd pfds[2]{};
+            pfds[0] = { tfd, POLLIN, 0 };
+            pfds[1] = { si.rescan_fd, POLLIN, 0 };
+
+            // iface scan lambda — shared by 5-tick refresh and on-demand rescan paths
+            auto scan_ifaces = [&]() {
+                uint8_t cnt = 0;
+                DIR* d = opendir("/sys/class/net");
+                if (d) {
+                    struct dirent* de;
+                    while ((de = readdir(d)) != nullptr &&
+                           cnt < Telemetry::SystemInfo::MAX_IFACES) {
+                        if (de->d_name[0] == '.' ||
+                            strncmp(de->d_name, "lo", 3) == 0) continue;
+                        strncpy(si.ifaces[cnt].name.data(), de->d_name, 15);
+                        si.ifaces[cnt].name[15] = '\0';
+                        char path[64];
+                        snprintf(path, sizeof(path),
+                            "/sys/class/net/%s/operstate", de->d_name);
+                        char sbuf[8]{};
+                        int sfd = ::open(path, O_RDONLY);
+                        if (sfd >= 0) {
+                            ssize_t n = ::read(sfd, sbuf, sizeof(sbuf) - 1);
+                            ::close(sfd);
+                            if (n > 0 && sbuf[n - 1] == '\n') sbuf[n - 1] = '\0';
+                        }
+                        strncpy(si.ifaces[cnt].operstate.data(),
+                            sbuf[0] ? sbuf : "unknown", 7);
+                        si.ifaces[cnt].operstate[7] = '\0';
+                        ++cnt;
+                    }
+                    closedir(d);
+                }
+                // Release store: Qt acquire-load in scan_interfaces() sees completed writes
+                si.iface_count.store(cnt, std::memory_order_release);
+            };
 
             while (!st.stop_requested()) {
-                // 使用 poll 防止 fd 失效或者意外 O_NONBLOCK 导致的 CPU 空转 Spin Lock 死循环
-                int pret = poll(&pfd, 1, 1000); 
+                // poll on timerfd (1Hz) + rescan_fd (on-demand UI request)
+                int nfds = (si.rescan_fd >= 0) ? 2 : 1;
+                int pret = poll(pfds, nfds, 1000);
                 if (pret <= 0) continue;
 
-                if (read(tfd, &expirations, sizeof(expirations)) <= 0) continue;
+                bool timer_fired = (pfds[0].revents & POLLIN) != 0;
+                bool force_scan  = false;
+
+                if (timer_fired && ::read(tfd, &expirations, sizeof(expirations)) <= 0)
+                    timer_fired = false;
+                if (nfds == 2 && (pfds[1].revents & POLLIN)) {
+                    uint64_t val;
+                    ::eventfd_read(si.rescan_fd, &val);
+                    force_scan = true;
+                }
+
+                // On-demand rescan only: iface scan + signal UI, skip all 1Hz work
+                if (force_scan && !timer_fired) {
+                    scan_ifaces();
+                    if (si.done_fd >= 0) ::eventfd_write(si.done_fd, 1);
+                    continue;
+                }
+
+                if (!timer_fired) continue;
 
                 // Read CPU temperature via raw fd (Core 1, 1Hz) — no heap allocation, no ifstream overhead
                 {
@@ -455,7 +618,40 @@ namespace Scalpel {
                     }
                 }
 
+                // Read per-core CPU load from /proc/stat (1Hz)
+                {
+                    char sbuf[1024]{};
+                    int sfd = ::open("/proc/stat", O_RDONLY);
+                    if (sfd >= 0) {
+                        ssize_t n = ::read(sfd, sbuf, sizeof(sbuf) - 1);
+                        ::close(sfd);
+                        if (n > 0) {
+                            sbuf[n] = '\0';
+                            const char* p = sbuf;
+                            for (int ci = 0; ci < 4; ++ci) {
+                                // Find line "cpuN user nice system idle iowait irq softirq"
+                                char tag[8]; snprintf(tag, sizeof(tag), "cpu%d ", ci);
+                                const char* ln = strstr(p, tag);
+                                if (!ln) break;
+                                ln += strlen(tag);
+                                uint64_t user, nice, sys, idle, iowait, irq, softirq;
+                                if (sscanf(ln, "%lu %lu %lu %lu %lu %lu %lu",
+                                        &user, &nice, &sys, &idle, &iowait, &irq, &softirq) == 7) {
+                                    uint64_t total = user + nice + sys + idle + iowait + irq + softirq;
+                                    uint64_t dt = total - stat_total[ci];
+                                    uint64_t di = idle  - stat_idle[ci];
+                                    int pct = (dt > 0) ? static_cast<int>(100 * (dt - di) / dt) : 0;
+                                    tel.core_metrics[ci].cpu_load_pct.store(pct, std::memory_order_relaxed);
+                                    stat_total[ci] = total;
+                                    stat_idle[ci]  = idle;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Refresh system info every 5 ticks (5 seconds) for UI display — Core 1 only
+                bool did_iface_scan = false;
                 ++watchdog_tick;
                 if (watchdog_tick % 5 == 0) {
                     // Helper: read a sysfs/proc file into a fixed-size buffer via raw fd
@@ -472,7 +668,6 @@ namespace Scalpel {
                         }
                     };
 
-                    auto& si = tel.sys_info;
                     read_sysfd("/etc/hostname", std::span<char>(si.hostname));
                     read_sysfd("/proc/version", std::span<char>(si.kernel_short));
 
@@ -498,7 +693,48 @@ namespace Scalpel {
                             si.mem_avail_kb.store(avail, std::memory_order_relaxed);
                         }
                     }
+
+                    // Scan /sys/class/net via lambda — raw fd + POSIX readdir, Core 1 only
+                    scan_ifaces();
+                    did_iface_scan = true;
+
+                    // Scan /proc/net/arp into Telemetry::device_table (Core 1, 5Hz)
+                    {
+                        char arp_buf[4096]{};
+                        int arp_fd = ::open("/proc/net/arp", O_RDONLY);
+                        if (arp_fd >= 0) {
+                            ssize_t nr = ::read(arp_fd, arp_buf, sizeof(arp_buf) - 1);
+                            ::close(arp_fd);
+                            uint8_t dcnt = 0;
+                            if (nr > 0) {
+                                // Skip header line
+                                char* line = arp_buf;
+                                char* end  = arp_buf + nr;
+                                while (line < end && *line != '\n') ++line;
+                                if (line < end) ++line;
+                                while (line < end && dcnt < Telemetry::MAX_TRACKED_DEVICES) {
+                                    char ip_str[20]{}, hw[8]{}, flags[8]{}, mac_str[20]{};
+                                    if (sscanf(line, "%19s %7s %7s %19s", ip_str, hw, flags, mac_str) == 4) {
+                                        uint32_t ip = inet_addr(ip_str);
+                                        if (ip != INADDR_NONE && strcmp(flags, "0x0") != 0) {
+                                            tel.device_table[dcnt].ip = ip;
+                                            strncpy(tel.device_table[dcnt].mac.data(), mac_str, 17);
+                                            tel.device_table[dcnt].mac[17] = '\0';
+                                            ++dcnt;
+                                        }
+                                    }
+                                    while (line < end && *line != '\n') ++line;
+                                    if (line < end) ++line;
+                                }
+                            }
+                            tel.device_count.store(dcnt, std::memory_order_release);
+                        }
+                    }
                 }
+
+                // If on-demand rescan was requested in same tick but 5-tick block didn't run, do it now
+                if (force_scan && !did_iface_scan) scan_ifaces();
+                if (force_scan && si.done_fd >= 0) ::eventfd_write(si.done_fd, 1);
 
                 // Map-reduce bandwidth aggregation
                 uint64_t total_bytes_down = tel.core_metrics[2].bytes.load(std::memory_order_relaxed);
@@ -508,10 +744,65 @@ namespace Scalpel {
                 double ul_mbps = (total_bytes_up - last_bytes[3]) * 8.0 / 1e6;
 
                 std::println("[Monitor] DL: {:.2f} Mbps | UL: {:.2f} Mbps | Mode: {}",
-                    dl_mbps, ul_mbps, tel.bridge_mode.load() ? "Bridge" : "Accel");
+                    dl_mbps, ul_mbps, tel.bridge_mode.load(std::memory_order_relaxed) ? "Bridge" : "Accel");
 
                 last_bytes[2] = total_bytes_down;
                 last_bytes[3] = total_bytes_up;
+
+                // Sync per-device block list and rate shapers when GUI sets DEVICE_POLICY_DIRTY
+                if (Config::DEVICE_POLICY_DIRTY.exchange(false, std::memory_order_acq_rel)) {
+                    // Rebuild firewall blocked IP list
+                    if (firewall_engine) firewall_engine->sync_blocked_ips();
+
+                    // Rebuild device QoS DL table (keyed by LAN IP, used in Core 2 daddr lookup)
+                    if (device_shaper_dl) {
+                        size_t active = device_shaper_dl->active_idx.load(std::memory_order_relaxed);
+                        size_t inactive = 1 - active;
+                        device_shaper_dl->buffers[inactive] = {};
+                        for (size_t i = 0; i < Config::DEVICE_POLICY_COUNT; ++i) {
+                            const auto& p = Config::DEVICE_POLICY_TABLE[i];
+                            if (p.rate_limited && p.ip != 0)
+                                device_shaper_dl->buffers[inactive].insert(p.ip, std::make_shared<Traffic::Shaper>(p.dl_mbps));
+                        }
+                        device_shaper_dl->active_idx.store(inactive, std::memory_order_release);
+                    }
+
+                    // Rebuild device QoS UL table (keyed by LAN IP, used in Core 3 saddr lookup)
+                    if (device_shaper_ul) {
+                        size_t active = device_shaper_ul->active_idx.load(std::memory_order_relaxed);
+                        size_t inactive = 1 - active;
+                        device_shaper_ul->buffers[inactive] = {};
+                        for (size_t i = 0; i < Config::DEVICE_POLICY_COUNT; ++i) {
+                            const auto& p = Config::DEVICE_POLICY_TABLE[i];
+                            if (p.rate_limited && p.ip != 0)
+                                device_shaper_ul->buffers[inactive].insert(p.ip, std::make_shared<Traffic::Shaper>(p.ul_mbps));
+                        }
+                        device_shaper_ul->active_idx.store(inactive, std::memory_order_release);
+                    }
+                    std::println("[Device] Policy synced: {} entries", Config::DEVICE_POLICY_COUNT);
+                }
+
+                // Apply DNS config changes when GUI sets dns_config_dirty
+                if (dns_engine && tel.dns_config_dirty.exchange(false, std::memory_order_acq_rel)) {
+                    uint32_t primary   = Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY);
+                    uint32_t secondary = Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY);
+                    dns_engine->set_upstream(primary, secondary);
+                    dns_engine->set_redirect(Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
+                    dns_engine->reload_static_records();
+                    std::println("[DNS] Config applied: upstream {} / {}, redirect={}, static={} records",
+                        Config::DNS_UPSTREAM_PRIMARY, Config::DNS_UPSTREAM_SECONDARY,
+                        Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed) ? "on" : "off",
+                        Config::STATIC_DNS_COUNT);
+                }
+
+                // Reconfigure DHCP engine when GUI has changed pool settings
+                if (dhcp_engine && tel.dhcp_config_dirty.exchange(false, std::memory_order_acq_rel)) {
+                    uint32_t start_ip = Config::parse_ip_str(Config::DHCP_POOL_START);
+                    uint32_t end_ip   = Config::parse_ip_str(Config::DHCP_POOL_END);
+                    dhcp_engine->reconfigure(start_ip, end_ip, Config::DHCP_LEASE_SECONDS);
+                    std::println("[DHCP] Pool reconfigured: {} – {}, lease {}s",
+                        Config::DHCP_POOL_START, Config::DHCP_POOL_END, Config::DHCP_LEASE_SECONDS);
+                }
 
                 // Drive control-plane engines at 1Hz (low-frequency async work pool)
                 if (nat_engine) nat_engine->tick();
@@ -522,11 +813,41 @@ namespace Scalpel {
                 if (dhcp_engine) {
                     dhcp_engine->process_background_tasks(lan_fd_); // send replies out the LAN port
                 }
+                if (firewall_engine) {
+                    firewall_engine->tick();
+                    firewall_engine->cleanup();
+                }
+
+                // Accept speedtest results when GUI user clicks "接受" (Core 0 → Core 1)
+                if (tel.speedtest_result_ready.exchange(false, std::memory_order_acq_rel)) {
+                    double new_dl = tel.isp_down_limit_mbps.load(std::memory_order_relaxed);
+                    double new_ul = tel.isp_up_limit_mbps.load(std::memory_order_relaxed);
+                    if (new_dl > 0.0) base_dl_mbps = new_dl;
+                    if (new_ul > 0.0) base_ul_mbps = new_ul;
+                    int pct = tel.qos_throttle_pct.load(std::memory_order_relaxed);
+                    double factor = pct / 100.0;
+                    if (shaper_dl) shaper_dl->set_rate_limit(base_dl_mbps * factor);
+                    if (shaper_ul) shaper_ul->set_rate_limit(base_ul_mbps * factor);
+                    last_throttle_pct = pct; // suppress spurious re-apply below
+                    std::println("[SpeedTest] Base rates updated: DL {:.1f} Mbps / UL {:.1f} Mbps (throttle {}%)",
+                        base_dl_mbps * factor, base_ul_mbps * factor, pct);
+                }
+
+                // Apply QoS throttle from GUI slider (written by Core 0, consumed here on Core 1)
+                {
+                    int pct = tel.qos_throttle_pct.load(std::memory_order_relaxed);
+                    if (pct != last_throttle_pct) {
+                        last_throttle_pct = pct;
+                        double factor = pct / 100.0;
+                        if (shaper_dl) shaper_dl->set_rate_limit(base_dl_mbps * factor);
+                        if (shaper_ul) shaper_ul->set_rate_limit(base_ul_mbps * factor);
+                        std::println("[QoS] Throttle {}% — DL {:.1f} Mbps / UL {:.1f} Mbps",
+                            pct, base_dl_mbps * factor, base_ul_mbps * factor);
+                    }
+                }
 
                 // Heartbeat-based fault detection (high/low frequency decoupling)
                 uint64_t current_tick = tel.core_metrics[2].last_heartbeat.load(std::memory_order_relaxed);
-                if (current_tick == last_ticks[2]) led.set_red(); // no tick increment in 1s — thread stalled
-                else led.set_green();
                 last_ticks[2] = current_tick;
             }
             close(tfd);

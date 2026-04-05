@@ -2,6 +2,7 @@
 #include <span>
 #include <chrono>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <netinet/in.h>
 #include "Headers.hpp"
@@ -25,9 +26,9 @@ namespace Scalpel::Logic {
     class NatEngine {
         struct NatSession {
             FlowKey internal_key; // saddr=LAN_IP, sport=LAN_Port, daddr=WAN_DEST, dport=WAN_DEST_PORT
-            uint16_t external_port;
-            uint32_t last_active_tick;
-            bool active = false;
+            uint16_t external_port = 0;
+            std::atomic<uint32_t> last_active_tick{0};
+            std::atomic<bool> active{false};
         };
 
         struct UpnpMapping {
@@ -51,7 +52,7 @@ namespace Scalpel::Logic {
 
         uint16_t port_cursor = 10000;
         uint32_t wan_ip = 0;
-        uint32_t current_tick = 0;
+        std::atomic<uint32_t> current_tick{0};
 
         uint32_t hash_flow(const FlowKey& k) const {
             uint32_t h = 2166136261U;
@@ -93,7 +94,7 @@ namespace Scalpel::Logic {
         }
 
         // Low-frequency tick driver (interfaces watchdog, decouples high-frequency syscalls)
-        void tick() { current_tick++; }
+        void tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
 
         // Outbound (WAN_TX): LAN -> WAN, replace source IP/port (SNAT)
         bool process_outbound(Net::ParsedPacket& pkt) {
@@ -138,26 +139,28 @@ namespace Scalpel::Logic {
             // Standard SNAT Processing
             FlowKey key{ip->saddr, ip->daddr, *sport_ptr, dport};
             uint32_t h = hash_flow(key) % MAX_SESSIONS;
-            
+            uint32_t tick = current_tick.load(std::memory_order_relaxed);
+
             uint16_t ext_port = 0;
 
-            for (size_t i = 0; i < 32; ++i) { // Cap linear probe to 32 slots to avoid livelock
+            for (size_t i = 0; i < 32; ++i) {
                 size_t idx = (h + i) % MAX_SESSIONS;
-                if (!sessions[idx].active || (current_tick - sessions[idx].last_active_tick > 300)) {
+                bool is_active = sessions[idx].active.load(std::memory_order_acquire);
+                if (!is_active || (tick - sessions[idx].last_active_tick.load(std::memory_order_relaxed) > 300)) {
                     // Evict stale session, reclaim port
-                    if (sessions[idx].active) port_to_index[ntohs(sessions[idx].external_port)] = -1;
-                    
+                    if (is_active) port_to_index[ntohs(sessions[idx].external_port)] = -1;
+
                     sessions[idx].internal_key = key;
                     sessions[idx].external_port = htons(port_cursor++);
                     if (port_cursor > 60000) port_cursor = 10000;
-                    sessions[idx].active = true;
-                    sessions[idx].last_active_tick = current_tick;
+                    sessions[idx].last_active_tick.store(tick, std::memory_order_relaxed);
+                    sessions[idx].active.store(true, std::memory_order_release);
                     ext_port = sessions[idx].external_port;
                     port_to_index[ntohs(ext_port)] = idx;
                     break;
                 }
                 if (sessions[idx].internal_key == key) {
-                    sessions[idx].last_active_tick = current_tick;
+                    sessions[idx].last_active_tick.store(tick, std::memory_order_relaxed);
                     ext_port = sessions[idx].external_port;
                     break;
                 }
@@ -221,13 +224,14 @@ namespace Scalpel::Logic {
             // Standard DNAT Processing
             // O(1) direct-index reverse lookup
             int32_t idx = port_to_index[ntohs(*dport_ptr)];
-            if (idx == -1 || !sessions[idx].active || 
-                sessions[idx].internal_key.daddr != ip->saddr || 
+            if (idx == -1 || !sessions[idx].active.load(std::memory_order_acquire) ||
+                sessions[idx].internal_key.daddr != ip->saddr ||
                 sessions[idx].internal_key.dport != sport) {
-                return false; 
+                return false;
             }
 
-            sessions[idx].last_active_tick = current_tick;
+            sessions[idx].last_active_tick.store(
+                current_tick.load(std::memory_order_relaxed), std::memory_order_relaxed);
             uint32_t internal_ip = sessions[idx].internal_key.saddr;
             uint16_t internal_port = sessions[idx].internal_key.sport;
 

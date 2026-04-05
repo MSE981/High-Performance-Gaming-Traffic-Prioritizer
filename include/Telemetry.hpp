@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <atomic>
 #include <cstdint>
 #include <array>
@@ -15,6 +15,7 @@ namespace Scalpel {
         std::atomic<uint64_t> prio_bytes[3]{ 0, 0, 0 };
         std::atomic<uint64_t> dropped[3]{ 0, 0, 0 };
         std::atomic<uint64_t> last_heartbeat{ 0 };
+        std::atomic<int>      cpu_load_pct{ 0 };  // 0-100, updated by watchdog 1Hz via /proc/stat
     };
 
     struct Telemetry {
@@ -25,11 +26,27 @@ namespace Scalpel {
         std::atomic<double> internal_limit_mbps{ 0.0 };
         std::atomic<double> isp_down_limit_mbps{ 0.0 };
         std::atomic<double> isp_up_limit_mbps{ 0.0 };
+        // Set by GUI (Core 0) when user accepts speedtest results; consumed by Core 1 watchdog
+        // to propagate new base rates into the active shapers
+        std::atomic<bool> speedtest_result_ready{ false };
         std::atomic<double> internal_pps{ 0.0 };
         std::atomic<double> isp_pps{ 0.0 };
         std::atomic<bool> is_probing{ false };
         std::atomic<bool> bridge_mode{ false };
         std::atomic<double> cpu_temp_celsius{ 0.0 };  // updated by Core 1 watchdog via timerfd, read by Qt UI
+        std::atomic<int> qos_throttle_pct{ 85 };     // 0–100, written by GUI slider (Core 0), applied by Core 1 watchdog
+        std::atomic<bool> dhcp_config_dirty{ false }; // set by GUI (Core 0), consumed by Core 1 watchdog
+        std::atomic<bool> dns_config_dirty{ false };  // set by GUI (Core 0), consumed by Core 1 watchdog
+
+        // Device table: scanned from /proc/net/arp by Core 1 watchdog every 5s.
+        // Plain char arrays — torn reads acceptable for display-only data.
+        static constexpr uint8_t MAX_TRACKED_DEVICES = 64;
+        struct DeviceEntry {
+            uint32_t ip = 0;
+            std::array<char, 18> mac{};  // "xx:xx:xx:xx:xx:xx\0"
+        };
+        std::array<DeviceEntry, MAX_TRACKED_DEVICES> device_table{};
+        std::atomic<uint8_t> device_count{0}; // release-stored last after all entries are written
 
         // System info: updated by Core 1 watchdog every 5 seconds, read by UI thread on-demand.
         // char arrays are plain (not atomic) — display-only data, torn reads are acceptable.
@@ -39,6 +56,22 @@ namespace Scalpel {
             std::atomic<uint64_t> uptime_seconds{0};
             std::atomic<uint64_t> mem_total_kb{0};
             std::atomic<uint64_t> mem_avail_kb{0};
+
+            // Network interface cache: Core 1 watchdog scans /sys/class/net every 5s.
+            // Qt UI reads iface_count + ifaces[] — zero file I/O on Core 0.
+            static constexpr uint8_t MAX_IFACES = 8;
+            struct IfaceEntry {
+                std::array<char, 16> name{};       // e.g. "eth0"
+                std::array<char, 8>  operstate{};  // "up", "down", "unknown"
+            };
+            std::array<IfaceEntry, MAX_IFACES> ifaces{};
+            std::atomic<uint8_t> iface_count{0};  // written last (release), read first (acquire)
+
+            // eventfd pair for on-demand rescan signalling — created in main() before threads start.
+            // rescan_fd: UI writes 1 → watchdog wakes immediately via poll()
+            // done_fd:   watchdog writes 1 → QSocketNotifier fires on Core 0
+            int rescan_fd = -1;
+            int done_fd   = -1;
         };
         alignas(64) SystemInfo sys_info{};
 

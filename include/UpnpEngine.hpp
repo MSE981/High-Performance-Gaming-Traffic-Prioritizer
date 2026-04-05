@@ -78,7 +78,7 @@ namespace Scalpel::Logic {
                             "ST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n"
                             "USN: uuid:12345678-1234-1234-1234-123456789abc::urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n"
                             "EXT:\r\n"
-                            "Server: Scalpel/1.0 UPnP/1.0 IGD/1.0\r\n"
+                            "Server: HPGTP/1.0 UPnP/1.0 IGD/1.0\r\n"
                             "Location: http://%s:5000/desc.xml\r\n"
                             "\r\n", router_ip_str.c_str());
                             
@@ -114,19 +114,23 @@ namespace Scalpel::Logic {
                 int cfd = accept(fd, (sockaddr*)&client, &clen);
                 if (cfd < 0) continue;
 
+                // Set recv timeout on accepted socket so stop_requested() is checked
+                // even if a client connects but sends nothing (§3.3.4: blocking I/O with timeout)
+                struct timeval ctv; ctv.tv_sec = 1; ctv.tv_usec = 0;
+                setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &ctv, sizeof(ctv));
+
                 char buf[2048];
                 int n = recv(cfd, buf, sizeof(buf)-1, 0);
                 if (n > 0) {
                     std::string_view req(buf, n);
                     
                     if (req.find("GET /desc.xml") != std::string_view::npos) {
-                        char resp[1500];
-                        const char* xml_template = 
+                        const char* xml_template =
                             "<?xml version=\"1.0\"?>\r\n<root xmlns=\"urn:schemas-upnp-org:device-1-0\">\r\n"
                             "  <specVersion><major>1</major><minor>0</minor></specVersion>\r\n"
                             "  <URLBase>http://%s:5000/</URLBase>\r\n"
                             "  <device>\r\n    <deviceType>urn:schemas-upnp-org:device:InternetGatewayDevice:1</deviceType>\r\n"
-                            "    <friendlyName>Scalpel Gaming Engine</friendlyName>\r\n"
+                            "    <friendlyName>High-Performance Gaming Traffic Prioritizer</friendlyName>\r\n"
                             "    <serviceList>\r\n      <service>\r\n"
                             "        <serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType>\r\n"
                             "        <serviceId>urn:upnp-org:serviceId:WANIPConn1</serviceId>\r\n"
@@ -135,11 +139,13 @@ namespace Scalpel::Logic {
                             "        <SCPDURL>/scpd.xml</SCPDURL>\r\n"
                             "      </service>\r\n    </serviceList>\r\n  </device>\r\n</root>";
                         
-                        char xml_buf[1024];
+                        char xml_buf[1200];
                         int xml_len = snprintf(xml_buf, sizeof(xml_buf), xml_template, router_ip_str.c_str());
-                        
+                        if (xml_len >= (int)sizeof(xml_buf)) xml_len = (int)sizeof(xml_buf) - 1;
+
+                        char resp[1500];
                         int resp_len = snprintf(resp, sizeof(resp),
-                            "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", 
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
                             xml_len, xml_buf);
                         send(cfd, resp, resp_len, 0);
                     } else if (req.find("POST /control") != std::string_view::npos) {
@@ -148,6 +154,7 @@ namespace Scalpel::Logic {
                             std::string_view body = req.substr(body_idx + 4);
                             if (body.find("AddPortMapping") != std::string_view::npos) {
                                 auto get_tag = [&](std::string_view t) -> std::string_view {
+                                    if (t.size() > 60) return {}; // tag name too long to fit in buffers
                                     char start_tag[64], end_tag[64];
                                     int start_len = snprintf(start_tag, sizeof(start_tag), "<%.*s>", (int)t.size(), t.data());
                                     int end_len = snprintf(end_tag, sizeof(end_tag), "</%.*s>", (int)t.size(), t.data());

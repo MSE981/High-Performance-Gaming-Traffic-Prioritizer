@@ -1,0 +1,71 @@
+# Scalpel Gaming Traffic Prioritizer — configuration file
+# Place this file next to the GamingTrafficPrioritizer binary, or pass a path at startup.
+# All keys are optional. The program starts with built-in defaults if this file is absent.
+# The GUI writes changes back to this file on every clean exit.
+
+# ── Network interfaces ────────────────────────────────────────────────
+# IFACE_WAN  : Ethernet interface facing your router (internet side).
+# IFACE_LAN  : Ethernet interface facing your local devices.
+# ROUTER_IP  : The Pi's own IP on the LAN side, used by DHCP and NAT.
+#              Must be on a different subnet from the upstream router.
+IFACE_WAN=eth1
+IFACE_LAN=eth0
+ROUTER_IP=192.168.9.1
+
+# ── Interface role map ────────────────────────────────────────────────
+# These lines take priority over the simple IFACE_WAN / IFACE_LAN keys above.
+# Roles: gateway  — primary WAN / default route (exactly one required)
+#        wan      — additional WAN interface
+#        lan      — LAN-side interface; multiple LAN ports are bridged
+#        disabled — interface is ignored by the forwarding engine
+#
+# eth0 : Pi 5 built-in GbE — LAN side (connects to gaming devices)
+# eth1 : USB Ethernet adapter  — WAN side (connects to upstream router)
+IFACE_GATEWAY=eth1
+IFACE_ROLE=eth1:gateway
+IFACE_ROLE=eth0:lan
+
+# ── Display mode ──────────────────────────────────────────────────────
+# Set to false for headless / SSH operation (no Qt dependency at runtime).
+enable_gui=true
+
+# ── QoS and traffic classification ───────────────────────────────────
+# ENABLE_ACCELERATION    : true  = 3-tier QoS + gaming fast-lane
+#                          false = transparent bridge, no classification
+# LARGE_PACKET_THRESHOLD : Packets above this byte count are treated as
+#                          "heavy" downloads and may be throttled.
+# PUNISH_TRIGGER_COUNT   : How many heavy packets a flow must send before
+#                          it gets demoted to the Normal (throttled) lane.
+# CLEANUP_INTERVAL       : How often the flow table is swept for idle
+#                          entries, measured in packets processed.
+ENABLE_ACCELERATION=true
+LARGE_PACKET_THRESHOLD=1000
+PUNISH_TRIGGER_COUNT=30
+CLEANUP_INTERVAL=10000
+
+# ── Layer-2 bridge options ───────────────────────────────────────────
+ENABLE_STP=false
+ENABLE_IGMP_SNOOPING=false
+
+# ── Built-in services ────────────────────────────────────────────────
+# Each service can be toggled independently without restarting.
+# The GUI Service page writes these values on exit.
+enable_nat=true
+enable_dhcp=true
+enable_dns_cache=true
+enable_upnp=false
+# enable_firewall : Stateful inbound default-deny firewall.
+#   LAN-initiated connections and their return traffic are always allowed.
+#   Unsolicited inbound TCP/UDP packets from the WAN are silently dropped.
+#   ICMP (ping replies, unreachable, TTL-exceeded) is always allowed through.
+#   Set to false only if you need unsolicited inbound connections (e.g. self-hosted servers).
+enable_firewall=true
+enable_pppoe=false
+
+# ── Per-device bandwidth caps (optional) ─────────────────────────────
+# Limit the download speed of individual LAN devices by IP address.
+# The token-bucket shaper is applied per-packet in the forwarding hot path.
+# Format: IP_LIMIT=<device-IP>:<limit-in-Mbps>
+# Example:
+# IP_LIMIT=192.168.9.50:20
+# IP_LIMIT=192.168.9.51:10
