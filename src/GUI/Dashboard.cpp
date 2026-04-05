@@ -246,7 +246,7 @@ OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
     auto* cores_row = new QHBoxLayout();
     for (int i = 0; i < 4; ++i) {
         core_labels[i] = new QLabel(QString("Core %1\n0%").arg(i));
-        core_labels[i]->setStyleSheet("background-color: #22223a; border: 1px solid #2a2a4a; border-radius: 6px; padding: 10px; font-size: 13px;");
+        core_labels[i]->setStyleSheet("background-color: #22223a; border: 1px solid #2a2a4a; border-radius: 6px; padding: 10px; font-size: 15px;");
         core_labels[i]->setAlignment(Qt::AlignCenter);
         cores_row->addWidget(core_labels[i]);
     }
@@ -292,7 +292,7 @@ OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
     auto* spd_group = new QGroupBox("Speed Test");
     auto* spd_lay   = new QVBoxLayout(spd_group);
     auto* spd_desc  = new QLabel("Measures real ISP throughput via speedtest-cli. Routing continues during test.");
-    spd_desc->setStyleSheet("color: #808090; font-size: 12px;");
+    spd_desc->setStyleSheet("color: #808090; font-size: 15px;");
     spd_lay->addWidget(spd_desc);
     auto* spd_btn_row = new QHBoxLayout();
     btn_speedtest = new QPushButton("▶ Run Test");
@@ -327,7 +327,7 @@ void OverviewPage::refresh(const Telemetry& tel, const std::array<uint64_t, 4>& 
         core_labels[i]->setText(QString("Core %1\n%2%").arg(i).arg(load));
         core_labels[i]->setStyleSheet(
             QString("background-color: #22223a; border: 1px solid #2a2a4a; border-radius: 6px;"
-                    " padding: 10px; font-size: 13px; color: %1;").arg(colour));
+                    " padding: 10px; font-size: 15px; color: %1;").arg(colour));
     }
 
     // Lock Y-axis ceiling to configured ISP bandwidth limits (Mbps → Bytes/s and PPS)
