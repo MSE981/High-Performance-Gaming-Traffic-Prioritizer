@@ -136,43 +136,75 @@ void NotificationPanel::mouseReleaseEvent(QMouseEvent* event) {
     event->accept();
 }
 
+// Lightweight clickable QFrame — no Q_OBJECT needed (no new signals)
+class ClickableFrame : public QFrame {
+public:
+    using QFrame::QFrame;
+    std::function<void()> on_clicked;
+protected:
+    void mousePressEvent(QMouseEvent* e) override {
+        if (e->button() == Qt::LeftButton && on_clicked) on_clicked();
+        else QFrame::mousePressEvent(e);
+    }
+};
+
 void NotificationPanel::push_notification(const QString& title, const QString& body) {
     auto* card = new QFrame();
     card->setStyleSheet(
         "QFrame { background: rgba(255,255,255,14); border-radius: 14px; }");
-    auto* lay = new QVBoxLayout(card);
-    lay->setContentsMargins(10, 8, 10, 8);
-    lay->setSpacing(2);
+    auto* outer = new QVBoxLayout(card);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
 
-    // Title row: text + × dismiss button
-    auto* title_row = new QHBoxLayout();
-    title_row->setContentsMargins(0, 0, 0, 0);
+    // ── Clickable header row ──────────────────────────────────────
+    auto* hdr = new ClickableFrame(card);
+    hdr->setCursor(Qt::PointingHandCursor);
+    hdr->setStyleSheet("QFrame { background: transparent; border-radius: 14px; }");
+    auto* hdr_lay = new QHBoxLayout(hdr);
+    hdr_lay->setContentsMargins(10, 8, 10, 6);
+    hdr_lay->setSpacing(6);
+
+    auto* arrow = new QLabel("▶");
+    arrow->setStyleSheet("color: rgba(255,255,255,120); font-size: 10px;");
+    arrow->setFixedWidth(12);
+
     auto* t = new QLabel(title);
     t->setStyleSheet("color: #ffffff; font-size: 13px; font-weight: bold;");
+
+    auto* ts = new QLabel(QTime::currentTime().toString("HH:mm"));
+    ts->setStyleSheet("color: rgba(255,255,255,70); font-size: 11px;");
+
     auto* btn_x = new QPushButton("×");
     btn_x->setFixedSize(22, 22);
     btn_x->setStyleSheet(
         "QPushButton { background: transparent; border: none; color: rgba(255,255,255,120);"
         " font-size: 16px; font-weight: bold; padding: 0; min-height: 0; }"
         "QPushButton:pressed { color: #ffffff; }");
-    title_row->addWidget(t, 1);
-    title_row->addWidget(btn_x);
-    lay->addLayout(title_row);
 
-    // Body
+    hdr_lay->addWidget(arrow);
+    hdr_lay->addWidget(t, 1);
+    hdr_lay->addWidget(ts);
+    hdr_lay->addWidget(btn_x);
+    outer->addWidget(hdr);
+
+    // ── Detail area (hidden by default) ──────────────────────────
+    auto* detail = new QWidget(card);
+    detail->hide();
+    auto* det_lay = new QVBoxLayout(detail);
+    det_lay->setContentsMargins(32, 2, 10, 8);
+    det_lay->setSpacing(0);
     auto* b = new QLabel(body);
     b->setStyleSheet("color: rgba(255,255,255,160); font-size: 12px;");
     b->setWordWrap(true);
-    lay->addWidget(b);
+    det_lay->addWidget(b);
+    outer->addWidget(detail);
 
-    // Bottom row: timestamp (right-aligned)
-    auto* bot_row = new QHBoxLayout();
-    bot_row->setContentsMargins(0, 2, 0, 0);
-    auto* ts = new QLabel(QTime::currentTime().toString("HH:mm"));
-    ts->setStyleSheet("color: rgba(255,255,255,70); font-size: 11px;");
-    bot_row->addStretch();
-    bot_row->addWidget(ts);
-    lay->addLayout(bot_row);
+    // Toggle detail on header click
+    hdr->on_clicked = [detail, arrow]() {
+        bool show = !detail->isVisible();
+        detail->setVisible(show);
+        arrow->setText(show ? "▼" : "▶");
+    };
 
     connect(btn_x, &QPushButton::clicked, card, &QFrame::deleteLater);
 
@@ -379,8 +411,8 @@ void OverviewPage::refresh(const Telemetry& tel, const std::array<uint64_t, 4>& 
         uint64_t cp = tel.core_metrics[i].pkts.load(std::memory_order_relaxed);
         uint64_t cb = tel.core_metrics[i].bytes.load(std::memory_order_relaxed);
         uint64_t dp = cp - last_p[i], db = cb - last_b[i];
-        total_pps += dp * 20.0;
-        total_bps += db * 20.0 * 8.0 / 1e6;  // bytes/tick → Mbps
+        total_pps += dp * 30.0;
+        total_bps += db * 30.0 * 8.0 / 1e6;  // bytes/tick → Mbps
         int load = tel.core_metrics[i].cpu_load_pct.load(std::memory_order_relaxed);
         // Colour: green <50%, orange 50-80%, red >80%
         const char* colour = load < 50 ? "#00cc66" : (load < 80 ? "#ffaa00" : "#ff4444");
@@ -1579,7 +1611,7 @@ Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("High-Performance Gaming Traffic Prioritizer");
     setStyleSheet(DARK_STYLESHEET);
     setup_ui();
-    data_timer_id_ = startTimer(50, Qt::PreciseTimer);
+    data_timer_id_ = startTimer(33, Qt::PreciseTimer);
 }
 
 Dashboard::~Dashboard() {
@@ -1877,7 +1909,7 @@ void Dashboard::resizeEvent(QResizeEvent* event) {
 void Dashboard::timerEvent(QTimerEvent* event) {
     if (event->timerId() != data_timer_id_) return;
 
-    // 20Hz unified tick: spring animation + data refresh
+    // 30Hz unified tick: spring animation + data refresh
     data_tick_++;
 
     // Advance notification panel spring physics every frame (no-op when settled)
@@ -1888,11 +1920,11 @@ void Dashboard::timerEvent(QTimerEvent* event) {
 
     auto& tel = Telemetry::instance();
 
-    // Bandwidth: delta over 50ms tick, scaled to Mbps (×20 = per-second rate)
+    // Bandwidth: delta over 33ms tick, scaled to Mbps (×30 = per-second rate)
     uint64_t cur_b2 = tel.core_metrics[2].bytes.load(std::memory_order_relaxed);
     uint64_t cur_b3 = tel.core_metrics[3].bytes.load(std::memory_order_relaxed);
-    double dl = (cur_b2 - last_bytes[2]) * 8.0 * 20.0 / 1e6;
-    double ul = (cur_b3 - last_bytes[3]) * 8.0 * 20.0 / 1e6;
+    double dl = (cur_b2 - last_bytes[2]) * 8.0 * 30.0 / 1e6;
+    double ul = (cur_b3 - last_bytes[3]) * 8.0 * 30.0 / 1e6;
 
     // CPU temperature
     double t = tel.cpu_temp_celsius.load(std::memory_order_relaxed);
@@ -1912,10 +1944,10 @@ void Dashboard::timerEvent(QTimerEvent* event) {
         hdr_badge_->hide();
     }
 
-    // Refresh overview plots if visible; update system info every 20 ticks (1s)
+    // Refresh overview plots if visible; update system info every 30 ticks (1s)
     if (page_stack->currentIndex() == 0)
         page_overview->refresh(tel, last_pkts, last_bytes);
-    if (data_tick_ % 20 == 0)
+    if (data_tick_ % 30 == 0)
         page_overview->refresh_info();
 
     // Sync service page status indicators if visible
