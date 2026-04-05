@@ -146,6 +146,27 @@ private:
 };
 
 // ═══════════════════════════════════════════
+// Numeric virtual keypad dialog
+// ═══════════════════════════════════════════
+class NumPadDialog : public QDialog {
+    Q_OBJECT
+public:
+    static std::optional<int> get_int(QWidget* parent, const QString& title,
+                                       int initial, int min, int max);
+private:
+    explicit NumPadDialog(const QString& title, int initial, int min, int max,
+                          QWidget* parent = nullptr);
+    void push_digit(char d);
+    void do_backspace();
+    void update_display();
+
+    QLabel*      display_;
+    QPushButton* btn_ok_;
+    QString      text_;
+    int          min_, max_;
+};
+
+// ═══════════════════════════════════════════
 // Game port whitelist editor dialog
 // ═══════════════════════════════════════════
 class PortWhitelistDialog : public QDialog {
@@ -156,6 +177,7 @@ public:
 private slots:
     void on_add_port();
     void on_remove_port();
+    void on_cell_edit(int row, int col);
 private:
     QTableWidget* table_;
 };
@@ -248,8 +270,8 @@ private:
         std::array<uint8_t, 6> mac{};
         QCheckBox* chk_allow;
         QCheckBox* chk_rate;
-        QLabel*    lbl_dl;
-        QLabel*    lbl_ul;
+        QPushButton* lbl_dl;
+        QPushButton* lbl_ul;
         double     val_dl = 100.0;
         double     val_ul = 10.0;
     };
