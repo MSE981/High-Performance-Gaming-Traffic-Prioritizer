@@ -7,6 +7,8 @@
 #include <QScreen>
 #include <QMetaObject>
 #include <QButtonGroup>
+#include <QFile>
+#include <QTextStream>
 #include <QMenu>
 #include <QBoxLayout>
 #include <QPainter>
@@ -1602,6 +1604,22 @@ void Dashboard::setup_ui() {
     notif_panel_ = new NotificationPanel(centralWidget());
     notif_panel_->setFixedSize(centralWidget()->width(), centralWidget()->height());
     notif_panel_->raise();
+
+    // Populate startup log entries written by start.sh
+    {
+        QFile log("/tmp/hpgtp_startup.log");
+        if (log.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QTextStream ts(&log);
+            while (!ts.atEnd()) {
+                QString line = ts.readLine().trimmed();
+                if (line.isEmpty()) continue;
+                int sep = line.indexOf('|');
+                QString title = (sep >= 0) ? line.left(sep)   : line;
+                QString body  = (sep >= 0) ? line.mid(sep + 1): QString();
+                notif_panel_->push_notification(title, body);
+            }
+        }
+    }
 
     // Populate from startup self-test results
     const auto& rep = SelfTest::LAST_REPORT;

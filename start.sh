@@ -16,6 +16,11 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"   # binary loads config/config.txt relative to CWD
 
+# Notification log — read by GUI on startup (format: TITLE|BODY)
+NOTIFY_LOG="/tmp/hpgtp_startup.log"
+> "$NOTIFY_LOG"
+notify() { echo "${1}|${2}" >> "$NOTIFY_LOG"; }
+
 echo "╔══════════════════════════════════════════════════════╗"
 echo "║   Scalpel Gaming Traffic Prioritizer — v3.0          ║"
 echo "╚══════════════════════════════════════════════════════╝"
@@ -73,6 +78,7 @@ if [[ -z "$EGLFS_SO" ]]; then
 fi
 echo "    eglfs plugin : $EGLFS_SO"
 echo "    Dependencies : OK"
+notify "[1/4] Dependencies" "eglfs: $(basename "$EGLFS_SO") | All packages OK"
 
 # ── 2. Build ──────────────────────────────────────────────────────────────────
 echo ""
@@ -98,8 +104,10 @@ if $NEEDS_BUILD; then
           --log-level=WARNING
     cmake --build "$SCRIPT_DIR/build" -j"$(nproc)"
     echo "    Build : OK  ($BINARY)"
+    notify "[2/4] Build" "Rebuilt OK | $(basename "$BINARY")"
 else
     echo "    Binary up to date."
+    notify "[2/4] Build" "Binary up to date | $(basename "$BINARY")"
 fi
 
 # ── 3. Network interfaces ─────────────────────────────────────────────────────
@@ -119,22 +127,26 @@ fi
 
 echo "    WAN=$WAN_IFACE  LAN=$LAN_IFACE"
 
+NET_STATUS=""
 for iface in "$WAN_IFACE" "$LAN_IFACE"; do
     if ip link show "$iface" &>/dev/null; then
-        # Disable hardware offloads that corrupt raw-socket packet lengths (TPACKET path)
         ethtool -K "$iface" gro off gso off tso off rx off tx off 2>/dev/null && \
             echo "    $iface : offloads disabled" || \
             echo "    $iface : ethtool partial (non-fatal)"
         ip link set "$iface" up 2>/dev/null || true
+        NET_STATUS="${NET_STATUS}${iface}:OK  "
     else
         echo "    [Warn] $iface not found — verify IFACE_WAN/IFACE_LAN in config/config.txt"
+        NET_STATUS="${NET_STATUS}${iface}:MISSING  "
     fi
 done
+notify "[3/4] Network" "WAN=$WAN_IFACE LAN=$LAN_IFACE | ${NET_STATUS% }"
 
 # ── 4. Launch ─────────────────────────────────────────────────────────────────
 echo ""
 echo "[4/4] Launching GUI (eglfs, 800×1280 portrait)..."
 echo ""
+notify "[4/4] Launch" "eglfs 800×1280 | DSI-2 portrait"
 
 # Qt eglfs: drive the DRM framebuffer directly — no Wayland compositor required.
 # Native portrait resolution 800×1280 is used as-is; no rotation applied.
