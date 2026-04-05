@@ -266,6 +266,8 @@ OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
     lbl_cpu_temp = new QLabel("--");
     lbl_uptime   = new QLabel("--");
     lbl_memory   = new QLabel("--");
+    for (QLabel* l : {lbl_hostname, lbl_kernel, lbl_uptime, lbl_memory})
+        l->setWordWrap(true);
     info_form->addRow("Hostname:", lbl_hostname);
     info_form->addRow("Kernel:",   lbl_kernel);
     info_form->addRow("CPU Temp:", lbl_cpu_temp);
@@ -1486,11 +1488,11 @@ void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
     // 5 tabs: label → page_stack index
     struct TabDef { const char* label; int page; };
     static constexpr TabDef TABS[] = {
-        {"📊\nOverview",    0},
-        {"⚡\nQoS",         2},
+        {"⌂\nOverview",    0},
+        {"⊕\nQoS",         2},
         {"🔧\nServices",    3},
-        {"📡\nDevices",     4},
-        {"🌐\nInterfaces",  1},
+        {"▭\nDevices",     4},
+        {"△\nInterfaces",  1},
     };
 
     auto* grp = new QButtonGroup(bar);

@@ -96,7 +96,7 @@ int main(int argc, char* argv[]) {
             Scalpel::GUI::Dashboard gui;
 
             app.start(); // Async start underlying network engine
-            gui.show();
+            gui.showFullScreen();
 
             // Watchdog thread: when underlying engine receives Ctrl+C (stop_promise set),
             // safely notify Qt to exit GUI. Fixes bug where signal_handler alone couldn't interrupt

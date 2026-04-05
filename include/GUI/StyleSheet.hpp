@@ -404,7 +404,7 @@ namespace Scalpel::GUI {
         min-height: 96px;
         min-width: 0px;
         color: #606080;
-        font-size: 24px;
+        font-size: 22px;
         font-weight: normal;
     }
 
