@@ -173,7 +173,7 @@ bool NotificationPanel::is_settled() const {
 // RealTimePlot (retain Phase 3 physics engine)
 // ═════════════════════════════════════════════════════════════
 RealTimePlot::RealTimePlot(QWidget* parent) : QWidget(parent) {
-    setMinimumSize(200, 120);
+    setMinimumSize(200, 300);
     shift_buffer.fill(0.0);
 }
 
@@ -183,27 +183,52 @@ void RealTimePlot::add_sample(double val) {
 }
 
 void RealTimePlot::paintEvent(QPaintEvent*) {
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
     QLinearGradient bg(0, 0, 0, height());
     bg.setColorAt(0, QColor(30, 30, 50));
     bg.setColorAt(1, QColor(20, 20, 35));
-    painter.fillRect(rect(), bg);
-    if (shift_buffer.empty()) return;
+    p.fillRect(rect(), bg);
 
-    QPainterPath path;
-    double x_step = (double)width() / (SHIFT_BUFFER_SIZE - 1);
-    double h = height();
-    for (int i = 0; i < SHIFT_BUFFER_SIZE; ++i) {
-        // Read oldest-to-newest: shift_head points to the next write slot (= oldest unread sample)
-        double sample = shift_buffer[(shift_head + i) % SHIFT_BUFFER_SIZE];
-        double y = h - (sample / (current_max + 1.0) * h * 0.8) - 10;
-        if (i == 0) path.moveTo(0, y); else path.lineTo(i * x_step, y);
+    // Layout: left margin reserved for Y-axis labels
+    const int ml = 50, mt = 6, mb = 6;
+    const int pw = width() - ml;
+    const int ph = height() - mt - mb;
+
+    double y_max = fixed_max_ > 0.0 ? fixed_max_ : (current_max + 1.0);
+    bool use_k   = (y_max >= 10000.0);
+
+    // Y-axis grid + labels at 0, 0.2, 0.4, 0.6, 0.8, 1.0
+    QFont lf = p.font();
+    lf.setPixelSize(11);
+    p.setFont(lf);
+    for (int i = 0; i <= 5; ++i) {
+        double ratio = i / 5.0;
+        int iy = mt + ph - static_cast<int>(ratio * ph);
+        p.setPen(QPen(QColor(255, 255, 255, 18), 1, Qt::DashLine));
+        p.drawLine(ml, iy, width(), iy);
+        QString lbl = (i == 0) ? "0"
+                    : use_k    ? QString("%1K").arg(static_cast<int>(y_max * ratio / 1000.0))
+                               : QString::number(static_cast<int>(y_max * ratio));
+        p.setPen(QColor(130, 130, 150));
+        p.drawText(QRect(0, iy - 8, ml - 4, 16), Qt::AlignRight | Qt::AlignVCenter, lbl);
     }
-    painter.setPen(QPen(QColor(0, 150, 255, 40), 8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter.drawPath(path);
-    painter.setPen(QPen(QColor(200, 240, 255), 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter.drawPath(path);
+
+    // Plot line (oldest→newest left→right)
+    QPainterPath path;
+    double x_step = static_cast<double>(pw) / (SHIFT_BUFFER_SIZE - 1);
+    for (int i = 0; i < SHIFT_BUFFER_SIZE; ++i) {
+        double sample = shift_buffer[(shift_head + i) % SHIFT_BUFFER_SIZE];
+        double norm = std::min(sample / y_max, 1.0);
+        double x = ml + i * x_step;
+        double y = mt + ph - norm * ph;
+        if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
+    }
+    p.setPen(QPen(QColor(0, 150, 255, 40), 8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p.drawPath(path);
+    p.setPen(QPen(QColor(200, 240, 255), 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p.drawPath(path);
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -232,12 +257,14 @@ OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
     auto* pps_group = new QGroupBox("Packet rate (PPS)");
     auto* pps_lay = new QVBoxLayout(pps_group);
     pps_plot = new RealTimePlot();
+    pps_plot->set_fixed_max(100000.0);
     pps_lay->addWidget(pps_plot);
     plot_row->addWidget(pps_group);
 
-    auto* bps_group = new QGroupBox("Bandwidth (Bytes/s)");
+    auto* bps_group = new QGroupBox("Bandwidth (Mbps)");
     auto* bps_lay = new QVBoxLayout(bps_group);
     bps_plot = new RealTimePlot();
+    bps_plot->set_fixed_max(1000.0);
     bps_lay->addWidget(bps_plot);
     plot_row->addWidget(bps_group);
     layout->addLayout(plot_row);
@@ -275,19 +302,6 @@ OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
     info_form->addRow("Memory:",   lbl_memory);
     layout->addWidget(info_group);
 
-    auto* cfg_group = new QGroupBox("Configuration");
-    auto* cfg_lay = new QVBoxLayout(cfg_group);
-    auto* cfg_form = new QFormLayout();
-    edit_config_path = new QLineEdit("config.txt");
-    cfg_form->addRow("Config File:", edit_config_path);
-    cfg_lay->addLayout(cfg_form);
-    auto* cfg_btn_row = new QHBoxLayout();
-    auto* btn_save = new QPushButton("Save Config");
-    btn_save->setObjectName("btn_primary");
-    connect(btn_save, &QPushButton::clicked, this, &OverviewPage::on_save_config);
-    cfg_btn_row->addWidget(btn_save);
-    cfg_lay->addLayout(cfg_btn_row);
-    layout->addWidget(cfg_group);
 
     auto* spd_group = new QGroupBox("Speed Test");
     auto* spd_lay   = new QVBoxLayout(spd_group);
@@ -320,7 +334,7 @@ void OverviewPage::refresh(const Telemetry& tel, const std::array<uint64_t, 4>& 
         uint64_t cb = tel.core_metrics[i].bytes.load(std::memory_order_relaxed);
         uint64_t dp = cp - last_p[i], db = cb - last_b[i];
         total_pps += dp * 20.0;
-        total_bps += db * 20.0;
+        total_bps += db * 20.0 * 8.0 / 1e6;  // bytes/tick → Mbps
         int load = tel.core_metrics[i].cpu_load_pct.load(std::memory_order_relaxed);
         // Colour: green <50%, orange 50-80%, red >80%
         const char* colour = load < 50 ? "#00cc66" : (load < 80 ? "#ffaa00" : "#ff4444");
@@ -328,15 +342,6 @@ void OverviewPage::refresh(const Telemetry& tel, const std::array<uint64_t, 4>& 
         core_labels[i]->setStyleSheet(
             QString("background-color: #22223a; border: 1px solid #2a2a4a; border-radius: 6px;"
                     " padding: 10px; font-size: 15px; color: %1;").arg(colour));
-    }
-
-    // Lock Y-axis ceiling to configured ISP bandwidth limits (Mbps → Bytes/s and PPS)
-    double dl = tel.isp_down_limit_mbps.load(std::memory_order_relaxed);
-    double ul = tel.isp_up_limit_mbps.load(std::memory_order_relaxed);
-    if (dl > 0.0 || ul > 0.0) {
-        double total_bytes_s = (dl + ul) * 1e6 / 8.0;
-        bps_plot->set_fixed_max(total_bytes_s);
-        pps_plot->set_fixed_max(total_bytes_s / 64.0); // estimate: minimum 64-byte packets
     }
 
     pps_plot->add_sample(total_pps);
@@ -1161,16 +1166,6 @@ void OverviewPage::refresh_info() {
             .arg((total - avail) / 1024).arg(total / 1024));
 }
 
-void OverviewPage::on_save_config() {
-    std::string path = edit_config_path->text().toStdString();
-    std::thread([this, path](){
-        Scalpel::System::Optimizer::set_current_thread_affinity(1);
-        Config::save_config(path);
-        QMetaObject::invokeMethod(edit_config_path, [this, path](){
-            edit_config_path->setPlaceholderText(QString("Saved: %1").arg(QString::fromStdString(path)));
-        }, Qt::QueuedConnection);
-    }).detach();
-}
 
 void OverviewPage::on_speedtest_clicked() {
     btn_speedtest->setEnabled(false);
