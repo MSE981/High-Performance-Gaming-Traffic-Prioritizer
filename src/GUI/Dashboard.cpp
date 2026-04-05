@@ -45,7 +45,7 @@ NotificationPanel::NotificationPanel(QWidget* parent) : QFrame(parent) {
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
-    // ── Notification card area (top 360px, rounded bottom corners) ──
+    // ── Notification card area (top 1250px, rounded bottom corners) ──
     auto* card_panel = new QFrame();
     card_panel->setObjectName("notif_card_panel");
     card_panel->setStyleSheet(
@@ -55,7 +55,7 @@ NotificationPanel::NotificationPanel(QWidget* parent) : QFrame(parent) {
         "  border-bottom-right-radius: 24px;"
         "}"
     );
-    card_panel->setFixedHeight(360);
+    card_panel->setFixedHeight(1250);
 
     auto* card_lay = new QVBoxLayout(card_panel);
     card_lay->setContentsMargins(20, 14, 20, 16);
@@ -821,7 +821,7 @@ NumPadDialog::NumPadDialog(const QString& title, int initial,
 
     text_ = initial > 0 ? QString::number(initial) : QString();
 
-    for (auto* [btn, ch] : std::initializer_list<std::pair<QPushButton*, char>>{
+    for (auto [btn, ch] : std::initializer_list<std::pair<QPushButton*, char>>{
             {b0,'0'},{b1,'1'},{b2,'2'},{b3,'3'},{b4,'4'},
             {b5,'5'},{b6,'6'},{b7,'7'},{b8,'8'},{b9,'9'}})
         connect(btn, &QPushButton::clicked, this, [this, ch](){ push_digit(ch); });
