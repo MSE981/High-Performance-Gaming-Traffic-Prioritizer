@@ -71,9 +71,19 @@ NotificationPanel::NotificationPanel(QWidget* parent) : QFrame(parent) {
     handle_row->addStretch();
     card_lay->addLayout(handle_row);
 
+    auto* hdr_row = new QHBoxLayout();
+    hdr_row->setContentsMargins(0, 0, 0, 0);
     auto* header_lbl = new QLabel("Notifications");
     header_lbl->setStyleSheet("color: rgba(255,255,255,200); font-size: 14px; font-weight: bold; padding: 4px 0;");
-    card_lay->addWidget(header_lbl);
+    auto* btn_clear = new QPushButton("Clear All");
+    btn_clear->setStyleSheet(
+        "QPushButton { background: transparent; border: none; color: rgba(255,255,255,120);"
+        " font-size: 12px; padding: 0; min-height: 0; }"
+        "QPushButton:pressed { color: #ffffff; }");
+    connect(btn_clear, &QPushButton::clicked, this, &NotificationPanel::clear_all);
+    hdr_row->addWidget(header_lbl, 1);
+    hdr_row->addWidget(btn_clear);
+    card_lay->addLayout(hdr_row);
 
     // Scrollable notification list
     auto* scroll = new QScrollArea();
@@ -129,27 +139,61 @@ void NotificationPanel::mouseReleaseEvent(QMouseEvent* event) {
 void NotificationPanel::push_notification(const QString& title, const QString& body) {
     auto* card = new QFrame();
     card->setStyleSheet(
-        "QFrame {"
-        "  background: rgba(255,255,255,14);"
-        "  border-radius: 14px;"
-        "}"
-    );
+        "QFrame { background: rgba(255,255,255,14); border-radius: 14px; }");
     auto* lay = new QVBoxLayout(card);
     lay->setContentsMargins(10, 8, 10, 8);
     lay->setSpacing(2);
+
+    // Title row: text + × dismiss button
+    auto* title_row = new QHBoxLayout();
+    title_row->setContentsMargins(0, 0, 0, 0);
     auto* t = new QLabel(title);
     t->setStyleSheet("color: #ffffff; font-size: 13px; font-weight: bold;");
+    auto* btn_x = new QPushButton("×");
+    btn_x->setFixedSize(22, 22);
+    btn_x->setStyleSheet(
+        "QPushButton { background: transparent; border: none; color: rgba(255,255,255,120);"
+        " font-size: 16px; font-weight: bold; padding: 0; min-height: 0; }"
+        "QPushButton:pressed { color: #ffffff; }");
+    title_row->addWidget(t, 1);
+    title_row->addWidget(btn_x);
+    lay->addLayout(title_row);
+
+    // Body
     auto* b = new QLabel(body);
     b->setStyleSheet("color: rgba(255,255,255,160); font-size: 12px;");
     b->setWordWrap(true);
-    lay->addWidget(t);
     lay->addWidget(b);
-    // Insert before the trailing stretch so cards stack from the top
+
+    // Bottom row: timestamp (right-aligned)
+    auto* bot_row = new QHBoxLayout();
+    bot_row->setContentsMargins(0, 2, 0, 0);
+    auto* ts = new QLabel(QTime::currentTime().toString("HH:mm"));
+    ts->setStyleSheet("color: rgba(255,255,255,70); font-size: 11px;");
+    bot_row->addStretch();
+    bot_row->addWidget(ts);
+    lay->addLayout(bot_row);
+
+    connect(btn_x, &QPushButton::clicked, card, &QFrame::deleteLater);
+
     notif_list_->insertWidget(notif_list_->count() - 1, card);
+
+    if (!expanded_) ++unread_count_;
+}
+
+void NotificationPanel::clear_all() {
+    // Remove every item except the trailing stretch (last item)
+    while (notif_list_->count() > 1) {
+        auto* item = notif_list_->takeAt(0);
+        if (item->widget()) item->widget()->deleteLater();
+        delete item;
+    }
+    unread_count_ = 0;
 }
 
 void NotificationPanel::set_expanded(bool expanded) {
     expanded_ = expanded;
+    if (expanded_) unread_count_ = 0;
 }
 
 void NotificationPanel::advance_spring() {
@@ -1528,12 +1572,26 @@ void DevicePage::on_apply_all() {
 // ═════════════════════════════════════════════════════════════
 // Dashboard: main control panel frame
 // ═════════════════════════════════════════════════════════════
+Dashboard* Dashboard::instance_ = nullptr;
+
 Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
+    instance_ = this;
     setWindowTitle("High-Performance Gaming Traffic Prioritizer");
     setStyleSheet(DARK_STYLESHEET);
     setup_ui();
-    // Unified 60Hz timer: drives spring animation and data refresh on every frame
     data_timer_id_ = startTimer(50, Qt::PreciseTimer);
+}
+
+Dashboard::~Dashboard() {
+    instance_ = nullptr;
+}
+
+void Dashboard::post_notification(const QString& title, const QString& body) {
+    if (!instance_) return;
+    QMetaObject::invokeMethod(instance_, [title, body]() {
+        if (instance_ && instance_->notif_panel_)
+            instance_->notif_panel_->push_notification(title, body);
+    }, Qt::QueuedConnection);
 }
 
 void Dashboard::setup_ui() {
@@ -1571,6 +1629,15 @@ void Dashboard::setup_ui() {
     hdr_info_ = new QLabel("↓ --  ↑ --  🌡 --");
     hdr_info_->setStyleSheet("color: #a0b8d0; font-size: 13px;");
     header_lay->addWidget(hdr_info_);
+
+    hdr_badge_ = new QLabel();
+    hdr_badge_->setAlignment(Qt::AlignCenter);
+    hdr_badge_->setFixedSize(24, 24);
+    hdr_badge_->setStyleSheet(
+        "background-color: #cc2222; border-radius: 12px;"
+        "color: #ffffff; font-size: 11px; font-weight: bold;");
+    hdr_badge_->hide();
+    header_lay->addWidget(hdr_badge_);
 
     root_layout->addWidget(header);
 
@@ -1835,6 +1902,15 @@ void Dashboard::timerEvent(QTimerEvent* event) {
         .arg(dl, 0, 'f', 1)
         .arg(ul, 0, 'f', 1)
         .arg(t > 0 ? t : 0.0, 0, 'f', 0));
+
+    // Unread badge
+    int unread = notif_panel_->unread_count();
+    if (unread > 0) {
+        hdr_badge_->setText(unread > 99 ? "99+" : QString::number(unread));
+        hdr_badge_->show();
+    } else {
+        hdr_badge_->hide();
+    }
 
     // Refresh overview plots if visible; update system info every 20 ticks (1s)
     if (page_stack->currentIndex() == 0)

@@ -26,6 +26,7 @@
 #include <QRegularExpressionValidator>
 #include <QDialog>
 #include <QButtonGroup>
+#include <QTime>
 #include <QMenu>
 #include <array>
 #include <string>
@@ -44,14 +45,15 @@ class NotificationPanel : public QFrame {
 public:
     explicit NotificationPanel(QWidget* parent = nullptr);
     void push_notification(const QString& title, const QString& body);
+    void clear_all();
     void set_expanded(bool expanded);
     bool is_expanded() const { return expanded_; }
     bool is_settled() const;
-    void advance_spring();          // called every anim frame (16ms)
-    void kick(double initial_vel);  // inject velocity for swipe-triggered motion
-    // Backdrop opacity: 0 = transparent, 255 = fully opaque dark
+    void advance_spring();
+    void kick(double initial_vel);
     void set_backdrop_alpha(int alpha);
     int  backdrop_alpha() const { return backdrop_alpha_; }
+    int  unread_count()   const { return unread_count_; }
 
 protected:
     void mousePressEvent(QMouseEvent* event) override;
@@ -60,10 +62,11 @@ protected:
 
 private:
     bool    expanded_       = false;
-    double  pos_y_          = 0.0;   // current real Y position (float)
-    double  vel_y_          = 0.0;   // spring velocity
-    int     backdrop_alpha_ = 210;   // default translucency
-    int     swipe_start_y_  = 0;     // press Y for swipe gesture detection
+    double  pos_y_          = 0.0;
+    double  vel_y_          = 0.0;
+    int     backdrop_alpha_ = 210;
+    int     swipe_start_y_  = 0;
+    int     unread_count_   = 0;
     QVBoxLayout* notif_list_;
 };
 
@@ -288,6 +291,9 @@ class Dashboard : public QMainWindow {
     Q_OBJECT
 public:
     explicit Dashboard(QWidget* parent = nullptr);
+    ~Dashboard();
+    // Thread-safe: callable from any thread (engine cores, network threads)
+    static void post_notification(const QString& title, const QString& body);
 protected:
     void timerEvent(QTimerEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
@@ -310,8 +316,11 @@ private:
     // Notification panel
     NotificationPanel* notif_panel_ = nullptr;
 
-    // Header info (speed + cpu temp)
-    QLabel* hdr_info_ = nullptr;
+    // Header info (speed + cpu temp) + unread badge
+    QLabel* hdr_info_  = nullptr;
+    QLabel* hdr_badge_ = nullptr;
+
+    static Dashboard* instance_;
 
     // Bottom tab bar — 5 tabs
     std::array<QAbstractButton*, 5> tab_btns_{};
