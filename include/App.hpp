@@ -372,7 +372,18 @@ namespace Scalpel {
             std::println("[App] Data plane and control plane started.");
         }
 
-        void stop() { shutdown_promise.set_value(); }
+        void stop() {
+    watchdog.request_stop();
+    worker_downstream.request_stop();
+    worker_upstream.request_stop();
+
+    if (shutdown_future.valid()) {
+        try {
+            shutdown_promise.set_value();
+        } catch (...) {
+        }
+    }
+}
 
         void wait_for_shutdown() {
             shutdown_future.wait();
