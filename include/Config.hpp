@@ -8,6 +8,7 @@
 #include <print>
 #include <format>
 #include <ranges>
+#include <atomic>
 
 namespace Scalpel::Config {
     // Per-interface role assignment
@@ -62,7 +63,7 @@ namespace Scalpel::Config {
     inline uint32_t parse_ip_str(const std::string& ip_str) {
         uint32_t a, b, c, d;
         if (sscanf(ip_str.c_str(), "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
-            return (a << 0) | (b << 8) | (c << 16) | (d << 24);
+            return (a << 24) | (b << 16) | (c << 8) | d;
         }
         return 0;
     }
@@ -81,6 +82,9 @@ namespace Scalpel::Config {
             return;
         }
 
+        IFACE_ROLES.clear();
+IP_LIMIT_MAP.clear();
+BRIDGED_INTERFACES = {"eth1", "eth2", "eth3"}
         bool bridge_iface_loaded = false;
         std::string line;
         while (std::getline(file, line)) {
@@ -130,13 +134,21 @@ namespace Scalpel::Config {
                     auto dash = val.find(':');
                     if (dash != std::string::npos) {
                         uint32_t ip = parse_ip_str(val.substr(0, dash));
-                        double limit = std::stod(val.substr(dash + 1));
-                        IP_LIMIT_MAP[ip] = limit;
+                double limit = std::stod(val.substr(dash + 1));
+                if (ip == 0) {
+                std::println(stderr, "[Config] Invalid IP in line: {}", line);
+                continue;
+                }
+                if (limit <= 0.0) {
+                std::println(stderr, "[Config] Invalid limit in line: {}", line);
+                continue;
+                }
+IP_LIMIT_MAP[ip] = limit;
                     }
                 }
-            } catch (...) {
-                std::println(stderr, "[Config] Error: cannot parse config line: {}", line);
-            }
+           } catch (const std::exception& e) {
+    std::println(stderr, "[Config] Error parsing line '{}': {}", line, e.what());
+}
         }
         // If role map was loaded, derive legacy variables from it (overrides direct IFACE_WAN/LAN keys)
         if (!IFACE_ROLES.empty()) {
