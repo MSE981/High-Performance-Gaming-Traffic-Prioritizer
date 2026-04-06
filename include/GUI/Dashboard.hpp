@@ -191,7 +191,7 @@ public:
 private slots:
     void on_edit_whitelist();
     void on_toggle_accel();
-    void on_throttle_changed(int value);
+    void on_throttle_changed(int value_pct);
 private:
     QCheckBox*    chk_acceleration;
     QLineEdit*    edit_dl_limit;

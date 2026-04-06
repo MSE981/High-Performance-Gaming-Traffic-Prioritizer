@@ -1021,9 +1021,9 @@ void QosPage::on_edit_whitelist() {
     whitelist_table->setMinimumHeight(header_h + rows_h + 4);
 }
 
-void QosPage::on_throttle_changed(int value) {
-    Telemetry::instance().qos_throttle_pct.store(value, std::memory_order_relaxed);
-    lbl_throttle->setText(QString("%1%").arg(value));
+void QosPage::on_throttle_changed(int value_pct) {
+    Telemetry::instance().qos_throttle_pct.store(value_pct, std::memory_order_relaxed);
+    lbl_throttle->setText(QString("%1%").arg(value_pct));
 }
 
 

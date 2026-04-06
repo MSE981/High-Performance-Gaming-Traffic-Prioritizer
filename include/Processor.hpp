@@ -105,7 +105,7 @@ namespace Scalpel::Logic {
             if (stats) {
                 stats->total_pkts++;
                 stats->last_pkt = self->pkt_count;   // free integer store, no syscall
-                if (parsed.raw_span.size() > Config::LARGE_PACKET_THRESHOLD) stats->large_pkts++;
+                if (parsed.raw_span.size() > Config::LARGE_PACKET_THRESHOLD_BYTES) stats->large_pkts++;
 
                 // Disguised traffic detection (e.g., UDP-Ping flood)
                 if (!stats->is_disguised && stats->total_pkts < 50) {
@@ -117,8 +117,8 @@ namespace Scalpel::Logic {
             ++self->pkt_count;
 
             // Periodic cleanup: expire flows not seen in 3 × CLEANUP_INTERVAL packets
-            if (++self->process_counter > Config::CLEANUP_INTERVAL) {
-                self->flows.cleanup(self->pkt_count, Config::CLEANUP_INTERVAL * 3);
+            if (++self->process_counter > Config::CLEANUP_INTERVAL_PKTS) {
+                self->flows.cleanup(self->pkt_count, Config::CLEANUP_INTERVAL_PKTS * 3);
                 self->process_counter = 0;
             }
 

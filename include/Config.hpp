@@ -133,9 +133,9 @@ namespace Scalpel::Config {
     }
 
     // Heuristic detection algorithm thresholds
-    inline uint32_t LARGE_PACKET_THRESHOLD = 1000;
+    inline uint32_t LARGE_PACKET_THRESHOLD_BYTES = 1000;
     inline uint32_t PUNISH_TRIGGER_COUNT = 30;
-    inline uint32_t CLEANUP_INTERVAL = 10000;
+    inline uint32_t CLEANUP_INTERVAL_PKTS = 10000;
 
     // Gaming protocol port whitelist
     struct PortRange { uint16_t start; uint16_t end; };
@@ -304,9 +304,9 @@ namespace Scalpel::Config {
                         if (!bridge_iface_loaded) { clear_bridged(); bridge_iface_loaded = true; }
                         add_bridged(val);
                     }
-                    else if (!strcmp(key, "LARGE_PACKET_THRESHOLD")) LARGE_PACKET_THRESHOLD = static_cast<uint32_t>(atoul(val));
+                    else if (!strcmp(key, "LARGE_PACKET_THRESHOLD")) LARGE_PACKET_THRESHOLD_BYTES = static_cast<uint32_t>(atoul(val));
                     else if (!strcmp(key, "PUNISH_TRIGGER_COUNT"))   PUNISH_TRIGGER_COUNT   = static_cast<uint32_t>(atoul(val));
-                    else if (!strcmp(key, "CLEANUP_INTERVAL"))       CLEANUP_INTERVAL       = static_cast<uint32_t>(atoul(val));
+                    else if (!strcmp(key, "CLEANUP_INTERVAL"))       CLEANUP_INTERVAL_PKTS  = static_cast<uint32_t>(atoul(val));
                     else if (!strcmp(key, "enable_gui"))        global_state.enable_gui.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                     else if (!strcmp(key, "enable_nat"))        global_state.enable_nat.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                     else if (!strcmp(key, "enable_dhcp"))       global_state.enable_dhcp.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
@@ -393,9 +393,9 @@ namespace Scalpel::Config {
         dprintf(fd, "ENABLE_IGMP_SNOOPING=%s\n", b(ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed)));
         for (size_t i = 0; i < BRIDGED_IFACES_COUNT; ++i)
             dprintf(fd, "BRIDGE_IFACE=%s\n", BRIDGED_INTERFACES[i].name.data());
-        dprintf(fd, "LARGE_PACKET_THRESHOLD=%u\n", LARGE_PACKET_THRESHOLD);
+        dprintf(fd, "LARGE_PACKET_THRESHOLD=%u\n", LARGE_PACKET_THRESHOLD_BYTES);
         dprintf(fd, "PUNISH_TRIGGER_COUNT=%u\n",   PUNISH_TRIGGER_COUNT);
-        dprintf(fd, "CLEANUP_INTERVAL=%u\n",       CLEANUP_INTERVAL);
+        dprintf(fd, "CLEANUP_INTERVAL=%u\n",       CLEANUP_INTERVAL_PKTS);
         dprintf(fd, "enable_gui=%s\n",        b(global_state.enable_gui.load(std::memory_order_relaxed)));
         dprintf(fd, "enable_nat=%s\n",        b(global_state.enable_nat.load(std::memory_order_relaxed)));
         dprintf(fd, "enable_dhcp=%s\n",       b(global_state.enable_dhcp.load(std::memory_order_relaxed)));
