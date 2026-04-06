@@ -35,6 +35,10 @@ namespace Scalpel::Probe {
         static void run_internal_stress() {
             auto& tel = Telemetry::instance();
             tel.is_probing.store(true, std::memory_order_relaxed);
+            struct ProbeFlagGuard {
+                Telemetry::Manager& tel;
+                ~ProbeFlagGuard() { tel.is_probing.store(false, std::memory_order_relaxed); }
+            } guard{tel};
             std::println("[Probe A] Benchmarking internal logic...");
 
             Logic::HeuristicProcessor temp_proc;
@@ -56,6 +60,10 @@ namespace Scalpel::Probe {
             tel.internal_limit_mbps.store((pps * 64 * 8) / 1e6, std::memory_order_relaxed);
             std::println("[Probe A] CPU capacity: {:.2f} Mbps ({} PPS)", tel.internal_limit_mbps.load(), pps);
             tel.is_probing.store(false, std::memory_order_relaxed);
+            struct ProbeFlagGuard {
+                Telemetry::Manager& tel;
+                ~ProbeFlagGuard() { tel.is_probing.store(false, std::memory_order_relaxed); }
+            } guard{tel};
         }
 
         // Mode B: ISP PPS probing (deterministic precise rate limiting via timerfd)
@@ -68,14 +76,21 @@ namespace Scalpel::Probe {
 
             // Create hardware monotonic timer
             int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
-            if (tfd == -1) return;
+            if (tfd == -1) {
+                tel.is_probing.store(false, std::memory_order_relaxed);
+                return;
+            }
 
             struct itimerspec its{};
             its.it_value.tv_sec = 0;
-            its.it_value.tv_nsec = 555; // Target 1.8M PPS (about every 555 nanoseconds)
+            its.it_value.tv_nsec = 555; // Aggressive theoretical target rate; actual wakeup cadence depends on kernel scheduling and timer resolution.
             its.it_interval.tv_sec = 0;
             its.it_interval.tv_nsec = 555;
-            timerfd_settime(tfd, 0, &its, NULL);
+            if (timerfd_settime(tfd, 0, &its, NULL) == -1) {
+                close(tfd);
+                tel.is_probing.store(false, std::memory_order_relaxed);
+                return;
+            }
 
             auto start = std::chrono::steady_clock::now();
             uint64_t sent = 0;
@@ -97,7 +112,7 @@ namespace Scalpel::Probe {
 
             double pps = sent / 5.0;
             double hw_mbps = (sent * 64.0 * 8.0) / (5.0 * 1e6);
-            std::println("[Probe B] Local Hardware Tx Limit: {:.2f} Mbps ({} PPS)", hw_mbps, pps);
+            std::println("[Probe C] Starting background speedtest task; packet forwarding path remains non-blocking.");
             tel.is_probing.store(false, std::memory_order_relaxed);
         }
 
