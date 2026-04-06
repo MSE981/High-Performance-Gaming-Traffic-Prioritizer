@@ -366,14 +366,5 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 
-
-
-.agent/
-.agents/
-_agent/
-_agents/
-
 #special files
-*.md
-*.pdf
 web/node_modules/
