@@ -2,7 +2,7 @@ const express = require('express');
 const session = require('express-session');
 const path = require('path');
 const si = require('systeminformation');
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 const os = require('os');
 const app = express();
 
@@ -20,7 +20,7 @@ app.set('views', path.join(__dirname, 'views'));
 app.use(express.urlencoded({ extended: true }));
 
 app.use(session({
-    secret: 'super_secret_gaming_key',
+    secret: process.env.SESSION_SECRET || 'change_this_secret',
     resave: false,
     saveUninitialized: true
 }));
@@ -43,7 +43,7 @@ app.get('/login', (req, res) => {
 
 app.post('/api/login', (req, res) => {
     const { password } = req.body;
-    if (password === 'admin123') {
+    if (password === (process.env.ADMIN_PASSWORD || 'admin123')) {
         req.session.loggedIn = true;
         res.redirect('/dashboard');
     } else {
@@ -91,9 +91,13 @@ app.post('/api/ping', requireAuth, (req, res) => {
     const target = req.body.target || '8.8.8.8';
     const isWindows = os.platform() === 'win32';
     const pingFlag = isWindows ? '-n' : '-c';
-    const command = `ping ${pingFlag} 4 ${target}`;
 
-    exec(command, (error, stdout, stderr) => {
+    const safeTarget = String(target).trim();
+    if (!/^[a-zA-Z0-9.\-:]+$/.test(safeTarget)) {
+        return res.json({ status: "error", output: "Invalid target." });
+    }
+
+    execFile('ping', [pingFlag, '4', safeTarget], (error, stdout, stderr) => {
         if (error) {
             return res.json({ status: "error", output: stderr || stdout || error.message });
         }
@@ -107,9 +111,17 @@ app.get('/qos', requireAuth, (req, res) => {
 
 app.post('/update_qos_settings', requireAuth, (req, res) => {
     systemConfig.traffic_mode = req.body.mode;
-    systemConfig.bandwidth_limit = parseInt(req.body.limit, 10);
+   const limit = parseInt(req.body.limit, 10);
+    if (!Number.isFinite(limit) || limit <= 0) {
+        return res.status(400).send('Invalid bandwidth limit');
+    }
+    systemConfig.bandwidth_limit = limit;
     if (req.body.target_port) {
-        systemConfig.target_port = parseInt(req.body.target_port, 10);
+       const port = parseInt(req.body.target_port, 10);
+        if (!Number.isFinite(port) || port < 1 || port > 65535) {
+            return res.status(400).send('Invalid target port');
+        }
+        systemConfig.target_port = port;
     }
     console.log("QoS Settings Updated:", systemConfig);
     res.redirect('/qos');
@@ -142,15 +154,24 @@ app.get('/dev', requireAuth, (req, res) => {
     res.render('dev');
 });
 
-// NEW: Developer Terminal API (Executes system commands)
 app.post('/api/terminal', requireAuth, (req, res) => {
-    const command = req.body.command || '';
+    const command = String(req.body.command || '').trim();
     if (!command) {
         return res.json({ status: "error", output: "No command provided." });
     }
 
-    // Execute command with a 15-second timeout
-    exec(command, { timeout: 15000 }, (error, stdout, stderr) => {
+   const allowedCommands = {
+       "uptime": ["uptime"],
+       "df -h": ["df", "-h"],
+       "df -h": ["df", "-h"],
+       "free -h": ["free", "-h"],
+   }
+    if (!allowedCommands[command]) {
+        return res.json({ status: "error", output: "Command not allowed." });
+    }
+
+    const [file, ...args] = allowedCommands[command];
+    execFile(file, args, { timeout: 15000 }, (error, stdout, stderr) => {
         let output = stdout || stderr;
         if (error && !output) {
             output = "System error: " + error.message;
@@ -158,7 +179,7 @@ app.post('/api/terminal', requireAuth, (req, res) => {
         if (!output) {
             output = "[Command executed successfully with no output]";
         }
-        res.json({ status: "success", output: output });
+        res.json({ status: "success", output });
     });
 });
 
