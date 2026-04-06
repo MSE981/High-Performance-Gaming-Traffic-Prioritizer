@@ -392,10 +392,10 @@ void OverviewPage::refresh(const Telemetry& tel, const std::array<uint64_t, 4>& 
         uint64_t dp = cp - last_p[i], db = cb - last_b[i];
         total_pps += dp * 30.0;
         total_bps += db * 30.0 * 8.0 / 1e6;  // bytes/tick → Mbps
-        int load = tel.core_metrics[i].cpu_load_pct.load(std::memory_order_relaxed);
+        int load_pct = tel.core_metrics[i].cpu_load_pct.load(std::memory_order_relaxed);
         // Colour: green <50%, orange 50-80%, red >80%
-        const char* colour = load < 50 ? "#00cc66" : (load < 80 ? "#ffaa00" : "#ff4444");
-        core_labels[i]->setText(QString("Core %1\n%2%").arg(i).arg(load));
+        const char* colour = load_pct < 50 ? "#00cc66" : (load_pct < 80 ? "#ffaa00" : "#ff4444");
+        core_labels[i]->setText(QString("Core %1\n%2%").arg(i).arg(load_pct));
         core_labels[i]->setStyleSheet(
             QString("background-color: #22223a; border: 1px solid #2a2a4a; border-radius: 6px;"
                     " padding: 10px; font-size: 15px; color: %1;").arg(colour));
