@@ -13,8 +13,7 @@
 #include <net/if.h>
 #include <arpa/inet.h>
 #include <poll.h>   
-#include <print> 
-#include <array>
+#include <print>  
 
 namespace Scalpel::Engine {
     class RawSocketManager {
@@ -35,11 +34,10 @@ namespace Scalpel::Engine {
         static constexpr uint32_t BLOCK_NR = 1024;
         static constexpr uint32_t FRAME_NR = (BLOCK_SIZE * BLOCK_NR) / FRAME_SIZE;
 
-    explicit RawSocketManager(std::string_view iface_name) {
-        iface.fill('\0');
-        iface_name.copy(iface.data(), IFNAMSIZ - 1);
-        iface[IFNAMSIZ - 1] = '\0';
-    }
+    public:
+        explicit RawSocketManager(std::string_view iface_name) {
+            iface_name.copy(iface.data(), IFNAMSIZ - 1);
+        }
 
         ~RawSocketManager() {
             if (ring && ring != MAP_FAILED) munmap(ring, ring_size);
@@ -54,19 +52,19 @@ namespace Scalpel::Engine {
             // 2. Get interface index
             struct ifreq ifr {};
             std::strncpy(ifr.ifr_name, iface.data(), IFNAMSIZ - 1);
-            if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) return std::unexpected(std::string("Interface lookup failed") + strerror(errno));
+            if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) return std::unexpected("Interface lookup failed");
 
             // Auto-enable promiscuous mode
             struct ifreq ifr_p {};
             iface.copy(ifr_p.ifr_name, IFNAMSIZ - 1);
 
             if (ioctl(fd, SIOCGIFFLAGS, &ifr_p) < 0) {
-                return std::unexpected(std::string("Failed to get interface flags") + strerror(errno));
+                return std::unexpected("Failed to get interface flags");
             }
 
             ifr_p.ifr_flags |= IFF_PROMISC;
             if (ioctl(fd, SIOCSIFFLAGS, &ifr_p) < 0) {
-                return std::unexpected(std::string("Failed to set IFF_PROMISC. Check permissions.") + strerror(errno));
+                return std::unexpected("Failed to set IFF_PROMISC. Check permissions.");
             }
             std::println("[Engine] Interface {} set to promiscuous mode", iface.data());
 
@@ -79,19 +77,19 @@ namespace Scalpel::Engine {
             };
 
             if (setsockopt(fd, SOL_PACKET, PACKET_RX_RING, &req, sizeof(req)) < 0)
-                return std::unexpected(std::string("Setsockopt RX_RING failed") + strerror(errno));
+                return std::unexpected("Setsockopt RX_RING failed");
 
             // 4. Memory map
             ring_size = (size_t)req.tp_block_size * req.tp_block_nr;
             ring = (uint8_t*)mmap(nullptr, ring_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-            if (ring == MAP_FAILED) return std::unexpected(std::string("mmap failed") + strerror(errno));
+            if (ring == MAP_FAILED) return std::unexpected("mmap failed");
 
             // 5. Bind
             sockaddr_ll sll{};
             sll.sll_family = AF_PACKET;
             sll.sll_protocol = htons(ETH_P_ALL);
             sll.sll_ifindex = ifr.ifr_ifindex;
-            if (bind(fd, (sockaddr*)&sll, sizeof(sll)) < 0) return std::unexpected(std::string("Bind failed") + strerror(errno));
+            if (bind(fd, (sockaddr*)&sll, sizeof(sll)) < 0) return std::unexpected("Bind failed");
 
             return {};
         }
@@ -100,17 +98,13 @@ namespace Scalpel::Engine {
 
         // Core packet dispatch loop (compile-time polymorphism optimization)
         // Template parameters achieve 100% inlining of processing logic, eliminating virtual function overhead
-        if (fd < 0 || ring == nullptr || ring == MAP_FAILED) return;
         template<typename Callback>
         void poll_and_dispatch(Callback&& cb, int timeout_ms = 1) {
             struct pollfd pfd {};
             pfd.fd = fd;
             pfd.events = POLLIN;
 
-            int pret = poll(&pfd, 1, timeout_ms);
-            if (pret < 0) return;
-            if (pret == 0) return;
-            if (!(pfd.revents & POLLIN)) return;
+            poll(&pfd, 1, timeout_ms);
 
             // Drain ring buffer in bulk
             while (true) {
@@ -123,10 +117,7 @@ namespace Scalpel::Engine {
                 if (sll->sll_pkttype != PACKET_OUTGOING) {
                     std::span<uint8_t> pkt{ reinterpret_cast<uint8_t*>(hdr) + hdr->tp_mac, hdr->tp_len };
                     // Core call: since cb is template parameter, compiler inlines 100%
-                try {
                     cb(pkt);
-                } catch (...) {
-                }
                 }
 
                 hdr->tp_status = TP_STATUS_KERNEL;
