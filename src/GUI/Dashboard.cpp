@@ -109,8 +109,8 @@ NotificationPanel::NotificationPanel(QWidget* parent) : QFrame(parent) {
     move(0, -height());
 }
 
-void NotificationPanel::set_backdrop_alpha(int alpha) {
-    backdrop_alpha_ = std::clamp(alpha, 0, 255);
+void NotificationPanel::set_backdrop_alpha(int alpha_0_255) {
+    backdrop_alpha_ = std::clamp(alpha_0_255, 0, 255);
     update();
 }
 

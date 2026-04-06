@@ -51,7 +51,7 @@ public:
     bool is_settled() const;
     void advance_spring();
     void kick(double initial_vel);
-    void set_backdrop_alpha(int alpha);
+    void set_backdrop_alpha(int alpha_0_255);
     int  backdrop_alpha() const { return backdrop_alpha_; }
     int  unread_count()   const { return unread_count_; }
 
