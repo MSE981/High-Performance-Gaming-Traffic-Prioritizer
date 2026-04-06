@@ -455,9 +455,8 @@ namespace Scalpel {
             int fd_lan = iface_lan->get_fd();
             lan_fd_ = fd_lan; // cache before iface_lan is moved into the worker thread
 
-            auto& tel = Telemetry::instance();
-            double dl = tel.isp_down_limit_mbps.load(std::memory_order_relaxed) > 1.0 ? tel.isp_down_limit_mbps.load(std::memory_order_relaxed) : 500.0;
-            double ul = tel.isp_up_limit_mbps.load(std::memory_order_relaxed) > 1.0 ? tel.isp_up_limit_mbps.load(std::memory_order_relaxed) : 50.0;
+            constexpr double dl = 500.0;
+            constexpr double ul = 50.0;
 
             base_dl_mbps = dl;
             base_ul_mbps = ul;
@@ -816,21 +815,6 @@ namespace Scalpel {
                 if (firewall_engine) {
                     firewall_engine->tick();
                     firewall_engine->cleanup();
-                }
-
-                // Accept speedtest results when GUI user clicks "接受" (Core 0 → Core 1)
-                if (tel.speedtest_result_ready.exchange(false, std::memory_order_acq_rel)) {
-                    double new_dl = tel.isp_down_limit_mbps.load(std::memory_order_relaxed);
-                    double new_ul = tel.isp_up_limit_mbps.load(std::memory_order_relaxed);
-                    if (new_dl > 0.0) base_dl_mbps = new_dl;
-                    if (new_ul > 0.0) base_ul_mbps = new_ul;
-                    int pct = tel.qos_throttle_pct.load(std::memory_order_relaxed);
-                    double factor = pct / 100.0;
-                    if (shaper_dl) shaper_dl->set_rate_limit(base_dl_mbps * factor);
-                    if (shaper_ul) shaper_ul->set_rate_limit(base_ul_mbps * factor);
-                    last_throttle_pct = pct; // suppress spurious re-apply below
-                    std::println("[SpeedTest] Base rates updated: DL {:.1f} Mbps / UL {:.1f} Mbps (throttle {}%)",
-                        base_dl_mbps * factor, base_ul_mbps * factor, pct);
                 }
 
                 // Apply QoS throttle from GUI slider (written by Core 0, consumed here on Core 1)

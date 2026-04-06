@@ -24,11 +24,6 @@ namespace Scalpel {
 
         // Diagnostics and control data (low-frequency read/write, no need for separation)
         std::atomic<double> internal_limit_mbps{ 0.0 };
-        std::atomic<double> isp_down_limit_mbps{ 0.0 };
-        std::atomic<double> isp_up_limit_mbps{ 0.0 };
-        // Set by GUI (Core 0) when user accepts speedtest results; consumed by Core 1 watchdog
-        // to propagate new base rates into the active shapers
-        std::atomic<bool> speedtest_result_ready{ false };
         std::atomic<double> internal_pps{ 0.0 };
         std::atomic<double> isp_pps{ 0.0 };
         std::atomic<bool> is_probing{ false };

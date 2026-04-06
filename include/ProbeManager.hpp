@@ -3,8 +3,6 @@
 #include <cstring>
 #include <print>
 #include <array>
-#include <memory>
-#include <functional>
 #include <sys/socket.h>
 #include "Telemetry.hpp"
 #include "Processor.hpp"
@@ -14,8 +12,6 @@
 #include <netinet/udp.h>
 #include <net/ethernet.h>
 #include <arpa/inet.h>
-#include <string>
-#include <thread>
 #include <sys/timerfd.h>
 #include <unistd.h>
 
@@ -103,58 +99,6 @@ namespace Scalpel::Probe {
         }
 
 
-        // Mode C: async Ookla Speedtest
-        // Accepts a callback; fires when the test completes
-        static void run_async_real_isp_probe(std::function<void(double, double)> on_complete) {
-            std::println("[Probe C] Spawning asynchronous speedtest thread. Realtime engine will NOT block.");
-
-            // Fire-and-forget: use std::thread + detach, not jthread (no stop-token needed)
-            std::thread([cb = std::move(on_complete)]() {
-                std::array<char, 128> buffer{};
-                std::string result;
-
-                // popen runs in background thread only — never blocks packet forwarding
-                std::unique_ptr<FILE, decltype(&pclose)> pipe(popen("speedtest-cli --simple 2>/dev/null", "r"), pclose);
-                if (!pipe) {
-                    std::println(stderr, "[Probe C Error] Speedtest process failed to start.");
-                    return;
-                }
-
-                while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-                    result += buffer.data();
-                }
-
-                double download_mbps = 0.0;
-                double upload_mbps = 0.0;
-
-                auto pos_down = result.find("Download:");
-                if (pos_down != std::string::npos && pos_down + 9 < result.size()) {
-                    const char* p = result.c_str() + pos_down + 9;
-                    while (*p == ' ') ++p; // skip whitespace
-                    if (*p >= '0' && *p <= '9') {
-                        try { download_mbps = std::stod(p); } catch (...) {}
-                    }
-                }
-
-                auto pos_up = result.find("Upload:");
-                if (pos_up != std::string::npos && pos_up + 8 < result.size()) {
-                    const char* p = result.c_str() + pos_up + 8;
-                    while (*p == ' ') ++p;
-                    if (*p >= '0' && *p <= '9') {
-                        try { upload_mbps = std::stod(p); } catch (...) {}
-                    }
-                }
-
-                if (download_mbps > 0.0 && upload_mbps > 0.0) {
-                    std::println("\n[Probe C] Async Speedtest Success! Down: {:.2f} Mbps | Up: {:.2f} Mbps", download_mbps, upload_mbps);
-                    // Task complete: fire callback to notify main program
-                    if (cb) cb(download_mbps, upload_mbps);
-                }
-                else {
-                    std::println(stderr, "\n[Probe C Error] Speedtest returned invalid results.");
-                }
-                }).detach();
-        }
     };
 }
 

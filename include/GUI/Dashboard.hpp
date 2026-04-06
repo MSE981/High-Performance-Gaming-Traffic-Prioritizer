@@ -98,9 +98,6 @@ public:
     explicit OverviewPage(QWidget* parent = nullptr);
     void refresh(const Telemetry& tel, const std::array<uint64_t, 4>& last_pkts, const std::array<uint64_t, 4>& last_bytes);
     void refresh_info();
-private slots:
-    void on_speedtest_clicked();
-    void on_speedtest_done(double dl_mbps, double ul_mbps);
 private:
     // Overview section
     RealTimePlot* pps_plot;
@@ -114,8 +111,7 @@ private:
     QLabel* lbl_cpu_temp;
     QLabel* lbl_uptime;
     QLabel* lbl_memory;
-    QPushButton* btn_speedtest;
-    QLabel*      lbl_speedtest_status;
+
 };
 
 // ═══════════════════════════════════════════

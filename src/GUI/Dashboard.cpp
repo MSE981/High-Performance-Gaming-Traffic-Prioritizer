@@ -381,27 +381,6 @@ OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
     layout->addWidget(info_group);
 
 
-    auto* spd_group = new QGroupBox("Speed Test");
-    auto* spd_lay   = new QVBoxLayout(spd_group);
-    auto* spd_desc  = new QLabel("Measures real ISP throughput via speedtest-cli. Routing continues during test.");
-    spd_desc->setStyleSheet("color: #808090; font-size: 15px;");
-    spd_lay->addWidget(spd_desc);
-    auto* spd_btn_row = new QHBoxLayout();
-    btn_speedtest = new QPushButton("▶ Run Test");
-    btn_speedtest->setObjectName("btn_primary");
-    btn_speedtest->setFixedWidth(130);
-    btn_speedtest->setStyleSheet(
-        "QPushButton#btn_primary { background-color: #0077ff; border: 2px solid #0066dd; color: #ffffff; }"
-        "QPushButton#btn_primary:pressed { background-color: #0055cc; }"
-        "QPushButton#btn_primary:disabled { background-color: #1a3a6a; border: 2px solid #1a3a6a; color: #607090; }");
-    lbl_speedtest_status = new QLabel("Ready");
-    lbl_speedtest_status->setStyleSheet("color: #808090; font-size: 12px;");
-    spd_btn_row->addWidget(btn_speedtest);
-    spd_btn_row->addWidget(lbl_speedtest_status);
-    spd_btn_row->addStretch();
-    spd_lay->addLayout(spd_btn_row);
-    connect(btn_speedtest, &QPushButton::clicked, this, &OverviewPage::on_speedtest_clicked);
-    layout->addWidget(spd_group);
     layout->addStretch();
 }
 
@@ -1382,41 +1361,6 @@ void OverviewPage::refresh_info() {
 }
 
 
-void OverviewPage::on_speedtest_clicked() {
-    btn_speedtest->setEnabled(false);
-    lbl_speedtest_status->setText("Testing, please wait…");
-    lbl_speedtest_status->setStyleSheet("color: #f0a500; font-size: 12px;");
-    Probe::Manager::run_async_real_isp_probe([this](double dl, double ul) {
-        QMetaObject::invokeMethod(this, [this, dl, ul]() {
-            on_speedtest_done(dl, ul);
-        }, Qt::QueuedConnection);
-    });
-}
-
-void OverviewPage::on_speedtest_done(double dl_mbps, double ul_mbps) {
-    btn_speedtest->setEnabled(true);
-    lbl_speedtest_status->setText(
-        QString("↓ %1 Mbps / ↑ %2 Mbps").arg(dl_mbps, 0, 'f', 1).arg(ul_mbps, 0, 'f', 1));
-    lbl_speedtest_status->setStyleSheet("color: #00cc66; font-size: 12px;");
-    auto* dlg = new QMessageBox(this);
-    dlg->setWindowTitle("Speed Test Complete");
-    dlg->setText(QString("Download: <b>%1 Mbps</b>&nbsp;&nbsp;&nbsp;Upload: <b>%2 Mbps</b>")
-        .arg(dl_mbps, 0, 'f', 1).arg(ul_mbps, 0, 'f', 1));
-    dlg->setInformativeText("Write these results as the QoS baseline?\n(The throttle slider will be recalculated against the new baseline)");
-    dlg->setStandardButtons(QMessageBox::Yes | QMessageBox::No);
-    dlg->setDefaultButton(QMessageBox::Yes);
-    dlg->button(QMessageBox::Yes)->setText("Apply");
-    dlg->button(QMessageBox::No)->setText("Ignore");
-    if (dlg->exec() == QMessageBox::Yes) {
-        auto& tel = Telemetry::instance();
-        tel.isp_down_limit_mbps.store(dl_mbps, std::memory_order_relaxed);
-        tel.isp_up_limit_mbps.store(ul_mbps,   std::memory_order_relaxed);
-        tel.speedtest_result_ready.store(true,  std::memory_order_release);
-        std::println("[SpeedTest] User accepted: DL {:.1f} Mbps / UL {:.1f} Mbps → QoS base updated",
-            dl_mbps, ul_mbps);
-    }
-    dlg->deleteLater();
-}
 
 // ═════════════════════════════════════════════════════════════
 // DevicePage: per-device access control and rate limiting
