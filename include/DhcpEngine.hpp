@@ -68,8 +68,11 @@ namespace Scalpel::Logic {
         }
 
         // Data plane (Core 3 LAN_RX): intercept and queue request to control plane
-        if (!request_queue.push(msg)) {
-    std::println(stderr, "[DHCP Engine] request_queue full, dropping DHCP packet");
+        void intercept_request(const Net::ParsedPacket& pkt) {
+            DhcpMessage msg;
+            msg.len = std::min(pkt.raw_span.size(), size_t(512));
+            std::memcpy(msg.data.data(), pkt.raw_span.data(), msg.len);
+            request_queue.push(msg);
         }
 
         // Control plane (Core 1) watchdog: offline parsing and transmission
@@ -104,8 +107,7 @@ namespace Scalpel::Logic {
             uint32_t requested_ip = 0;
             
             while (opt < end && *opt != 255) {
-                if (*opt == 0) { ++opt; continue; }
-                if(opt + 1 >= end) break;
+                if (*opt == 0) { opt++; continue; }
                 uint8_t len = opt[1];
                 if (opt + 2 + len > end) break;
                 
@@ -127,12 +129,9 @@ namespace Scalpel::Logic {
                 if (leased_ip == requested_ip) {
                     commit_lease(dhcp->chaddr, leased_ip);
                     send_dhcp_response(msg.data, parsed, dhcp, 5, leased_ip, lan_fd); // DHCP ACK
-                    char ipbuf[INET_ADDRSTRLEN]{};
-                    in_addr addr{.s_addr = leased_ip};
-                    inet_ntop(AF_INET, &addr, ipbuf, sizeof(ipbuf));
-                    std::println("[DHCP Engine] Assigned IP to device: {}", ipbuf);
+                    std::println("[DHCP Engine] Assigned IP to device: {}", inet_ntoa(*(in_addr*)&leased_ip));
                 } else {
-                    send_dhcp_response(msg.data, parsed, dhcp, 6, 0, lan_fd);
+                    send_dhcp_response(msg.data, parsed, dhcp, 6, requested_ip, lan_fd); // DHCP NAK
                 }
             }
         }
@@ -181,7 +180,7 @@ namespace Scalpel::Logic {
             ip->ttl = 64;
             ip->protocol = 17;
             ip->saddr = router_ip;
-            ip->daddr = htonl(0xFFFFFFFF);
+            ip->daddr = 0xFFFFFFFF; // Broadcast reply
             
             auto udp = reinterpret_cast<Net::UDPHeader*>(response.data() + sizeof(Net::EthernetHeader) + sizeof(Net::IPv4Header));
             udp->source = htons(67);
@@ -231,10 +230,7 @@ namespace Scalpel::Logic {
             udp->len = htons(udp_len);
             udp->check = 0; 
             
-            ssize_t n = send(lan_fd, response.data(), total_len, MSG_DONTWAIT);
-            if (n < 0) {
-            std::println(stderr, "[DHCP Engine] send failed");
-            }
+            send(lan_fd, response.data(), total_len, MSG_DONTWAIT);
         }
     };
 }
