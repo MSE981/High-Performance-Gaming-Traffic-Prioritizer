@@ -157,13 +157,13 @@ namespace Scalpel::Config {
 
     inline void upsert_device_policy(uint32_t ip, const uint8_t* mac,
                                      bool blocked, bool rate_limited,
-                                     double dl, double ul) {
+                                     double dl_mbps, double ul_mbps) {
         for (size_t i = 0; i < DEVICE_POLICY_COUNT; ++i) {
             if (DEVICE_POLICY_TABLE[i].ip == ip) {
                 DEVICE_POLICY_TABLE[i].blocked      = blocked;
                 DEVICE_POLICY_TABLE[i].rate_limited = rate_limited;
-                DEVICE_POLICY_TABLE[i].dl_mbps      = dl;
-                DEVICE_POLICY_TABLE[i].ul_mbps      = ul;
+                DEVICE_POLICY_TABLE[i].dl_mbps      = dl_mbps;
+                DEVICE_POLICY_TABLE[i].ul_mbps      = ul_mbps;
                 if (mac) std::memcpy(DEVICE_POLICY_TABLE[i].mac, mac, 6);
                 return;
             }
@@ -173,28 +173,28 @@ namespace Scalpel::Config {
             e.ip = ip;
             if (mac) std::memcpy(e.mac, mac, 6);
             e.blocked = blocked; e.rate_limited = rate_limited;
-            e.dl_mbps = dl; e.ul_mbps = ul;
+            e.dl_mbps = dl_mbps; e.ul_mbps = ul_mbps;
         }
     }
 
     // Static IP rate limit table (max 256 entries, zero heap allocation)
     static constexpr size_t MAX_IP_LIMITS = 256;
     struct IpLimitEntry {
-        uint32_t ip = 0;
-        double   rate = 0.0;
+        uint32_t ip       = 0;
+        double   rate_mbps = 0.0;
     };
     inline std::array<IpLimitEntry, MAX_IP_LIMITS> IP_LIMIT_TABLE{};
     inline size_t IP_LIMIT_COUNT = 0;
     inline std::atomic<bool> IP_LIMIT_ACTIVE{false};
 
     inline void clear_ip_limits() { IP_LIMIT_COUNT = 0; }
-    inline void add_ip_limit(uint32_t ip, double rate) {
+    inline void add_ip_limit(uint32_t ip, double rate_mbps) {
         // Update existing entry if found
         for (size_t i = 0; i < IP_LIMIT_COUNT; ++i) {
-            if (IP_LIMIT_TABLE[i].ip == ip) { IP_LIMIT_TABLE[i].rate = rate; return; }
+            if (IP_LIMIT_TABLE[i].ip == ip) { IP_LIMIT_TABLE[i].rate_mbps = rate_mbps; return; }
         }
         if (IP_LIMIT_COUNT < MAX_IP_LIMITS) {
-            IP_LIMIT_TABLE[IP_LIMIT_COUNT] = {ip, rate};
+            IP_LIMIT_TABLE[IP_LIMIT_COUNT] = {ip, rate_mbps};
             ++IP_LIMIT_COUNT;
         }
     }
@@ -419,7 +419,7 @@ namespace Scalpel::Config {
             uint32_t ip = IP_LIMIT_TABLE[i].ip;
             dprintf(fd, "IP_LIMIT=%u.%u.%u.%u:%.6g\n",
                 ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF,
-                IP_LIMIT_TABLE[i].rate);
+                IP_LIMIT_TABLE[i].rate_mbps);
         }
         dprintf(fd, "IFACE_GATEWAY=%s\n", IFACE_GATEWAY.c_str());
         for (size_t i = 0; i < IFACE_ROLES_COUNT; ++i) {

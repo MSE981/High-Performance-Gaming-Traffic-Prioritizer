@@ -120,7 +120,7 @@ namespace Scalpel {
             size_t inactive = 1 - active;
             buffers[inactive] = {}; // Zero Allocation Refresh
             for (size_t i = 0; i < count; ++i) {
-                buffers[inactive].insert(table[i].ip, std::make_shared<Traffic::Shaper>(table[i].rate));
+                buffers[inactive].insert(table[i].ip, std::make_shared<Traffic::Shaper>(table[i].rate_mbps));
             }
             active_idx.store(inactive, std::memory_order_release);
         }
