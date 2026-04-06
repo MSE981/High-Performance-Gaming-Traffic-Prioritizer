@@ -39,7 +39,7 @@ namespace Scalpel::Logic {
         std::array<DnsCacheEntry, CACHE_SIZE> cache{};
         Net::SpscRingBuffer<DnsMessage, 1024> response_queue{}; 
         
-        std::atomic<uint32_t> current_tick{0};
+        uint32_t current_tick = 0;
 
         // FNV-1a Hash for domain string (QNAME)
         static uint32_t hash_qname(const uint8_t* qname, size_t max_len) {
@@ -53,7 +53,7 @@ namespace Scalpel::Logic {
         }
 
     public:
-        void tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
+        void tick() { current_tick++; }
 
         // Core 3 (Upstream: LAN -> WAN) - data plane cache hit and zero-copy bounce
         bool process_query(Net::ParsedPacket& pkt, int bounce_fd) {
@@ -79,7 +79,8 @@ namespace Scalpel::Logic {
 
             // Principle 3.0: pure dereference with acquire barrier for lock-free reads
             if (!cache[idx].valid.load(std::memory_order_acquire)) return false;
-            if (cache[idx].domain_hash != h || current_tick.load(std::memory_order_relaxed) > cache[idx].expire_tick) {
+            if (cache[idx].domain_hash != h || current_tick > cache[idx].expire_tick) {
+                cache[idx].valid.store(false, std::memory_order_relaxed);
                 return false;
             }
 
@@ -108,7 +109,6 @@ namespace Scalpel::Logic {
             pkt.ipv4->daddr = s_ip;
             pkt.ipv4->tot_len = htons(new_len - sizeof(Net::EthernetHeader));
             
-            if (pkt.ihl < sizeof(Net::IPv4Header) || (pkt.ihl % 2) != 0) return false;
             pkt.ipv4->check = 0;
             uint32_t ip_sum = 0;
             const uint16_t* ip_words = reinterpret_cast<const uint16_t*>(pkt.ipv4);
@@ -121,13 +121,10 @@ namespace Scalpel::Logic {
             udp->source = udp->dest;
             udp->dest = s_port;
             udp->len = htons(new_len - sizeof(Net::EthernetHeader) - pkt.ihl);
-            udp->check = 0; // IPv4 UDP checksum intentionally omitted for fast-path response
+            udp->check = 0; 
 
             // Fast bounce: send back to LAN interface at wire speed (bounce_fd = rx_fd)
-            ssize_t n = send(bounce_fd, pkt.raw_span.data(), new_len, MSG_DONTWAIT);
-            if (n < 0) {
-                return false;
-            }
+            send(bounce_fd, pkt.raw_span.data(), new_len, MSG_DONTWAIT);
             return true; // Block data path pipeline
         }
 
@@ -143,9 +140,7 @@ namespace Scalpel::Logic {
             msg.len = pkt.raw_span.size();
             std::memcpy(msg.data.data(), pkt.raw_span.data(), pkt.raw_span.size());
             // Queue to lock-free queue (Core 1 watchdog processes later), drops on overflow
-            if (!response_queue.push(msg)) {
-                std::println(stderr, "[DNS Engine] response_queue full, dropping DNS response");
-            }
+            response_queue.push(msg); 
         }
 
         // Control plane (Core 1) background learning loop (decoupled from high-frequency data)
@@ -167,28 +162,19 @@ namespace Scalpel::Logic {
 
                 // Packet parsing is complex with uncertain pointers: justifies separation to Core 1
                 size_t ptr = qname_offset;
-                while (ptr < msg.len && msg.data[ptr] != 0) {
-                    uint8_t label_len = msg.data[ptr];
-                    if (ptr + 1 + label_len > msg.len) {
-                        ptr = msg.len;
-                        break;
-                    }
-                    ptr += label_len + 1;
-                }
-                if (ptr + 5 > msg.len) continue;
-                ptr += 5;
+                while (ptr < msg.len && msg.data[ptr] != 0) { ptr += msg.data[ptr] + 1; }
                 ptr += 5; // Skip null byte (1) + qtype (2) + qclass (2)
 
                 // First answer record
-                if (ptr + 14 <= msg.len) {
+                if (ptr + 12 <= msg.len) {
                     // Type A (0x0001) record
-                    if (msg.data[ptr+2] == 0x00 && msg.data[ptr+3] == 0x01 &&
-                        msg.data[ptr+10-2] == 0x00 && msg.data[ptr+10-1] == 0x04)
+                    if (msg.data[ptr+2] == 0x00 && msg.data[ptr+3] == 0x01) {
+                        uint32_t ipv4 = *reinterpret_cast<const uint32_t*>(&msg.data[ptr+10]);
                         
                         size_t idx = h % CACHE_SIZE;
                         cache[idx].domain_hash = h;
                         cache[idx].ipv4_address = ipv4;
-                        cache[idx].expire_tick = current_tick.load(std::memory_order_relaxed) + 300; // Expiry in tick units
+                        cache[idx].expire_tick = current_tick + 300; // Expiry in tick units
                         // Principle 3.0: release barrier ensures memory writes complete before data plane acquires true
                         cache[idx].valid.store(true, std::memory_order_release);
 
