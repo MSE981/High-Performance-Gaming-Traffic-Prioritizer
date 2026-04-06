@@ -1,6 +1,10 @@
 #pragma once
 #include <cstdint>
 #include <netinet/in.h>
+#include <array>
+#include <atomic>
+#include <span>
+#include <cstddef>
 
 namespace Scalpel::Net {
     enum class Priority : uint8_t {
@@ -47,9 +51,10 @@ namespace Scalpel::Net {
         uint16_t urg_ptr;
     };
 #pragma pack(pop)
+static_assert(Capacity > 1, "SpscRingBuffer Capacity must be greater than 1");
 
     // Zero-copy SPSC lock-free ring buffer (cross-core data from data plane to control plane, no mutex)
-    template<typename T, size_t Capacity = 1024>
+    template<typename T, size_t Capacity = 1024> // Effective usable capacity is Capacity - 1 because one slot is reserved to distinguish full from empty.
     class SpscRingBuffer {
         std::array<T, Capacity> buffer{};
         alignas(64) std::atomic<size_t> head{0};
@@ -75,8 +80,8 @@ namespace Scalpel::Net {
         }
     };
 
-    // Phase 2.6: Unified zero-copy packet context parser
-    // Eliminate redundant scalar offset calculations in downstream modules (NAT, DNS, QoS, HeuristicProcessor)
+    // ParsedPacket provides a lightweight parsed view over an Ethernet frame.
+    // It exposes Ethernet/IPv4/L4 pointers and offsets without copying packet data.
     struct ParsedPacket {
         std::span<uint8_t> raw_span;
         Net::EthernetHeader* eth = nullptr;
@@ -87,10 +92,15 @@ namespace Scalpel::Net {
         size_t l4_offset = 0;
         void* l4_header = nullptr;
 
-        Net::UDPHeader* udp() const { return (l4_protocol == 17) ? reinterpret_cast<Net::UDPHeader*>(l4_header) : nullptr; }
-        Net::TCPHeader* tcp() const { return (l4_protocol == 6) ? reinterpret_cast<Net::TCPHeader*>(l4_header) : nullptr; }
+        Net::UDPHeader* udp() const {
+            return (l4_protocol == 17) ? static_cast<Net::UDPHeader*>(l4_header) : nullptr;
+        }
+
+        Net::TCPHeader* tcp() const {
+            return (l4_protocol == 6) ? static_cast<Net::TCPHeader*>(l4_header) : nullptr;
+        }
         
-        bool is_valid_ipv4() const { return ipv4 != nullptr; }
+        bool is_valid_ipv4() const { return ipv4 != nullptr && ihl >= sizeof(Net::IPv4Header); }
 
         static ParsedPacket parse(std::span<uint8_t> span) {
             ParsedPacket p;
@@ -100,6 +110,14 @@ namespace Scalpel::Net {
             p.eth = reinterpret_cast<Net::EthernetHeader*>(span.data());
             if (ntohs(p.eth->proto) != 0x0800) return p; // Currently track IPv4 only
             
+            size_t ip_total_len = ntohs(p.ipv4->tot_len);
+            if (ip_total_len < p.ihl) {
+                p.ipv4 = nullptr;
+                return p;
+            }
+            if (span.size() < sizeof(Net::EthernetHeader) + ip_total_len) {
+                return p;
+            }
             if (span.size() < sizeof(Net::EthernetHeader) + sizeof(Net::IPv4Header)) return p;
             p.ipv4 = reinterpret_cast<Net::IPv4Header*>(span.data() + sizeof(Net::EthernetHeader));
             
