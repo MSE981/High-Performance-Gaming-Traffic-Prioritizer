@@ -1,7 +1,9 @@
-﻿#pragma once
+#pragma once
 #include <string>
+#include <vector>
 #include <fstream>
 #include <sstream>
+#include <print>
 #include <sys/ioctl.h>
 #include <net/if.h>
 #include <arpa/inet.h>
@@ -23,7 +25,7 @@ namespace Scalpel::Utils {
             struct ifreq ifr {};
             ifr.ifr_addr.sa_family = AF_INET;
 
-            // Copy interface name and ensure null termination.
+            // GNU++23 defensive: eliminate GCC-14 string truncation warning, ensure null termination
             strncpy(ifr.ifr_name, iface.c_str(), IFNAMSIZ - 1);
             ifr.ifr_name[IFNAMSIZ - 1] = '\0';
 
@@ -31,13 +33,7 @@ namespace Scalpel::Utils {
                 close(fd);
                 return "127.0.0.1";
             }
-            char ipbuf[INET_ADDRSTRLEN]{};
-            auto* sin = reinterpret_cast<struct sockaddr_in*>(&ifr.ifr_addr);
-            if (inet_ntop(AF_INET, &sin->sin_addr, ipbuf, sizeof(ipbuf)) == nullptr) {
-                close(fd);
-                return "";
-            }
-            std::string ip = ipbuf;
+            std::string ip = inet_ntoa(((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr);
             close(fd);
             return ip;
         }
@@ -68,7 +64,9 @@ namespace Scalpel::Utils {
             std::string line;
             std::getline(arp_file, line); // Skip header line
             while (std::getline(arp_file, line)) {
-                if (!(ss >> ip >> hw_type >> flags >> mac >> mask >> dev)) continue;
+                std::stringstream ss(line);
+                std::string ip, hw_type, flags, mac, mask, dev;
+                ss >> ip >> hw_type >> flags >> mac >> mask >> dev;
                 if (ip == target_ip) return mac;
             }
             return "";
@@ -80,19 +78,17 @@ namespace Scalpel::Utils {
 
             struct sockaddr_in addr {};
             addr.sin_family = AF_INET;
-            addr.sin_port = htons(33434); // Use a high UDP destination port to trigger neighbour resolution via the kernel networking stack.
-            if (inet_pton(AF_INET, target_ip.c_str(), &addr.sin_addr) != 1) {
-                close(fd);
-                return;
-            }
+            addr.sin_port = htons(33434); // 使用 traceroute 的默认高端口
+            inet_pton(AF_INET, target_ip.c_str(), &addr.sin_addr);
 
-            // Trigger ARP/neighbour resolution by sending a minimal UDP datagram.
+            // 发送 1 字节的空 UDP 数据报。
+            // Linux 内核协议栈发现目标 MAC 未知时，会自动在底层广播 ARP 请求！0 进程开销！
             char dummy = 0;
-            (void)sendto(fd, &dummy, 1, 0, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
+            sendto(fd, &dummy, 1, 0, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
             close(fd);
         }
 
-        // Disable selected NIC offload features via SIOCETHTOOL ioctl.
+        // 5. 纯 C++ 实现的网卡硬件卸载特性修改 (替代违规的 system("ethtool"))
         static bool disable_hardware_offloads(const std::string& iface) {
             int fd = socket(AF_INET, SOCK_DGRAM, 0);
             if (fd < 0) return false;
@@ -104,7 +100,7 @@ namespace Scalpel::Utils {
             struct ethtool_value eval {};
             bool success = true;
 
-            // Disable selected NIC offload features via SIOCETHTOOL.
+            // 通过底层的 SIOCETHTOOL ioctl 指令，直接向网卡驱动下发硬件寄存器修改命令
             auto set_offload = [&](uint32_t cmd) {
                 eval.cmd = cmd;
                 eval.data = 0; // 0 代表 Disable
