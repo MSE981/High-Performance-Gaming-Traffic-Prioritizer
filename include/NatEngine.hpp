@@ -8,8 +8,8 @@
 #include "Processor.hpp"
 
 namespace Scalpel::Logic {
-    // Incrementally update an existing checksum after replacing a 16-bit or 32-bit field.
-    // Used for in-place NAT address/port rewriting without full checksum recomputation.
+    // Incremental checksum update (RFC 1624): HC' = ~(~HC + ~m + m')
+    // Essential algorithm for ultra-fast IP/port conversion in user space, avoids full recomputation overhead
     static inline void update_checksum_16(uint16_t& check, uint16_t old_val, uint16_t new_val) {
         uint32_t sum = (~ntohs(check) & 0xFFFF) + (~ntohs(old_val) & 0xFFFF) + ntohs(new_val);
         sum = (sum & 0xFFFF) + (sum >> 16);
@@ -21,7 +21,7 @@ namespace Scalpel::Logic {
         update_checksum_16(check, old_val >> 16, new_val >> 16);
     }
 
-    // User-space NAT engine performing in-place packet address/port rewriting.
+    // True zero-copy user-space NAT engine
     class NatEngine {
         struct NatSession {
             FlowKey internal_key; // saddr=LAN_IP, sport=LAN_Port, daddr=WAN_DEST, dport=WAN_DEST_PORT
@@ -50,8 +50,8 @@ namespace Scalpel::Logic {
         alignas(64) std::atomic<size_t> upnp_cursor{0};
 
         uint16_t port_cursor = 10000;
-        std::atomic<uint32_t> wan_ip{0};
-        std::atomic<uint32_t> current_tick{0};
+        uint32_t wan_ip = 0;
+        uint32_t current_tick = 0;
 
         uint32_t hash_flow(const FlowKey& k) const {
             uint32_t h = 2166136261U;
@@ -93,7 +93,7 @@ namespace Scalpel::Logic {
         }
 
         // Low-frequency tick driver (interfaces watchdog, decouples high-frequency syscalls)
-        void tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
+        void tick() { current_tick++; }
 
         // Outbound (WAN_TX): LAN -> WAN, replace source IP/port (SNAT)
         bool process_outbound(Net::ParsedPacket& pkt) {
@@ -118,16 +118,11 @@ namespace Scalpel::Logic {
             }
 
             // UPnP fast-path outbound: skip entirely when no rules have ever been added
-            if (upnp_cursor.load(std::memory_order_relaxed) > 0) {
-                for (auto& rule : upnp_rules) {
-                     ...
-                 }
-            }
+            if (upnp_cursor.load(std::memory_order_relaxed) > 0) for (auto& rule : upnp_rules) {
                 if (rule.active.load(std::memory_order_acquire)) {
                     if (rule.protocol == ip->protocol && rule.internal_ip == ip->saddr && rule.internal_port == *sport_ptr) {
                         // Update IP checksum for saddr change
                         update_checksum_32(ip->check, ip->saddr, wan_ip);
-                        update_checksum_16(*check_ptr, *sport_ptr, rule.external_port);
                         // Update transport checksum for saddr change (if applicable)
                         if (check_ptr && *check_ptr != 0) {
                             update_checksum_32(*check_ptr, ip->saddr, wan_ip);
@@ -148,28 +143,21 @@ namespace Scalpel::Logic {
 
             for (size_t i = 0; i < 32; ++i) { // Cap linear probe to 32 slots to avoid livelock
                 size_t idx = (h + i) % MAX_SESSIONS;
-                uint32_t now = current_tick.load(std::memory_order_relaxed);
-                if (!sessions[idx].active || (now - sessions[idx].last_active_tick > 300)) {
+                if (!sessions[idx].active || (current_tick - sessions[idx].last_active_tick > 300)) {
                     // Evict stale session, reclaim port
-                    if (sessions[idx].active) {
-                        auto old_port = ntohs(sessions[idx].external_port);
-                        if (port_to_index[old_port] == static_cast<int32_t>(idx)) {
-                            port_to_index[old_port] = -1;
-                        }
-                    }
+                    if (sessions[idx].active) port_to_index[ntohs(sessions[idx].external_port)] = -1;
+                    
                     sessions[idx].internal_key = key;
-                    while (port_to_index[port_cursor] != -1) {
-                        ++port_cursor;
-                        if (port_cursor > 60000) port_cursor = 10000;
-                    }
+                    sessions[idx].external_port = htons(port_cursor++);
+                    if (port_cursor > 60000) port_cursor = 10000;
                     sessions[idx].active = true;
-                    sessions[idx].last_active_tick = current_tick.load(std::memory_order_relaxed);
+                    sessions[idx].last_active_tick = current_tick;
                     ext_port = sessions[idx].external_port;
                     port_to_index[ntohs(ext_port)] = idx;
                     break;
                 }
                 if (sessions[idx].internal_key == key) {
-                    sessions[idx].last_active_tick = current_tick.load(std::memory_order_relaxed);
+                    sessions[idx].last_active_tick = current_tick;
                     ext_port = sessions[idx].external_port;
                     break;
                 }
@@ -213,16 +201,11 @@ namespace Scalpel::Logic {
             }
 
             // UPnP fast-path inbound: skip entirely when no rules have ever been added
-            if (upnp_cursor.load(std::memory_order_relaxed) > 0) {
-                for (auto& rule : upnp_rules) {
-                     ...
-                 }
-            }
+            if (upnp_cursor.load(std::memory_order_relaxed) > 0) for (auto& rule : upnp_rules) {
                 if (rule.active.load(std::memory_order_acquire)) {
                     if (rule.protocol == ip->protocol && rule.external_port == *dport_ptr) {
                         // Update IP checksum for daddr change
                         update_checksum_32(ip->check, ip->daddr, rule.internal_ip);
-                        update_checksum_16(*check_ptr, *dport_ptr, rule.internal_port);
                         // Update transport checksum for daddr change (if applicable)
                         if (check_ptr && *check_ptr != 0) {
                             update_checksum_32(*check_ptr, ip->daddr, rule.internal_ip);
@@ -237,15 +220,14 @@ namespace Scalpel::Logic {
 
             // Standard DNAT Processing
             // O(1) direct-index reverse lookup
-            uint32_t now = current_tick.load(std::memory_order_relaxed);
-            if (idx == -1 || !sessions[idx].active ||
-                (now - sessions[idx].last_active_tick > 300) ||
-                sessions[idx].internal_key.daddr != ip->saddr ||
+            int32_t idx = port_to_index[ntohs(*dport_ptr)];
+            if (idx == -1 || !sessions[idx].active || 
+                sessions[idx].internal_key.daddr != ip->saddr || 
                 sessions[idx].internal_key.dport != sport) {
-                return false;
+                return false; 
             }
 
-            sessions[idx].last_active_tick = current_tick.load(std::memory_order_relaxed);
+            sessions[idx].last_active_tick = current_tick;
             uint32_t internal_ip = sessions[idx].internal_key.saddr;
             uint16_t internal_port = sessions[idx].internal_key.sport;
 
@@ -263,4 +245,5 @@ namespace Scalpel::Logic {
         }
     };
 }
+
 
