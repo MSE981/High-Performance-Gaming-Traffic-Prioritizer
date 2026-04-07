@@ -1558,7 +1558,8 @@ Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("High-Performance Gaming Traffic Prioritizer");
     setStyleSheet(DARK_STYLESHEET);
     setup_ui();
-    data_timer_id_ = startTimer(33, Qt::PreciseTimer);
+    ui_timer_id_   = startTimer(16, Qt::PreciseTimer); // 60Hz: spring, badge, selftest overlay
+    plot_timer_id_ = startTimer(40, Qt::PreciseTimer); // 25Hz: plots, header rates, page data
 }
 
 Dashboard::~Dashboard() {
@@ -1891,31 +1892,49 @@ void Dashboard::resizeEvent(QResizeEvent* event) {
 }
 
 void Dashboard::timerEvent(QTimerEvent* event) {
-    if (event->timerId() != data_timer_id_) return;
+    const int tid = event->timerId();
 
-    // 30Hz unified tick: spring animation + data refresh
-    data_tick_++;
+    // ── 60Hz UI tick: spring animation, selftest overlay, notification badge ──
+    if (tid == ui_timer_id_) {
+        ui_tick_++;
 
-    // Advance self-test progress bar (clamps at max; hidden by on_selftest_done)
-    if (testing_overlay_ && testing_overlay_->isVisible()) {
-        if (selftest_tick_ < SELFTEST_TICKS)
-            testing_progress_->setValue(++selftest_tick_);
-        return; // skip data refresh while self-test is running
+        // Advance self-test progress bar; block all other UI work until done
+        if (testing_overlay_ && testing_overlay_->isVisible()) {
+            if (selftest_tick_ < SELFTEST_TICKS)
+                testing_progress_->setValue(++selftest_tick_);
+            return;
+        }
+
+        // Spring physics for notification panel (no-op when settled)
+        if (!notif_panel_->is_settled()) {
+            notif_panel_->advance_spring();
+            notif_panel_->update();
+        }
+
+        // Notification badge
+        int unread = notif_panel_->unread_count();
+        if (unread > 0) {
+            hdr_badge_->setText(unread > 99 ? "99+" : QString::number(unread));
+            hdr_badge_->show();
+        } else {
+            hdr_badge_->hide();
+        }
+        return;
     }
 
-    // Advance notification panel spring physics every frame (no-op when settled)
-    if (!notif_panel_->is_settled()) {
-        notif_panel_->advance_spring();
-        notif_panel_->update();
-    }
+    // ── 25Hz data tick: header rates, page plots, counter snapshot ──
+    if (tid != plot_timer_id_) return;
+    if (testing_overlay_ && testing_overlay_->isVisible()) return;
+
+    plot_tick_++;
 
     auto& tel = Telemetry::instance();
 
-    // Bandwidth: delta over 33ms tick, scaled to Mbps (×30 = per-second rate)
+    // Bandwidth: delta over 40ms tick, scaled to Mbps (×25 = per-second rate)
     uint64_t cur_b2 = tel.core_metrics[2].bytes.load(std::memory_order_relaxed);
     uint64_t cur_b3 = tel.core_metrics[3].bytes.load(std::memory_order_relaxed);
-    double dl = (cur_b2 - last_bytes[2]) * 8.0 * 30.0 / 1e6;
-    double ul = (cur_b3 - last_bytes[3]) * 8.0 * 30.0 / 1e6;
+    double dl = (cur_b2 - last_bytes[2]) * 8.0 * 25.0 / 1e6;
+    double ul = (cur_b3 - last_bytes[3]) * 8.0 * 25.0 / 1e6;
 
     // CPU temperature
     double t = tel.cpu_temp_celsius.load(std::memory_order_relaxed);
@@ -1926,19 +1945,10 @@ void Dashboard::timerEvent(QTimerEvent* event) {
         .arg(ul, 0, 'f', 1)
         .arg(t > 0 ? t : 0.0, 0, 'f', 0));
 
-    // Unread badge
-    int unread = notif_panel_->unread_count();
-    if (unread > 0) {
-        hdr_badge_->setText(unread > 99 ? "99+" : QString::number(unread));
-        hdr_badge_->show();
-    } else {
-        hdr_badge_->hide();
-    }
-
-    // Refresh overview plots if visible; update system info every 30 ticks (1s)
+    // Refresh overview plots if visible; update system info every 25 ticks (1s)
     if (page_stack->currentIndex() == 0)
         page_overview->refresh(tel, last_pkts, last_bytes);
-    if (data_tick_ % 30 == 0)
+    if (plot_tick_ % 25 == 0)
         page_overview->refresh_info();
 
     // Sync service page status indicators if visible
