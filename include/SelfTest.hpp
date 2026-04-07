@@ -64,6 +64,8 @@ public:
     using ResultCallback = std::function<void(const Report&)>;
     void registerCallback(ResultCallback cb) { callback_ = std::move(cb); }
 
+    ~SelfTest() { if (uthread_.joinable()) uthread_.join(); }
+
     // §3.3.1: Spawn worker thread
     void start() { uthread_ = std::thread(&SelfTest::run, this); }
 

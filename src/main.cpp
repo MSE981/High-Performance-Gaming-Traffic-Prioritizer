@@ -59,48 +59,46 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // 4. Startup self-test (§3.3.1/3.3.2): runs on a worker thread, main thread joins.
-    // Executes before app.start() so data-plane Cores 2/3 are not yet running.
-    // Uses independent engine instances — no interference with live routing pipeline.
-    {
-        Scalpel::SelfTest::SelfTest selftest;
-
-        // §2.2.1: register std::function functor as completion callback
-        // §2.2.3: callback receives Report struct (not multi-arg)
-        selftest.registerCallback([](const Scalpel::SelfTest::Report& r) {
-            Scalpel::SelfTest::LAST_REPORT = r;   // store for GUI notification panel
-            std::println("\n╔══ 启动自检结果 ({}/{} 项通过) ══╗", r.passed, r.count);
-            for (size_t i = 0; i < r.count; ++i) {
-                std::println("  [{}] {}  —  {}",
-                    r.cases[i].pass ? "PASS" : "FAIL",
-                    r.cases[i].name.data(),
-                    r.cases[i].detail.data());
-            }
-            std::println("╚══════════════════════════════╝");
-            if (r.passed < r.count)
-                std::println(stderr, "[Warning] {} 项自检失败，请检查硬件或配置",
-                    r.count - r.passed);
-        });
-
-        selftest.start(); // §3.3.1: spawn worker thread
-        selftest.join();  // §3.3.2: block until worker + callback complete
-    }
-
     int ret = 0;
     try {
         if (Scalpel::Config::global_state.enable_gui) {
-            // Phase 3: Start Qt GUI mode
-            Scalpel::System::Optimizer::set_current_thread_affinity(0); // Core 0: UI/Graphics
+            // Core 0: UI/Graphics — must be set before QApplication construction
+            Scalpel::System::Optimizer::set_current_thread_affinity(0);
 
             QApplication qapp(argc, argv);
             Scalpel::GUI::Dashboard gui;
-
-            app.start(); // Async start underlying network engine
             gui.showFullScreen();
 
-            // Watchdog thread: when underlying engine receives Ctrl+C (stop_promise set),
-            // safely notify Qt to exit GUI. Fixes bug where signal_handler alone couldn't interrupt
-            // Qt exec(), causing terminal to hang completely!
+            // Async self-test: GUI shows immediately with overlay; callback fires on Qt main
+            // thread after test completes so app.start() is called only once path is clear.
+            // Prevents a burst of queued packets from flooding the engine on first tick.
+            // selftest outlives qapp.exec() so the destructor join() is a no-op (thread done).
+            Scalpel::SelfTest::SelfTest selftest;
+            selftest.registerCallback([&app](const Scalpel::SelfTest::Report& r) {
+                Scalpel::SelfTest::LAST_REPORT = r;
+                std::println("\n╔══ 启动自检结果 ({}/{} 项通过) ══╗", r.passed, r.count);
+                for (size_t i = 0; i < r.count; ++i) {
+                    std::println("  [{}] {}  —  {}",
+                        r.cases[i].pass ? "PASS" : "FAIL",
+                        r.cases[i].name.data(),
+                        r.cases[i].detail.data());
+                }
+                std::println("╚══════════════════════════════╝");
+                if (r.passed < r.count)
+                    std::println(stderr, "[Warning] {} 项自检失败，请检查硬件或配置",
+                        r.count - r.passed);
+
+                // Post to Qt main thread (Core 0) — never call Qt from worker thread directly
+                QMetaObject::invokeMethod(QCoreApplication::instance(), [&app, r]() {
+                    app.start();
+                    Scalpel::GUI::Dashboard::on_selftest_done(r);
+                }, Qt::QueuedConnection);
+            });
+            selftest.start(); // worker thread launched; event loop handles callback
+
+            // Watchdog thread: when underlying engine receives Ctrl+C (stop set),
+            // safely notify Qt to exit GUI. Fixes bug where signal_handler alone couldn't
+            // interrupt Qt exec(), causing terminal to hang completely.
             std::thread([&app, &qapp]() {
                 Scalpel::System::Optimizer::set_current_thread_affinity(1); // Core 1: Watchdog
                 app.wait_for_shutdown();
@@ -109,13 +107,31 @@ int main(int argc, char* argv[]) {
 
             ret = qapp.exec(); // Block on main event loop
 
-            // If user clicked window X button to close GUI, no UNIX signal generated,
-            // must notify underlying engine to stop
+            // If user closed the window (no UNIX signal), notify underlying engine to stop
             if (!signal_received.exchange(true)) {
                 app.stop();
             }
         } else {
-            // Pure CLI mode, block waiting for exit
+            // Pure CLI mode — run selftest synchronously then start engine
+            {
+                Scalpel::SelfTest::SelfTest selftest;
+                selftest.registerCallback([](const Scalpel::SelfTest::Report& r) {
+                    Scalpel::SelfTest::LAST_REPORT = r;
+                    std::println("\n╔══ 启动自检结果 ({}/{} 项通过) ══╗", r.passed, r.count);
+                    for (size_t i = 0; i < r.count; ++i) {
+                        std::println("  [{}] {}  —  {}",
+                            r.cases[i].pass ? "PASS" : "FAIL",
+                            r.cases[i].name.data(),
+                            r.cases[i].detail.data());
+                    }
+                    std::println("╚══════════════════════════════╝");
+                    if (r.passed < r.count)
+                        std::println(stderr, "[Warning] {} 项自检失败，请检查硬件或配置",
+                            r.count - r.passed);
+                });
+                selftest.start();
+                selftest.join();
+            }
             app.start();
             app.wait_for_shutdown();
         }

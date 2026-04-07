@@ -1573,6 +1573,33 @@ void Dashboard::post_notification(const QString& title, const QString& body) {
     }, Qt::QueuedConnection);
 }
 
+void Dashboard::on_selftest_done(const SelfTest::Report& r) {
+    if (!instance_) return;
+    // Hide overlay
+    if (instance_->testing_overlay_)
+        instance_->testing_overlay_->hide();
+
+    // Post self-test results to notification panel
+    size_t failures = r.count - r.passed;
+    if (failures == 0) {
+        instance_->notif_panel_->push_notification(
+            "Self-Test Passed",
+            QString("All %1 checks passed. Data plane ready.").arg(r.count));
+    } else {
+        instance_->notif_panel_->push_notification(
+            QString("Self-Test: %1 failure(s)").arg(failures),
+            QString("%1/%2 checks passed.").arg(r.passed).arg(r.count));
+        for (size_t i = 0; i < r.count; ++i) {
+            if (!r.cases[i].pass)
+                instance_->notif_panel_->push_notification(
+                    QString("[FAIL] %1").arg(r.cases[i].name.data()),
+                    r.cases[i].detail.data());
+        }
+    }
+    instance_->notif_panel_->push_notification(
+        "Engine Ready", "Data plane Cores 2/3 attached. Forwarding engine running.");
+}
+
 void Dashboard::setup_ui() {
     QWidget* central = new QWidget(this);
     setCentralWidget(central);
@@ -1667,27 +1694,35 @@ void Dashboard::setup_ui() {
         }
     }
 
-    // Populate from startup self-test results
-    const auto& rep = SelfTest::LAST_REPORT;
-    size_t failures = rep.count - rep.passed;
-    if (failures == 0) {
-        notif_panel_->push_notification(
-            "Self-Test Passed",
-            QString("All %1 checks passed. Data plane ready.").arg(rep.count));
-    } else {
-        notif_panel_->push_notification(
-            QString("Self-Test: %1 failure(s)").arg(failures),
-            QString("%1/%2 checks passed. See details below.").arg(rep.passed).arg(rep.count));
-    }
-    for (size_t i = 0; i < rep.count; ++i) {
-        const auto& c = rep.cases[i];
-        if (!c.pass) {
-            notif_panel_->push_notification(
-                QString("[FAIL] %1").arg(c.name.data()),
-                c.detail.data());
-        }
-    }
-    notif_panel_->push_notification("Engine Ready", "Data plane Cores 2/3 attached. Forwarding engine running.");
+    // Self-test results posted asynchronously via on_selftest_done() after worker completes.
+
+    // Self-test overlay — covers content area until on_selftest_done() is called
+    auto* cw = centralWidget();
+    testing_overlay_ = new QWidget(cw);
+    testing_overlay_->setStyleSheet("background-color: rgba(10,10,20,210);");
+    auto* ov_lay = new QVBoxLayout(testing_overlay_);
+    ov_lay->setAlignment(Qt::AlignCenter);
+    ov_lay->setSpacing(20);
+
+    auto* ov_label = new QLabel("System Self-Test Running...");
+    ov_label->setStyleSheet("color: #c0c8e0; font-size: 18px; background: transparent;");
+    ov_label->setAlignment(Qt::AlignCenter);
+
+    testing_progress_ = new QProgressBar();
+    testing_progress_->setRange(0, SELFTEST_TICKS);
+    testing_progress_->setValue(0);
+    testing_progress_->setFixedWidth(320);
+    testing_progress_->setFixedHeight(10);
+    testing_progress_->setTextVisible(false);
+    testing_progress_->setStyleSheet(
+        "QProgressBar { background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 5px; }"
+        "QProgressBar::chunk { background: #0077ff; border-radius: 4px; }");
+
+    ov_lay->addWidget(ov_label);
+    ov_lay->addWidget(testing_progress_, 0, Qt::AlignHCenter);
+    testing_overlay_->setGeometry(cw->rect());
+    testing_overlay_->raise();
+    testing_overlay_->show();
 }
 
 // Tab button with independently-sized icon and text label.
@@ -1844,6 +1879,8 @@ bool Dashboard::eventFilter(QObject* obj, QEvent* event) {
 
 void Dashboard::resizeEvent(QResizeEvent* event) {
     QMainWindow::resizeEvent(event);
+    if (testing_overlay_ && testing_overlay_->isVisible())
+        testing_overlay_->setGeometry(centralWidget()->rect());
     if (notif_panel_) {
         auto* cw = centralWidget();
         notif_panel_->setFixedSize(cw->width(), cw->height());
@@ -1858,6 +1895,13 @@ void Dashboard::timerEvent(QTimerEvent* event) {
 
     // 30Hz unified tick: spring animation + data refresh
     data_tick_++;
+
+    // Advance self-test progress bar (clamps at max; hidden by on_selftest_done)
+    if (testing_overlay_ && testing_overlay_->isVisible()) {
+        if (selftest_tick_ < SELFTEST_TICKS)
+            testing_progress_->setValue(++selftest_tick_);
+        return; // skip data refresh while self-test is running
+    }
 
     // Advance notification panel spring physics every frame (no-op when settled)
     if (!notif_panel_->is_settled()) {

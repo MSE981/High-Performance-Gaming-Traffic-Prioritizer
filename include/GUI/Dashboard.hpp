@@ -20,6 +20,7 @@
 #include <QComboBox>
 #include <QSocketNotifier>
 #include <QSlider>
+#include <QProgressBar>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QValidator>
@@ -290,6 +291,8 @@ public:
     ~Dashboard();
     // Thread-safe: callable from any thread (engine cores, network threads)
     static void post_notification(const QString& title, const QString& body);
+    // Called on Qt main thread after async self-test completes
+    static void on_selftest_done(const SelfTest::Report& r);
 protected:
     void timerEvent(QTimerEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
@@ -321,8 +324,14 @@ private:
     // Bottom tab bar — 5 tabs
     std::array<QAbstractButton*, 5> tab_btns_{};
 
-    // 60Hz unified render + data refresh timer
+    // 30Hz unified render + data refresh timer
     int data_timer_id_ = -1;
+
+    // Self-test overlay (visible until on_selftest_done is called)
+    QWidget*      testing_overlay_  = nullptr;
+    QProgressBar* testing_progress_ = nullptr;
+    int           selftest_tick_    = 0;
+    static constexpr int SELFTEST_TICKS = 150; // 5s × 30Hz
     std::array<uint64_t, 4> last_pkts  = {};
     std::array<uint64_t, 4> last_bytes = {};
     uint64_t data_tick_ = 0;
