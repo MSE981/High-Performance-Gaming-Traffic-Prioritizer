@@ -1977,13 +1977,21 @@ void Dashboard::timerEvent(QTimerEvent* event) {
 
     plot_tick_++;
 
+    // Measure actual elapsed time so rate is correct even if timer fires late
+    auto now = std::chrono::steady_clock::now();
+    double elapsed = std::chrono::duration<double>(now - plot_last_tick_).count();
+    plot_last_tick_ = now;
+    // Clamp to [20ms, 200ms]: guards divide-by-zero on first tick and huge
+    // spikes if the process was suspended (e.g. SIGSTOP during debug)
+    elapsed = std::clamp(elapsed, 0.020, 0.200);
+
     auto& tel = Telemetry::instance();
 
-    // Bandwidth: delta over 40ms tick, scaled to Mbps (×25 = per-second rate)
+    // Bandwidth: byte delta / actual elapsed seconds → Mbps
     uint64_t cur_b2 = tel.core_metrics[2].bytes.load(std::memory_order_relaxed);
     uint64_t cur_b3 = tel.core_metrics[3].bytes.load(std::memory_order_relaxed);
-    double dl = (cur_b2 - last_bytes[2]) * 8.0 * 25.0 / 1e6;
-    double ul = (cur_b3 - last_bytes[3]) * 8.0 * 25.0 / 1e6;
+    double dl = (cur_b2 - last_bytes[2]) * 8.0 / elapsed / 1e6;
+    double ul = (cur_b3 - last_bytes[3]) * 8.0 / elapsed / 1e6;
 
     // CPU temperature
     double t = tel.cpu_temp_celsius.load(std::memory_order_relaxed);

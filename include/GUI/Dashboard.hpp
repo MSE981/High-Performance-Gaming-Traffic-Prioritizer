@@ -30,6 +30,7 @@
 #include <QTime>
 #include <QMenu>
 #include <array>
+#include <chrono>
 #include <string>
 #include <vector>
 #include "Telemetry.hpp"
@@ -340,6 +341,7 @@ private:
     std::array<uint64_t, 4> last_bytes = {};
     uint64_t ui_tick_   = 0;
     uint64_t plot_tick_ = 0;
+    std::chrono::steady_clock::time_point plot_last_tick_ = std::chrono::steady_clock::now();
 
 private slots:
     void on_tab_clicked(int page_index);
