@@ -18,8 +18,9 @@
 namespace Scalpel::Logic {
 
     class UpnpEngine {
-        std::jthread ssdp_thread;
-        std::jthread soap_thread;
+        std::thread ssdp_thread;
+        std::thread soap_thread;
+        std::atomic<bool> running{false};
         std::shared_ptr<NatEngine> nat_engine;
         std::string router_ip_str;
 
@@ -27,15 +28,20 @@ namespace Scalpel::Logic {
         UpnpEngine(std::shared_ptr<NatEngine> nat, const std::string& ip)
             : nat_engine(nat), router_ip_str(ip) {
 
-            ssdp_thread = std::jthread([this](std::stop_token st) { run_ssdp_server(st); });
-            soap_thread = std::jthread([this](std::stop_token st) { run_soap_server(st); });
+            running.store(true, std::memory_order_relaxed);
+            ssdp_thread = std::thread([this]() { run_ssdp_server(); });
+            soap_thread = std::thread([this]() { run_soap_server(); });
             std::println("[UPnP Engine] Startup complete. Listening for LAN SSDP broadcasts.");
         }
 
-        ~UpnpEngine() = default; // jthread destructor calls request_stop() + join() automatically
+        ~UpnpEngine() {
+            running.store(false, std::memory_order_relaxed);
+            if (ssdp_thread.joinable()) ssdp_thread.join();
+            if (soap_thread.joinable()) soap_thread.join();
+        }
 
     private:
-        void run_ssdp_server(std::stop_token st) {
+        void run_ssdp_server() {
             System::Optimizer::set_current_thread_affinity(1);
             int fd = socket(AF_INET, SOCK_DGRAM, 0);
             if (fd < 0) return;
@@ -60,7 +66,7 @@ namespace Scalpel::Logic {
             setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
             char buf[1024];
-            while (!st.stop_requested()) {
+            while (running.load(std::memory_order_relaxed)) {
                 sockaddr_in client{};
                 socklen_t clen = sizeof(client);
                 int n = recvfrom(fd, buf, sizeof(buf)-1, 0, (sockaddr*)&client, &clen);
@@ -89,7 +95,7 @@ namespace Scalpel::Logic {
             close(fd);
         }
 
-        void run_soap_server(std::stop_token st) {
+        void run_soap_server() {
             System::Optimizer::set_current_thread_affinity(1);
             int fd = socket(AF_INET, SOCK_STREAM, 0);
             if (fd < 0) return;
@@ -108,7 +114,7 @@ namespace Scalpel::Logic {
             tv.tv_sec = 1; tv.tv_usec = 0;
             setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-            while (!st.stop_requested()) {
+            while (running.load(std::memory_order_relaxed)) {
                 sockaddr_in client{};
                 socklen_t clen = sizeof(client);
                 int cfd = accept(fd, (sockaddr*)&client, &clen);

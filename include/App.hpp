@@ -1,6 +1,5 @@
 #pragma once
 #include <thread>
-#include <stop_token>
 #include <atomic>
 #include <memory>
 #include <expected>
@@ -392,9 +391,11 @@ namespace Scalpel {
         std::shared_ptr<QoSConfig> device_shaper_dl;
         std::shared_ptr<QoSConfig> device_shaper_ul;
 
-        std::jthread worker_downstream;
-        std::jthread worker_upstream;
-        std::jthread watchdog;
+        std::thread worker_downstream;
+        std::thread worker_upstream;
+        std::thread watchdog;
+        std::atomic<bool> running_workers{false};
+        std::atomic<bool> running_watchdog{false};
         std::promise<void> shutdown_promise;
         std::future<void> shutdown_future;
 
@@ -441,7 +442,8 @@ namespace Scalpel {
             Telemetry::instance().bridge_mode.store(!Config::ENABLE_ACCELERATION, std::memory_order_relaxed);
             Scalpel::System::Optimizer::lock_cpu_frequency();
 
-            watchdog = std::jthread([this](std::stop_token st) { watchdog_loop(st); });
+            running_watchdog.store(true, std::memory_order_relaxed);
+            watchdog = std::thread([this]() { watchdog_loop(); });
 
             Utils::Network::force_arp_resolution(Utils::Network::get_gateway_ip());
 
@@ -464,17 +466,28 @@ namespace Scalpel {
             shaper_ul = std::make_shared<Traffic::Shaper>(base_ul_mbps);
 
             uint32_t gw_ip = Config::parse_ip_str(Config::ROUTER_IP);
-            worker_downstream = std::jthread(
-                [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, PacketWorkerConfig cfg) {
-                    worker_event_loop(std::move(st), std::move(iface), std::move(cfg));
+            running_workers.store(true, std::memory_order_relaxed);
+            worker_downstream = std::thread(
+                [this](std::unique_ptr<Engine::RawSocketManager> iface, PacketWorkerConfig cfg) {
+                    worker_event_loop(std::move(iface), std::move(cfg));
                 }, std::move(iface_wan), PacketWorkerConfig{fd_lan, 2, shaper_dl, nat_engine, dns_engine, qos_config, device_shaper_dl, dhcp_engine, firewall_engine, gw_ip});
 
-            worker_upstream = std::jthread(
-                [this](std::stop_token st, std::unique_ptr<Engine::RawSocketManager> iface, PacketWorkerConfig cfg) {
-                    worker_event_loop(std::move(st), std::move(iface), std::move(cfg));
+            worker_upstream = std::thread(
+                [this](std::unique_ptr<Engine::RawSocketManager> iface, PacketWorkerConfig cfg) {
+                    worker_event_loop(std::move(iface), std::move(cfg));
                 }, std::move(iface_lan), PacketWorkerConfig{fd_wan, 3, shaper_ul, nat_engine, dns_engine, qos_config, device_shaper_ul, dhcp_engine, firewall_engine, gw_ip});
 
             std::println("[App] Data plane and control plane started.");
+        }
+
+        ~App() {
+            // Stop data-plane workers first (Cores 2/3), then control-plane watchdog (Core 1).
+            // Workers must stop before watchdog so the watchdog does not read stale shaper state.
+            running_workers.store(false, std::memory_order_relaxed);
+            if (worker_downstream.joinable()) worker_downstream.join();
+            if (worker_upstream.joinable())   worker_upstream.join();
+            running_watchdog.store(false, std::memory_order_relaxed);
+            if (watchdog.joinable()) watchdog.join();
         }
 
         void stop() { shutdown_promise.set_value(); }
@@ -485,7 +498,7 @@ namespace Scalpel {
         }
 
     private:
-        void worker_event_loop(std::stop_token st, std::unique_ptr<Engine::RawSocketManager> rx_mgr, PacketWorkerConfig cfg) {
+        void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr, PacketWorkerConfig cfg) {
             Scalpel::System::Optimizer::set_current_thread_affinity(cfg.core_id);
             Scalpel::System::Optimizer::set_realtime_priority();
             std::println("[App] Core {} pipeline mounted and ready.", cfg.core_id);
@@ -493,7 +506,7 @@ namespace Scalpel {
             int rx_fd = rx_mgr->get_fd();
             PacketConsumer consumer(rx_fd, cfg);
 
-            while (!st.stop_requested()) {
+            while (running_workers.load(std::memory_order_relaxed)) {
                 rx_mgr->poll_and_dispatch([&consumer](std::span<uint8_t> raw_span) {
                     auto pkt_ctx = Net::ParsedPacket::parse(raw_span);
                     consumer.on_packet_event(pkt_ctx);
@@ -515,7 +528,7 @@ namespace Scalpel {
             }
         }
 
-        void watchdog_loop(std::stop_token st) {
+        void watchdog_loop() {
             Scalpel::System::Optimizer::set_current_thread_affinity(1);
             auto& tel = Telemetry::instance();
             
@@ -580,7 +593,7 @@ namespace Scalpel {
                 si.iface_count.store(cnt, std::memory_order_release);
             };
 
-            while (!st.stop_requested()) {
+            while (running_watchdog.load(std::memory_order_relaxed)) {
                 // poll on timerfd (1Hz) + rescan_fd (on-demand UI request)
                 int nfds = (si.rescan_fd >= 0) ? 2 : 1;
                 int pret = poll(pfds, nfds, 1000);
