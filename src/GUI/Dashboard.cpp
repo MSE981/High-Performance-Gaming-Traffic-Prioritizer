@@ -1560,6 +1560,7 @@ Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
     setup_ui();
     ui_timer_id_   = startTimer(16, Qt::PreciseTimer); // 60Hz: spring, badge, selftest overlay
     plot_timer_id_ = startTimer(40, Qt::PreciseTimer); // 25Hz: plots, header rates, page data
+    qApp->installEventFilter(this); // global: 15% pull zone + mid-animation interrupt
 }
 
 Dashboard::~Dashboard() {
@@ -1861,6 +1862,7 @@ void Dashboard::on_shutdown_clicked() {
 
 
 bool Dashboard::eventFilter(QObject* obj, QEvent* event) {
+    // ── Legacy header swipe (kept as fallback) ──────────────────────────────
     if (obj == header_ && notif_panel_ && !notif_panel_->is_expanded()) {
         if (event->type() == QEvent::MouseButtonPress) {
             hdr_swipe_y0_ = static_cast<QMouseEvent*>(event)->pos().y();
@@ -1875,6 +1877,53 @@ bool Dashboard::eventFilter(QObject* obj, QEvent* event) {
             hdr_swipe_y0_ = -1;
         }
     }
+
+    // ── Global: 15% pull zone (open) + mid-animation interrupt (close) ──────
+    // Installed via qApp->installEventFilter — fires for every widget's events.
+    if (notif_panel_ && !(testing_overlay_ && testing_overlay_->isVisible())) {
+        const auto etype = event->type();
+
+        if (etype == QEvent::MouseButtonPress) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            bool panel_active = notif_panel_->is_expanded() || !notif_panel_->is_settled();
+            bool in_pull_zone = me->globalPos().y() < height() * 15 / 100;
+            if (panel_active || in_pull_zone) {
+                notif_pull_y0_ = me->globalPos().y();
+                notif_pull_x0_ = me->globalPos().x();
+            }
+
+        } else if (etype == QEvent::MouseMove && notif_pull_y0_ >= 0) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            int dy = me->globalPos().y() - notif_pull_y0_;
+            int dx = std::abs(me->globalPos().x() - notif_pull_x0_);
+            // Horizontal intent wins — abandon notification tracking
+            if (dx > 30) {
+                notif_pull_y0_ = notif_pull_x0_ = -1;
+            // Pull-down open: only when panel not yet expanding, downward and not diagonal
+            } else if (!notif_panel_->is_expanded() && notif_panel_->is_settled()
+                       && dy > 28 && dx < 20) {
+                notif_pull_y0_ = notif_pull_x0_ = -1;
+                notif_panel_->kick(12.0);
+                notif_panel_->set_expanded(true);
+            }
+
+        } else if (etype == QEvent::MouseButtonRelease && notif_pull_y0_ >= 0) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            int dy = me->globalPos().y() - notif_pull_y0_;
+            // Interrupt / collapse: upward swipe when panel is opening or open.
+            // Skip if touch is on the panel itself (NotificationPanel::mouseReleaseEvent
+            // already handles that path — avoid double kick).
+            bool panel_active = notif_panel_->is_expanded() || !notif_panel_->is_settled();
+            auto* w = qobject_cast<QWidget*>(obj);
+            bool on_panel = w && (w == notif_panel_ || notif_panel_->isAncestorOf(w));
+            if (panel_active && !on_panel && dy < -24) {
+                notif_panel_->kick(-12.0);
+                notif_panel_->set_expanded(false);
+            }
+            notif_pull_y0_ = notif_pull_x0_ = -1;
+        }
+    }
+
     return QMainWindow::eventFilter(obj, event);
 }
 

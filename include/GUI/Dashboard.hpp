@@ -304,6 +304,8 @@ private:
     QStackedWidget* page_stack       = nullptr;
     QFrame*         header_          = nullptr;  // header frame — watched for swipe-down gesture
     int             hdr_swipe_y0_    = -1;       // -1 = not tracking
+    int             notif_pull_y0_  = -1;       // global Y at press for 15% pull zone + interrupt
+    int             notif_pull_x0_  = -1;       // global X at same press (horizontal intent guard)
 
     // Feature pages
     OverviewPage*    page_overview   = nullptr;
