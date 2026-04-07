@@ -1535,11 +1535,14 @@ void DevicePage::refresh() {
 
 void DevicePage::on_apply_all() {
     for (auto& r : rows_) {
-        Config::upsert_device_policy(r.ip, r.mac.data(),
-            !r.chk_allow->isChecked(),
-            r.chk_rate->isChecked(),
-            r.val_dl,
-            r.val_ul);
+        Config::DevicePolicy p{};
+        p.ip           = r.ip;
+        std::memcpy(p.mac, r.mac.data(), 6);
+        p.blocked      = !r.chk_allow->isChecked();
+        p.rate_limited = r.chk_rate->isChecked();
+        p.dl_mbps      = r.val_dl;
+        p.ul_mbps      = r.val_ul;
+        Config::upsert_device_policy(p);
     }
     Config::DEVICE_POLICY_DIRTY.store(true, std::memory_order_release);
     std::println("[GUI] Device policies applied for {} device(s)", rows_.size());

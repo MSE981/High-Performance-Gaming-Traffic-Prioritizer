@@ -155,26 +155,15 @@ namespace Scalpel::Config {
     inline size_t DEVICE_POLICY_COUNT = 0;
     inline std::atomic<bool> DEVICE_POLICY_DIRTY{false};
 
-    inline void upsert_device_policy(uint32_t ip, const uint8_t* mac,
-                                     bool blocked, bool rate_limited,
-                                     double dl_mbps, double ul_mbps) {
+    inline void upsert_device_policy(const DevicePolicy& policy) {
         for (size_t i = 0; i < DEVICE_POLICY_COUNT; ++i) {
-            if (DEVICE_POLICY_TABLE[i].ip == ip) {
-                DEVICE_POLICY_TABLE[i].blocked      = blocked;
-                DEVICE_POLICY_TABLE[i].rate_limited = rate_limited;
-                DEVICE_POLICY_TABLE[i].dl_mbps      = dl_mbps;
-                DEVICE_POLICY_TABLE[i].ul_mbps      = ul_mbps;
-                if (mac) std::memcpy(DEVICE_POLICY_TABLE[i].mac, mac, 6);
+            if (DEVICE_POLICY_TABLE[i].ip == policy.ip) {
+                DEVICE_POLICY_TABLE[i] = policy;
                 return;
             }
         }
-        if (DEVICE_POLICY_COUNT < MAX_DEVICE_POLICIES) {
-            auto& e = DEVICE_POLICY_TABLE[DEVICE_POLICY_COUNT++];
-            e.ip = ip;
-            if (mac) std::memcpy(e.mac, mac, 6);
-            e.blocked = blocked; e.rate_limited = rate_limited;
-            e.dl_mbps = dl_mbps; e.ul_mbps = ul_mbps;
-        }
+        if (DEVICE_POLICY_COUNT < MAX_DEVICE_POLICIES)
+            DEVICE_POLICY_TABLE[DEVICE_POLICY_COUNT++] = policy;
     }
 
     // Static IP rate limit table (max 256 entries, zero heap allocation)

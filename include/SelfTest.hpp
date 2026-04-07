@@ -328,7 +328,11 @@ private:
         // ── FW_Block ──
         auto fw_block = std::make_unique<Logic::FirewallEngine>();
         uint32_t block_ip = Config::parse_ip_str("192.168.1.200");
-        Config::upsert_device_policy(block_ip, nullptr, true, false, 100.0, 10.0);
+        Config::DevicePolicy p{};
+        p.ip      = block_ip;
+        p.blocked = true;
+        // mac stays zero-initialized: firewall block logic only checks ip
+        Config::upsert_device_policy(p);
         fw_block->sync_blocked_ips();
         bool block_pass = fw_block->is_blocked_ip(block_ip);
         r.add("FW_Block", block_pass,
