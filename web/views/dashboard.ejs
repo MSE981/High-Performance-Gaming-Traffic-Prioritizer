@@ -14,6 +14,10 @@
             color: #e0e0e0;
             padding: 20px;
             margin: 0;
+            padding-bottom: 60px;
+            position: relative;
+            min-height: 100vh;
+            box-sizing: border-box;
         }
 
         h1 {
@@ -179,6 +183,26 @@
             font-family: monospace;
         }
 
+        /* NEW: Global Footer CSS */
+        .global-footer {
+            position: absolute;
+            bottom: 15px;
+            width: 100%;
+            left: 0;
+            text-align: center;
+            color: #555;
+            font-size: 12px;
+            font-family: monospace;
+            border-top: 1px solid #222;
+            padding-top: 10px;
+        }
+
+        .status-dot {
+            color: #28a745;
+            font-size: 10px;
+            margin-right: 5px;
+        }
+
         @media (max-width: 768px) {
             .top-grid {
                 grid-template-columns: 1fr;
@@ -215,19 +239,15 @@
 
         <div class="panel">
             <h2>📊 Zone 2: Real-time Traffic & Config</h2>
-
             <div id="speed-gauge" style="width: 100%; height: 200px;"></div>
-
             <form action="/update_config" method="POST">
                 <label>QoS Traffic Mode:</label>
                 <select name="mode">
                     <option value="gaming">🎮 Gaming Priority (Strict Latency)</option>
                     <option value="streaming">📺 Streaming (High Throughput)</option>
                 </select>
-
                 <label>Max Bandwidth Limit (Mbps):</label>
                 <input type="number" name="limit" value="100">
-
                 <button type="submit">Deploy Configuration</button>
             </form>
         </div>
@@ -255,18 +275,14 @@
         </table>
     </div>
 
+    <div class="global-footer">
+        BMC Engine <%= systemVersion %> | &copy; <%= currentYear %> Core Routing Technologies | <span
+                    class="status-dot">●</span> Active
+    </div>
+
     <script>
         var chart = echarts.init(document.getElementById('speed-gauge'));
-        var option = {
-            series: [{
-                type: 'gauge',
-                max: 1000,
-                radius: '100%',
-                detail: { formatter: '{value} KB/s', fontSize: 16, color: '#fff' },
-                axisLine: { lineStyle: { width: 10, color: [[0.3, '#00ff00'], [0.7, '#ffff00'], [1, '#ff0000']] } },
-                data: [{ value: 0, name: 'DL Speed' }]
-            }]
-        };
+        var option = { series: [{ type: 'gauge', max: 1000, radius: '100%', detail: { formatter: '{value} KB/s', fontSize: 16, color: '#fff' }, axisLine: { lineStyle: { width: 10, color: [[0.3, '#00ff00'], [0.7, '#ffff00'], [1, '#ff0000']] } }, data: [{ value: 0, name: 'DL Speed' }] }] };
         chart.setOption(option);
 
         setInterval(function () {
@@ -275,31 +291,16 @@
                 if (data.cpu !== undefined) $('#cpu-val').text(data.cpu + '%');
                 if (data.memory !== undefined) $('#mem-val').text(data.memory + '%');
                 if (data.uptime !== undefined) $('#uptime-val').text(data.uptime);
-                if (data.download_speed !== undefined) {
-                    chart.setOption({
-                        series: [{ data: [{ value: data.download_speed, name: 'DL Speed' }] }]
-                    });
-                }
+                if (data.download_speed !== undefined) { chart.setOption({ series: [{ data: [{ value: data.download_speed, name: 'DL Speed' }] }] }); }
                 if (data.connections && data.connections.length > 0) {
-                    var tbody = $('#conn-body');
-                    tbody.empty();
+                    var tbody = $('#conn-body'); tbody.empty();
                     data.connections.forEach(function (conn) {
                         var ruleClass = conn.rule.includes("Gaming") ? "color-gaming" : "";
-                        var tr = `<tr>
-                            <td class="color-ip">${conn.source}</td>
-                            <td class="color-ip">${conn.dest}</td>
-                            <td>${conn.proto}</td>
-                            <td class="${ruleClass}">${conn.rule}</td>
-                            <td class="color-up">▲ ${conn.up} KB/s</td>
-                            <td class="color-down">▼ ${conn.down} KB/s</td>
-                            <td>${conn.time}</td>
-                        </tr>`;
+                        var tr = `<tr><td class="color-ip">${conn.source}</td><td class="color-ip">${conn.dest}</td><td>${conn.proto}</td><td class="${ruleClass}">${conn.rule}</td><td class="color-up">▲ ${conn.up} KB/s</td><td class="color-down">▼ ${conn.down} KB/s</td><td>${conn.time}</td></tr>`;
                         tbody.append(tr);
                     });
                 }
-            }).fail(function () {
-                $('#engine-status').text('● Disconnected').css('color', '#ff0000');
-            });
+            }).fail(function () { $('#engine-status').text('● Disconnected').css('color', '#ff0000'); });
         }, 1000); 
     </script>
 </body>
