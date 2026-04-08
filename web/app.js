@@ -2,19 +2,27 @@ const express = require('express');
 const session = require('express-session');
 const path = require('path');
 const si = require('systeminformation');
-const { execFile } = require('child_process');
+const { exec } = require('child_process');
 const os = require('os');
 const app = express();
 
 const PORT = 5000;
 
-let adminPassword = 'admin123'; // Make password dynamic
+// Global Configurations
+let adminPassword = 'admin123';
 
-// Global Configuration
 let systemConfig = {
     traffic_mode: "gaming",
     bandwidth_limit: 100,
     target_port: 27015
+};
+
+// NEW: Wi-Fi Configuration State
+let wifiState = {
+    ssid: "Gaming-Router-5G",
+    password: "supersecretpassword",
+    band: "dual",
+    guest_network: false
 };
 
 app.set('view engine', 'ejs');
@@ -22,7 +30,7 @@ app.set('views', path.join(__dirname, 'views'));
 app.use(express.urlencoded({ extended: true }));
 
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'change_this_secret',
+    secret: 'super_secret_gaming_key',
     resave: false,
     saveUninitialized: true
 }));
@@ -45,7 +53,7 @@ app.get('/login', (req, res) => {
 
 app.post('/api/login', (req, res) => {
     const { password } = req.body;
-    if (password === (process.env.ADMIN_PASSWORD || 'admin123')) {
+    if (password === adminPassword) {
         req.session.loggedIn = true;
         res.redirect('/dashboard');
     } else {
@@ -93,13 +101,9 @@ app.post('/api/ping', requireAuth, (req, res) => {
     const target = req.body.target || '8.8.8.8';
     const isWindows = os.platform() === 'win32';
     const pingFlag = isWindows ? '-n' : '-c';
+    const command = `ping ${pingFlag} 4 ${target}`;
 
-    const safeTarget = String(target).trim();
-    if (!/^[a-zA-Z0-9.\-:]+$/.test(safeTarget)) {
-        return res.json({ status: "error", output: "Invalid target." });
-    }
-
-    execFile('ping', [pingFlag, '4', safeTarget], (error, stdout, stderr) => {
+    exec(command, (error, stdout, stderr) => {
         if (error) {
             return res.json({ status: "error", output: stderr || stdout || error.message });
         }
@@ -113,23 +117,32 @@ app.get('/qos', requireAuth, (req, res) => {
 
 app.post('/update_qos_settings', requireAuth, (req, res) => {
     systemConfig.traffic_mode = req.body.mode;
-    const limit = parseInt(req.body.limit, 10);
-    if (!Number.isFinite(limit) || limit <= 0) {
-        return res.status(400).send('Invalid bandwidth limit');
-    }
-    systemConfig.bandwidth_limit = limit;
+    systemConfig.bandwidth_limit = parseInt(req.body.limit, 10);
     if (req.body.target_port) {
-        const port = parseInt(req.body.target_port, 10);
-        if (!Number.isFinite(port) || port < 1 || port > 65535) {
-            return res.status(400).send('Invalid target port');
-        }
-        systemConfig.target_port = port;
+        systemConfig.target_port = parseInt(req.body.target_port, 10);
     }
     console.log("QoS Settings Updated:", systemConfig);
     res.redirect('/qos');
 });
 
-// NEW: Devices Route
+// NEW: Wi-Fi Routes
+app.get('/wifi', requireAuth, (req, res) => {
+    res.render('wifi', { wifiConfig: wifiState });
+});
+
+app.post('/api/update_wifi', requireAuth, (req, res) => {
+    wifiState.ssid = req.body.ssid;
+    wifiState.password = req.body.password;
+    wifiState.band = req.body.band;
+    // Checkbox only sends a value if it is checked
+    wifiState.guest_network = req.body.guest_network === 'on';
+
+    console.log("Wi-Fi Settings Updated:", wifiState);
+
+    // In a real router, this would trigger a hostapd restart
+    res.redirect('/wifi');
+});
+
 app.get('/devices', requireAuth, (req, res) => {
     const connectedDevices = [
         { ip: "192.168.1.100", mac: "00:1A:2B:3C:4D:5E", name: "My-Gaming-PC", status: "Optimized" },
@@ -139,7 +152,6 @@ app.get('/devices', requireAuth, (req, res) => {
     res.render('devices', { devices: connectedDevices });
 });
 
-// NEW: Logs Route
 app.get('/logs', requireAuth, (req, res) => {
     const systemLogs = [
         { timestamp: "2026-03-10 09:15:22", level: "INFO", message: "System booted successfully. Engine version 1.0.4." },
@@ -151,29 +163,16 @@ app.get('/logs', requireAuth, (req, res) => {
     res.render('logs', { logs: systemLogs });
 });
 
-// NEW: Developer Terminal Route
 app.get('/dev', requireAuth, (req, res) => {
     res.render('dev');
 });
 
 app.post('/api/terminal', requireAuth, (req, res) => {
-    const command = String(req.body.command || '').trim();
+    const command = req.body.command || '';
     if (!command) {
         return res.json({ status: "error", output: "No command provided." });
     }
-
-    const allowedCommands = {
-        "uptime": ["uptime"],
-        "df -h": ["df", "-h"],
-        "df -h": ["df", "-h"],
-        "free -h": ["free", "-h"],
-    }
-    if (!allowedCommands[command]) {
-        return res.json({ status: "error", output: "Command not allowed." });
-    }
-
-    const [file, ...args] = allowedCommands[command];
-    execFile(file, args, { timeout: 15000 }, (error, stdout, stderr) => {
+    exec(command, { timeout: 15000 }, (error, stdout, stderr) => {
         let output = stdout || stderr;
         if (error && !output) {
             output = "System error: " + error.message;
@@ -181,16 +180,14 @@ app.post('/api/terminal', requireAuth, (req, res) => {
         if (!output) {
             output = "[Command executed successfully with no output]";
         }
-        res.json({ status: "success", output });
+        res.json({ status: "success", output: output });
     });
 });
 
-// NEW: Render the More Features page
 app.get('/more', requireAuth, (req, res) => {
     res.render('more');
 });
 
-// NEW: API to change admin password
 app.post('/api/change_password', requireAuth, (req, res) => {
     const oldPassword = req.body.old_password;
     const newPassword = req.body.new_password;
@@ -198,7 +195,6 @@ app.post('/api/change_password', requireAuth, (req, res) => {
     if (oldPassword === adminPassword) {
         adminPassword = newPassword;
         console.log("Admin password has been changed.");
-        // Log user out so they must login with new password
         req.session.loggedIn = false;
         res.send("Password updated successfully! Please <a href='/login'>login again</a>.");
     } else {
@@ -206,18 +202,14 @@ app.post('/api/change_password', requireAuth, (req, res) => {
     }
 });
 
-// NEW: API to reboot the system
 app.post('/api/reboot', requireAuth, (req, res) => {
     console.log("System reboot initiated by user.");
-
-    // Executes reboot command on Raspberry Pi (Linux)
     exec('sudo reboot', (error, stdout, stderr) => {
         if (error) {
             console.error(`Reboot error: ${error}`);
             return res.send("Error: Insufficient privileges to reboot.");
         }
     });
-
     res.send("System is rebooting. Please wait 1-2 minutes before refreshing the dashboard.");
 });
 
