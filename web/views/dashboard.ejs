@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>BMC Console - Prioritizer</title>
+    <title>BMC Console - Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/echarts/dist/echarts.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 
@@ -32,6 +32,7 @@
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.5);
             display: flex;
             justify-content: center;
+            flex-wrap: wrap;
         }
 
         .navbar a {
@@ -193,10 +194,12 @@
     <div class="navbar">
         <a href="/" class="active">📊 Dashboard</a>
         <a href="/network">🌐 Network</a>
-        <a href="/qos">🚦 Traffic QoS</a>
+        <a href="/wifi">📶 Wi-Fi</a>
+        <a href="/qos">🚦 QoS</a>
         <a href="/devices">📱 Devices</a>
         <a href="/logs">📈 Logs</a>
-        <a href="/dev">🛠️ Developer</a>
+        <a href="/dev">🛠️ Dev</a>
+        <a href="/more">⚙️ More</a>
     </div>
 
     <div class="top-grid">
@@ -246,14 +249,13 @@
             </thead>
             <tbody id="conn-body">
                 <tr>
-                    <td colspan="7" style="text-align: center; color: #777;">Waiting for C++ Backend Data...</td>
+                    <td colspan="7" style="text-align: center; color: #777;">Waiting for Backend Data...</td>
                 </tr>
             </tbody>
         </table>
     </div>
 
     <script>
-        // Initialize ECharts Gauge
         var chart = echarts.init(document.getElementById('speed-gauge'));
         var option = {
             series: [{
@@ -267,7 +269,6 @@
         };
         chart.setOption(option);
 
-        // Fetch data periodically
         setInterval(function () {
             $.getJSON('/api/status', function (data) {
                 $('#engine-status').text('● Active').css('color', '#00ff00');
