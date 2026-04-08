@@ -26,6 +26,7 @@
             box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
             display: flex;
             justify-content: center;
+            flex-wrap: wrap;
         }
 
         .navbar a {
@@ -129,10 +130,12 @@
     <div class="navbar">
         <a href="/">📊 Dashboard</a>
         <a href="/network">🌐 Network</a>
-        <a href="/qos">🚦 Traffic QoS</a>
+        <a href="/wifi">📶 Wi-Fi</a>
+        <a href="/qos">🚦 QoS</a>
         <a href="/devices">📱 Devices</a>
         <a href="/logs">📈 Logs</a>
-        <a href="/dev" class="active">🛠️ Developer</a>
+        <a href="/dev" class="active">🛠️ Dev</a>
+        <a href="/more">⚙️ More</a>
     </div>
 
     <div class="container">
@@ -171,7 +174,6 @@
                 outputBox.innerText += 'Executing...';
                 outputBox.scrollTop = outputBox.scrollHeight;
 
-                // Fixed data format for Express backend
                 const formData = new URLSearchParams();
                 formData.append('command', command);
 
