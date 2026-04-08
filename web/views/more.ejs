@@ -18,7 +18,6 @@
             margin-bottom: 30px;
         }
 
-        /* Top Navbar */
         .navbar {
             background-color: #2d2d2d;
             overflow: hidden;
@@ -27,6 +26,7 @@
             box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
             display: flex;
             justify-content: center;
+            flex-wrap: wrap;
         }
 
         .navbar a {
@@ -49,9 +49,6 @@
             color: white;
         }
 
-        /* Huawei-like Cyan color */
-
-        /* Huawei-style Layout (Sidebar + Main Content) */
         .layout-container {
             display: grid;
             grid-template-columns: 250px 1fr;
@@ -60,7 +57,6 @@
             margin: 0 auto;
         }
 
-        /* Sidebar Menu */
         .sidebar {
             background: #2d2d2d;
             border-radius: 8px;
@@ -91,6 +87,7 @@
             text-decoration: none;
             border-left: 4px solid transparent;
             transition: 0.2s;
+            cursor: pointer;
         }
 
         .sidebar li a:hover {
@@ -105,12 +102,12 @@
             font-weight: bold;
         }
 
-        /* Main Content Panel */
         .main-panel {
             background: #2d2d2d;
             border-radius: 8px;
             padding: 30px;
             box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+            min-height: 400px;
         }
 
         .main-panel h2 {
@@ -120,7 +117,26 @@
             color: white;
         }
 
-        /* Forms & Buttons */
+        /* Hidden by default, toggled via JS */
+        .settings-section {
+            display: none;
+            animation: fadeIn 0.3s;
+        }
+
+        .settings-section.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+
+            to {
+                opacity: 1;
+            }
+        }
+
         label {
             display: block;
             margin-top: 20px;
@@ -129,7 +145,8 @@
             font-weight: bold;
         }
 
-        input {
+        input,
+        select {
             padding: 12px;
             width: 100%;
             box-sizing: border-box;
@@ -141,7 +158,8 @@
             margin-bottom: 10px;
         }
 
-        input:focus {
+        input:focus,
+        select:focus {
             outline: none;
             border-color: #17a2b8;
         }
@@ -156,6 +174,8 @@
             font-weight: bold;
             font-size: 16px;
             transition: 0.3s;
+            width: 100%;
+            margin-top: 15px;
         }
 
         .btn-primary:hover {
@@ -172,20 +192,27 @@
             font-weight: bold;
             font-size: 16px;
             transition: 0.3s;
+            width: 100%;
+            margin-top: 15px;
         }
 
         .btn-danger:hover {
             background: #c82333;
         }
 
-        .alert-success {
-            background: rgba(40, 167, 69, 0.2);
-            border: 1px solid #28a745;
-            color: #28a745;
-            padding: 10px;
+        .hint {
+            font-size: 12px;
+            color: #888;
+            margin-top: 2px;
+        }
+
+        .status-box {
+            background: #222;
+            border: 1px solid #444;
+            padding: 15px;
             border-radius: 5px;
-            margin-bottom: 20px;
-            display: none;
+            margin-top: 15px;
+            text-align: center;
         }
     </style>
 </head>
@@ -207,37 +234,119 @@
 
     <div class="layout-container">
         <div class="sidebar">
-            <div class="sidebar-header">System Settings</div>
-            <ul>
-                <li><a href="#password" class="active-menu">🔑 Change Password</a></li>
-                <li><a href="#backup">💾 Backup & Restore</a></li>
-                <li><a href="#reboot">🔄 Reboot System</a></li>
+            <div class="sidebar-header">Advanced Settings</div>
+            <ul id="sidebar-menu">
+                <li><a class="sidebar-link active-menu" data-target="sec-password">🔑 Security & Password</a></li>
+                <li><a class="sidebar-link" data-target="sec-dmz">🎯 DMZ Host</a></li>
+                <li><a class="sidebar-link" data-target="sec-time">🕒 Network Time</a></li>
+                <li><a class="sidebar-link" data-target="sec-update">☁️ Firmware Update</a></li>
+                <li><a class="sidebar-link" data-target="sec-reboot">🔄 System Reboot</a></li>
             </ul>
         </div>
 
         <div class="main-panel">
-            <h2>Account Security</h2>
-            <div class="alert-success" id="success-msg">Password updated successfully!</div>
 
-            <form action="/api/change_password" method="POST">
-                <label>Current Password</label>
-                <input type="password" name="old_password" required placeholder="Enter current admin password">
+            <div id="sec-password" class="settings-section active">
+                <h2>Account Security</h2>
+                <form action="/api/change_password" method="POST">
+                    <label>Current Password</label>
+                    <input type="password" name="old_password" required placeholder="Enter current admin password">
+                    <label>New Password</label>
+                    <input type="password" name="new_password" required placeholder="Enter new strong password">
+                    <button type="submit" class="btn-primary">Save Password</button>
+                </form>
+            </div>
 
-                <label>New Password</label>
-                <input type="password" name="new_password" required placeholder="Enter new strong password">
+            <div id="sec-dmz" class="settings-section">
+                <h2>DMZ Host Configuration</h2>
+                <p style="color: #ccc; font-size: 14px;">Expose a specific local device (like a gaming console) directly
+                    to the internet to achieve Open NAT.</p>
+                <form action="/api/update_dmz" method="POST">
+                    <label>DMZ Status</label>
+                    <select name="dmz_enable">
+                        <option value="off" <%=extraConfig.dmz_ip==='' ? 'selected' : '' %>>Disabled</option>
+                        <option value="on" <%=extraConfig.dmz_ip !=='' ? 'selected' : '' %>>Enabled</option>
+                    </select>
 
-                <button type="submit" class="btn-primary" style="margin-top: 15px;">Save Changes</button>
-            </form>
+                    <label>Target IP Address</label>
+                    <input type="text" name="dmz_ip" value="<%= extraConfig.dmz_ip %>"
+                        placeholder="e.g., 192.168.1.150">
+                    <div class="hint">Ensure this device has a static IP assigned.</div>
 
-            <h2 style="margin-top: 50px; color: #dc3545;">Danger Zone</h2>
-            <p style="color: #ccc;">Restarting the system will temporarily disconnect all network clients.</p>
-            <form action="/api/reboot" method="POST"
-                onsubmit="return confirm('Are you sure you want to reboot the system?');">
-                <button type="submit" class="btn-danger">Reboot Router Now</button>
-            </form>
+                    <button type="submit" class="btn-primary">Apply DMZ Settings</button>
+                </form>
+            </div>
+
+            <div id="sec-time" class="settings-section">
+                <h2>Network Time (NTP)</h2>
+                <form action="/api/update_time" method="POST">
+                    <label>Current System Time</label>
+                    <div class="status-box" style="font-family: monospace; font-size: 18px; color: #17a2b8;">
+                        <%= new Date().toLocaleString() %>
+                    </div>
+
+                    <label>Time Zone</label>
+                    <select name="timezone">
+                        <option value="UTC" <%=extraConfig.timezone==='UTC' ? 'selected' : '' %>>UTC (Coordinated
+                            Universal Time)</option>
+                        <option value="Asia/Shanghai" <%=extraConfig.timezone==='Asia/Shanghai' ? 'selected' : '' %>
+                            >Asia/Shanghai (GMT+8)</option>
+                        <option value="America/New_York" <%=extraConfig.timezone==='America/New_York' ? 'selected' : ''
+                            %>>America/New_York (EST)</option>
+                        <option value="Europe/London" <%=extraConfig.timezone==='Europe/London' ? 'selected' : '' %>
+                            >Europe/London (GMT)</option>
+                    </select>
+
+                    <button type="submit" class="btn-primary">Sync with NTP Server</button>
+                </form>
+            </div>
+
+            <div id="sec-update" class="settings-section">
+                <h2>Firmware Management</h2>
+                <div class="status-box">
+                    <div style="color: #888;">Current Version</div>
+                    <div style="font-size: 24px; font-weight: bold; margin: 10px 0;">v1.0.4-gaming-core</div>
+                    <div style="color: #28a745; font-size: 14px;">System is running optimally.</div>
+                </div>
+                <form action="/api/check_update" method="POST">
+                    <button type="submit" class="btn-primary" style="background: #28a745;">Check for Updates</button>
+                </form>
+            </div>
+
+            <div id="sec-reboot" class="settings-section">
+                <h2 style="color: #dc3545;">Danger Zone</h2>
+                <p style="color: #ccc;">Restarting the system will temporarily disconnect all network clients and reset
+                    current traffic queues.</p>
+                <form action="/api/reboot" method="POST"
+                    onsubmit="return confirm('Are you sure you want to reboot the system?');">
+                    <button type="submit" class="btn-danger">Reboot Router Now</button>
+                </form>
+            </div>
+
         </div>
     </div>
 
+    <script>
+        const links = document.querySelectorAll('.sidebar-link');
+        const sections = document.querySelectorAll('.settings-section');
+
+        links.forEach(link => {
+            link.addEventListener('click', function (e) {
+                e.preventDefault();
+
+                // Remove active class from all links and sections
+                links.forEach(l => l.classList.remove('active-menu'));
+                sections.forEach(s => s.classList.remove('active'));
+
+                // Add active class to clicked link
+                this.classList.add('active-menu');
+
+                // Show corresponding section
+                const targetId = this.getAttribute('data-target');
+                document.getElementById(targetId).classList.add('active');
+            });
+        });
+    </script>
 </body>
 
 </html>
