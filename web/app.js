@@ -8,6 +8,8 @@ const app = express();
 
 const PORT = 5000;
 
+let adminPassword = 'admin123'; // Make password dynamic
+
 // Global Configuration
 let systemConfig = {
     traffic_mode: "gaming",
@@ -111,13 +113,13 @@ app.get('/qos', requireAuth, (req, res) => {
 
 app.post('/update_qos_settings', requireAuth, (req, res) => {
     systemConfig.traffic_mode = req.body.mode;
-   const limit = parseInt(req.body.limit, 10);
+    const limit = parseInt(req.body.limit, 10);
     if (!Number.isFinite(limit) || limit <= 0) {
         return res.status(400).send('Invalid bandwidth limit');
     }
     systemConfig.bandwidth_limit = limit;
     if (req.body.target_port) {
-       const port = parseInt(req.body.target_port, 10);
+        const port = parseInt(req.body.target_port, 10);
         if (!Number.isFinite(port) || port < 1 || port > 65535) {
             return res.status(400).send('Invalid target port');
         }
@@ -160,12 +162,12 @@ app.post('/api/terminal', requireAuth, (req, res) => {
         return res.json({ status: "error", output: "No command provided." });
     }
 
-   const allowedCommands = {
-       "uptime": ["uptime"],
-       "df -h": ["df", "-h"],
-       "df -h": ["df", "-h"],
-       "free -h": ["free", "-h"],
-   }
+    const allowedCommands = {
+        "uptime": ["uptime"],
+        "df -h": ["df", "-h"],
+        "df -h": ["df", "-h"],
+        "free -h": ["free", "-h"],
+    }
     if (!allowedCommands[command]) {
         return res.json({ status: "error", output: "Command not allowed." });
     }
@@ -181,6 +183,42 @@ app.post('/api/terminal', requireAuth, (req, res) => {
         }
         res.json({ status: "success", output });
     });
+});
+
+// NEW: Render the More Features page
+app.get('/more', requireAuth, (req, res) => {
+    res.render('more');
+});
+
+// NEW: API to change admin password
+app.post('/api/change_password', requireAuth, (req, res) => {
+    const oldPassword = req.body.old_password;
+    const newPassword = req.body.new_password;
+
+    if (oldPassword === adminPassword) {
+        adminPassword = newPassword;
+        console.log("Admin password has been changed.");
+        // Log user out so they must login with new password
+        req.session.loggedIn = false;
+        res.send("Password updated successfully! Please <a href='/login'>login again</a>.");
+    } else {
+        res.send("Error: Incorrect current password. <a href='/more'>Go back</a>");
+    }
+});
+
+// NEW: API to reboot the system
+app.post('/api/reboot', requireAuth, (req, res) => {
+    console.log("System reboot initiated by user.");
+
+    // Executes reboot command on Raspberry Pi (Linux)
+    exec('sudo reboot', (error, stdout, stderr) => {
+        if (error) {
+            console.error(`Reboot error: ${error}`);
+            return res.send("Error: Insufficient privileges to reboot.");
+        }
+    });
+
+    res.send("System is rebooting. Please wait 1-2 minutes before refreshing the dashboard.");
 });
 
 app.listen(PORT, () => {
