@@ -12,7 +12,6 @@ const PORT = 5000;
 let adminPassword = 'admin123';
 
 let systemConfig = { traffic_mode: "gaming", bandwidth_limit: 100, target_port: 27015 };
-let wifiState = { ssid: "Gaming-Router-5G", password: "supersecretpassword", band: "dual", guest_network: false };
 let extraFeaturesConfig = { dmz_ip: "", timezone: "Asia/Shanghai" };
 
 app.set('view engine', 'ejs');
@@ -88,16 +87,6 @@ app.post('/update_qos_settings', requireAuth, (req, res) => {
     res.redirect('/qos');
 });
 
-app.get('/wifi', requireAuth, (req, res) => { res.render('wifi', { wifiConfig: wifiState }); });
-
-app.post('/api/update_wifi', requireAuth, (req, res) => {
-    wifiState.ssid = req.body.ssid;
-    wifiState.password = req.body.password;
-    wifiState.band = req.body.band;
-    wifiState.guest_network = req.body.guest_network === 'on';
-    res.redirect('/wifi');
-});
-
 app.get('/devices', requireAuth, (req, res) => {
     res.render('devices', { devices: [{ ip: "192.168.1.100", mac: "00:1A:2B:3C:4D:5E", name: "My-Gaming-PC", status: "Optimized" }] });
 });
@@ -116,7 +105,7 @@ app.post('/api/terminal', requireAuth, (req, res) => {
     });
 });
 
-app.get('/more', requireAuth, (req, res) => { res.render('more', { extraConfig: extraFeaturesConfig }); });
+app.get('/security', requireAuth, (req, res) => { res.render('security', { extraConfig: extraFeaturesConfig }); });
 
 app.post('/api/change_password', requireAuth, (req, res) => {
     if (req.body.old_password === adminPassword) {
@@ -124,19 +113,19 @@ app.post('/api/change_password', requireAuth, (req, res) => {
         req.session.loggedIn = false;
         res.send("Password updated! Please <a href='/login'>login again</a>.");
     } else {
-        res.send("Incorrect current password. <a href='/more'>Go back</a>");
+        res.send("Incorrect current password. <a href='/security'>Go back</a>");
     }
 });
 
 app.post('/api/update_dmz', requireAuth, (req, res) => {
     if (req.body.dmz_enable === 'on') { extraFeaturesConfig.dmz_ip = req.body.dmz_ip; }
     else { extraFeaturesConfig.dmz_ip = ""; }
-    res.redirect('/more');
+    res.redirect('/security');
 });
 
 app.post('/api/update_time', requireAuth, (req, res) => {
     extraFeaturesConfig.timezone = req.body.timezone;
-    res.redirect('/more');
+    res.redirect('/security');
 });
 
 app.post('/api/check_update', requireAuth, (req, res) => {
@@ -145,7 +134,7 @@ app.post('/api/check_update', requireAuth, (req, res) => {
             <div style="font-family:sans-serif; text-align:center; padding: 50px; background:#1a1a1a; color:white; height:100vh;">
                 <h2 style="color:#28a745;">You are up to date!</h2>
                 <p>Version v1.0.4-gaming-core is the latest release.</p>
-                <a href="/more" style="color:#17a2b8;">Return to Settings</a>
+                <a href="/security" style="color:#17a2b8;">Return to Settings</a>
             </div>
         `);
     }, 1500);

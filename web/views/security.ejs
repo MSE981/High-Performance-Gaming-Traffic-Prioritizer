@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>More Features</title>
+    <title>Security & Password</title>
     <style>
         body {
             font-family: sans-serif;
@@ -224,12 +224,11 @@
     <div class="navbar">
         <a href="/">📊 Dashboard</a>
         <a href="/network">🌐 Network</a>
-        <a href="/wifi">📶 Wi-Fi</a>
         <a href="/qos">🚦 QoS</a>
         <a href="/devices">📱 Devices</a>
         <a href="/logs">📈 Logs</a>
         <a href="/dev">🛠️ Dev</a>
-        <a href="/more" class="active">⚙️ More</a>
+        <a href="/security" class="active"> Security</a>
     </div>
 
     <div class="layout-container">
@@ -237,10 +236,6 @@
             <div class="sidebar-header">Advanced Settings</div>
             <ul id="sidebar-menu">
                 <li><a class="sidebar-link active-menu" data-target="sec-password">🔑 Security & Password</a></li>
-                <li><a class="sidebar-link" data-target="sec-dmz">🎯 DMZ Host</a></li>
-                <li><a class="sidebar-link" data-target="sec-time">🕒 Network Time</a></li>
-                <li><a class="sidebar-link" data-target="sec-update">☁️ Firmware Update</a></li>
-                <li><a class="sidebar-link" data-target="sec-reboot">🔄 System Reboot</a></li>
             </ul>
         </div>
 
@@ -257,71 +252,7 @@
                 </form>
             </div>
 
-            <div id="sec-dmz" class="settings-section">
-                <h2>DMZ Host Configuration</h2>
-                <p style="color: #ccc; font-size: 14px;">Expose a specific local device (like a gaming console) directly
-                    to the internet to achieve Open NAT.</p>
-                <form action="/api/update_dmz" method="POST">
-                    <label>DMZ Status</label>
-                    <select name="dmz_enable">
-                        <option value="off" <%=extraConfig.dmz_ip==='' ? 'selected' : '' %>>Disabled</option>
-                        <option value="on" <%=extraConfig.dmz_ip !=='' ? 'selected' : '' %>>Enabled</option>
-                    </select>
 
-                    <label>Target IP Address</label>
-                    <input type="text" name="dmz_ip" value="<%= extraConfig.dmz_ip %>"
-                        placeholder="e.g., 192.168.1.150">
-                    <div class="hint">Ensure this device has a static IP assigned.</div>
-
-                    <button type="submit" class="btn-primary">Apply DMZ Settings</button>
-                </form>
-            </div>
-
-            <div id="sec-time" class="settings-section">
-                <h2>Network Time (NTP)</h2>
-                <form action="/api/update_time" method="POST">
-                    <label>Current System Time</label>
-                    <div class="status-box" style="font-family: monospace; font-size: 18px; color: #17a2b8;">
-                        <%= new Date().toLocaleString() %>
-                    </div>
-
-                    <label>Time Zone</label>
-                    <select name="timezone">
-                        <option value="UTC" <%=extraConfig.timezone==='UTC' ? 'selected' : '' %>>UTC (Coordinated
-                            Universal Time)</option>
-                        <option value="Asia/Shanghai" <%=extraConfig.timezone==='Asia/Shanghai' ? 'selected' : '' %>
-                            >Asia/Shanghai (GMT+8)</option>
-                        <option value="America/New_York" <%=extraConfig.timezone==='America/New_York' ? 'selected' : ''
-                            %>>America/New_York (EST)</option>
-                        <option value="Europe/London" <%=extraConfig.timezone==='Europe/London' ? 'selected' : '' %>
-                            >Europe/London (GMT)</option>
-                    </select>
-
-                    <button type="submit" class="btn-primary">Sync with NTP Server</button>
-                </form>
-            </div>
-
-            <div id="sec-update" class="settings-section">
-                <h2>Firmware Management</h2>
-                <div class="status-box">
-                    <div style="color: #888;">Current Version</div>
-                    <div style="font-size: 24px; font-weight: bold; margin: 10px 0;">v1.0.4-gaming-core</div>
-                    <div style="color: #28a745; font-size: 14px;">System is running optimally.</div>
-                </div>
-                <form action="/api/check_update" method="POST">
-                    <button type="submit" class="btn-primary" style="background: #28a745;">Check for Updates</button>
-                </form>
-            </div>
-
-            <div id="sec-reboot" class="settings-section">
-                <h2 style="color: #dc3545;">Danger Zone</h2>
-                <p style="color: #ccc;">Restarting the system will temporarily disconnect all network clients and reset
-                    current traffic queues.</p>
-                <form action="/api/reboot" method="POST"
-                    onsubmit="return confirm('Are you sure you want to reboot the system?');">
-                    <button type="submit" class="btn-danger">Reboot Router Now</button>
-                </form>
-            </div>
 
         </div>
     </div>
