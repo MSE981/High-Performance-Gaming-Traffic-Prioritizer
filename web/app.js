@@ -8,31 +8,20 @@ const app = express();
 
 const PORT = 5000;
 
-// Global Configurations
+// === Global Configurations ===
 let adminPassword = 'admin123';
 
-let systemConfig = {
-    traffic_mode: "gaming",
-    bandwidth_limit: 100,
-    target_port: 27015
-};
-
-let wifiState = {
-    ssid: "Gaming-Router-5G",
-    password: "supersecretpassword",
-    band: "dual",
-    guest_network: false
-};
-
-// NEW: Extra configurations for DMZ and Timezone
-let extraFeaturesConfig = {
-    dmz_ip: "",
-    timezone: "Asia/Shanghai"
-};
+let systemConfig = { traffic_mode: "gaming", bandwidth_limit: 100, target_port: 27015 };
+let wifiState = { ssid: "Gaming-Router-5G", password: "supersecretpassword", band: "dual", guest_network: false };
+let extraFeaturesConfig = { dmz_ip: "", timezone: "Asia/Shanghai" };
 
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.use(express.urlencoded({ extended: true }));
+
+// === NEW: Global Template Variables (Accessible in all .ejs files) ===
+app.locals.systemVersion = "v1.0.4-gaming-core";
+app.locals.currentYear = new Date().getFullYear();
 
 app.use(session({
     secret: 'super_secret_gaming_key',
@@ -41,13 +30,11 @@ app.use(session({
 }));
 
 const requireAuth = (req, res, next) => {
-    if (req.session.loggedIn) {
-        next();
-    } else {
-        res.redirect('/login');
-    }
+    if (req.session.loggedIn) next();
+    else res.redirect('/login');
 };
 
+// === Routes ===
 app.get('/', (req, res) => { res.redirect('/dashboard'); });
 
 app.get('/login', (req, res) => { res.render('login'); });
@@ -68,23 +55,18 @@ app.get('/api/status', requireAuth, async (req, res) => {
         const cpu = await si.currentLoad();
         const mem = await si.mem();
         const time = si.time();
-        const uptimeSeconds = time.uptime;
-        const hours = Math.floor(uptimeSeconds / 3600);
-        const minutes = Math.floor((uptimeSeconds % 3600) / 60);
-        const seconds = Math.floor(uptimeSeconds % 60);
+        const hours = Math.floor(time.uptime / 3600);
+        const minutes = Math.floor((time.uptime % 3600) / 60);
+        const seconds = Math.floor(time.uptime % 60);
 
         res.json({
             cpu: Math.round(cpu.currentLoad),
             memory: Math.round((mem.active / mem.total) * 100),
             uptime: `${hours}h ${minutes}m ${seconds}s`,
             download_speed: Math.floor(Math.random() * 200) + 300,
-            connections: [
-                { source: "192.168.1.100:54321", dest: "104.160.131.3:27015", proto: "UDP", rule: "Gaming Priority", up: 15, down: 45, time: "00:15:22" }
-            ]
+            connections: [{ source: "192.168.1.100:54321", dest: "104.160.131.3:27015", proto: "UDP", rule: "Gaming Priority", up: 15, down: 45, time: "00:15:22" }]
         });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch hardware data' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Failed to fetch hardware data' }); }
 });
 
 app.get('/network', requireAuth, (req, res) => { res.render('network'); });
@@ -117,7 +99,7 @@ app.post('/api/update_wifi', requireAuth, (req, res) => {
 });
 
 app.get('/devices', requireAuth, (req, res) => {
-    res.render('devices', { devices: [{ ip: "192.168.1.100", mac: "00:1A:2B...", name: "My-Gaming-PC", status: "Optimized" }] });
+    res.render('devices', { devices: [{ ip: "192.168.1.100", mac: "00:1A:2B:3C:4D:5E", name: "My-Gaming-PC", status: "Optimized" }] });
 });
 
 app.get('/logs', requireAuth, (req, res) => {
@@ -134,11 +116,7 @@ app.post('/api/terminal', requireAuth, (req, res) => {
     });
 });
 
-// === MODIFIED MORE FEATURES ROUTES ===
-app.get('/more', requireAuth, (req, res) => {
-    // Pass the extra features configuration to the template
-    res.render('more', { extraConfig: extraFeaturesConfig });
-});
+app.get('/more', requireAuth, (req, res) => { res.render('more', { extraConfig: extraFeaturesConfig }); });
 
 app.post('/api/change_password', requireAuth, (req, res) => {
     if (req.body.old_password === adminPassword) {
@@ -150,30 +128,18 @@ app.post('/api/change_password', requireAuth, (req, res) => {
     }
 });
 
-// NEW: DMZ API
 app.post('/api/update_dmz', requireAuth, (req, res) => {
-    if (req.body.dmz_enable === 'on') {
-        extraFeaturesConfig.dmz_ip = req.body.dmz_ip;
-        console.log(`DMZ Enabled for IP: ${extraFeaturesConfig.dmz_ip}`);
-    } else {
-        extraFeaturesConfig.dmz_ip = "";
-        console.log("DMZ Disabled.");
-    }
+    if (req.body.dmz_enable === 'on') { extraFeaturesConfig.dmz_ip = req.body.dmz_ip; }
+    else { extraFeaturesConfig.dmz_ip = ""; }
     res.redirect('/more');
 });
 
-// NEW: Network Time API
 app.post('/api/update_time', requireAuth, (req, res) => {
     extraFeaturesConfig.timezone = req.body.timezone;
-    console.log(`System Timezone updated to: ${extraFeaturesConfig.timezone}`);
-    // In Linux, you would run something like: exec(`sudo timedatectl set-timezone ${req.body.timezone}`)
     res.redirect('/more');
 });
 
-// NEW: Firmware Update Fake Check
 app.post('/api/check_update', requireAuth, (req, res) => {
-    console.log("Checking Huawei/Cloud servers for firmware update...");
-    // Simulate a network delay then respond
     setTimeout(() => {
         res.send(`
             <div style="font-family:sans-serif; text-align:center; padding: 50px; background:#1a1a1a; color:white; height:100vh;">
