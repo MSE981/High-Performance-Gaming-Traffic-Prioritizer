@@ -4,7 +4,6 @@
 #include "SelfTest.hpp"
 #include <csignal>
 #include <print>
-#include <sys/eventfd.h>
 
 // Global pointer and signal debounce flag
 Scalpel::App* global_app = nullptr;
@@ -38,13 +37,7 @@ int main(int argc, char* argv[]) {
     Scalpel::Config::load_config("config/config.txt");
 
     // Create eventfd pair for iface rescan signalling — must happen before watchdog thread starts
-    {
-        auto& si = Scalpel::Telemetry::instance().sys_info;
-        si.rescan_fd = ::eventfd(0, EFD_CLOEXEC);
-        si.done_fd   = ::eventfd(0, EFD_CLOEXEC);
-        if (si.rescan_fd < 0 || si.done_fd < 0)
-            std::println(stderr, "[Warn] eventfd creation failed — iface refresh button disabled");
-    }
+    Scalpel::Telemetry::instance().sys_info.init_event_fds();
 
     Scalpel::App app;
     global_app = &app;

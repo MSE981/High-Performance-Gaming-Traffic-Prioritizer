@@ -27,7 +27,6 @@
 #include <algorithm>
 #include <fcntl.h>
 #include <unistd.h>
-#include <sys/eventfd.h>
 #include <arpa/inet.h>
 
 namespace Scalpel::GUI {
@@ -463,7 +462,7 @@ InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
     layout->addLayout(btn_row);
 
     // Register QSocketNotifier for done_fd — wakes Qt event loop when watchdog completes rescan
-    int done_fd = Telemetry::instance().sys_info.done_fd;
+    int done_fd = Telemetry::instance().sys_info.done_notifier_fd();
     if (done_fd >= 0) {
         scan_done_notifier_ = new QSocketNotifier(done_fd, QSocketNotifier::Read, this);
         connect(scan_done_notifier_, &QSocketNotifier::activated, this, &InterfacePage::on_scan_done);
@@ -604,17 +603,14 @@ void InterfacePage::on_reset_clicked() {
 }
 
 void InterfacePage::on_refresh_clicked() {
-    int rescan_fd = Telemetry::instance().sys_info.rescan_fd;
-    if (rescan_fd < 0) return;
-    ::eventfd_write(rescan_fd, 1);   // wake Core 1 watchdog immediately
+    Telemetry::instance().sys_info.request_rescan();
     btn_refresh->setEnabled(false);
     btn_refresh->setText("Scanning…");
 }
 
 void InterfacePage::on_scan_done() {
     // Drain the eventfd counter before reading Telemetry cache
-    uint64_t val;
-    ::eventfd_read(Telemetry::instance().sys_info.done_fd, &val);
+    Telemetry::instance().sys_info.consume_done();
     scan_interfaces();
     btn_refresh->setEnabled(true);
     btn_refresh->setText("Refresh");

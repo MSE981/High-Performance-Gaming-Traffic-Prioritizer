@@ -398,7 +398,7 @@ void App::watchdog_loop() {
     auto& si = tel.sys_info;
     struct pollfd pfds[2]{};
     pfds[0] = { tfd,          POLLIN, 0 };
-    pfds[1] = { si.rescan_fd, POLLIN, 0 };
+    pfds[1] = { si.rescan_poll_fd(), POLLIN, 0 };
 
     // Raw-fd sysfs reader — no heap, no ifstream
     auto read_sysfd = [](const char* path, std::span<char> out) {
@@ -447,7 +447,7 @@ void App::watchdog_loop() {
     };
 
     while (running_watchdog.load(std::memory_order_relaxed)) {
-        int nfds = (si.rescan_fd >= 0) ? 2 : 1;
+        int nfds = (si.rescan_poll_fd() >= 0) ? 2 : 1;
         if (poll(pfds, nfds, 1000) <= 0) continue;
 
         bool timer_fired = (pfds[0].revents & POLLIN) != 0;
@@ -456,15 +456,14 @@ void App::watchdog_loop() {
         if (timer_fired && ::read(tfd, &expirations, sizeof(expirations)) <= 0)
             timer_fired = false;
         if (nfds == 2 && (pfds[1].revents & POLLIN)) {
-            uint64_t val;
-            ::eventfd_read(si.rescan_fd, &val);
+            si.consume_rescan();
             force_scan = true;
         }
 
         // On-demand rescan only — skip all 1 Hz work
         if (force_scan && !timer_fired) {
             scan_ifaces();
-            if (si.done_fd >= 0) ::eventfd_write(si.done_fd, 1);
+            si.signal_done();
             continue;
         }
         if (!timer_fired) continue;
@@ -582,7 +581,7 @@ void App::watchdog_loop() {
         }
 
         if (force_scan && !did_iface_scan) scan_ifaces();
-        if (force_scan && si.done_fd >= 0) ::eventfd_write(si.done_fd, 1);
+        if (force_scan) si.signal_done();
 
         // Bandwidth (1 Hz)
         uint64_t bd = tel.core_metrics[2].bytes.load(std::memory_order_relaxed);

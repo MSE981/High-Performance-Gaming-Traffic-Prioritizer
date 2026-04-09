@@ -4,6 +4,12 @@
 #include <array>
 #include <cstring>
 
+namespace Scalpel::Net {
+    // Network-byte-order IPv4 address — opaque alias over uint32_t.
+    // Use Config::ip_to_str() / inet_ntoa() to convert for display.
+    using IPv4Addr = uint32_t;
+}
+
 namespace Scalpel {
 
     // Core metrics slot (L1 cache line aligned)
@@ -37,7 +43,7 @@ namespace Scalpel {
         // Plain char arrays — torn reads acceptable for display-only data.
         static constexpr uint8_t MAX_TRACKED_DEVICES = 64;
         struct DeviceEntry {
-            uint32_t ip = 0;
+            Net::IPv4Addr ip = 0;
             std::array<char, 18> mac{};  // "xx:xx:xx:xx:xx:xx\0"
         };
         std::array<DeviceEntry, MAX_TRACKED_DEVICES> device_table{};
@@ -62,11 +68,24 @@ namespace Scalpel {
             std::array<IfaceEntry, MAX_IFACES> ifaces{};
             std::atomic<uint8_t> iface_count{0};  // written last (release), read first (acquire)
 
-            // eventfd pair for on-demand rescan signalling — created in main() before threads start.
-            // rescan_fd: UI writes 1 → watchdog wakes immediately via poll()
-            // done_fd:   watchdog writes 1 → QSocketNotifier fires on Core 0
-            int rescan_fd = -1;
-            int done_fd   = -1;
+            // On-demand rescan signalling via eventfd pair.
+            // Initialised once before any thread starts; thereafter accessed only through methods.
+            void init_event_fds();           // creates both fds (call from main before threads)
+
+            // UI (Core 0) interface — no raw fd values exposed
+            void request_rescan();           // signal watchdog to re-scan immediately
+            int  done_notifier_fd() const;   // fd for QSocketNotifier construction (read-once at UI init)
+            void consume_done();             // drain done_fd after QSocketNotifier fires
+
+            // Watchdog (Core 1) interface
+            int  rescan_poll_fd() const;     // fd to put in poll() pfd array
+            void consume_rescan();           // drain rescan_fd after poll() fires
+            void signal_done();              // notify UI that rescan is complete
+
+        private:
+            // Raw eventfd descriptors — hidden from all callers
+            int rescan_fd_ = -1;
+            int done_fd_   = -1;
         };
         alignas(64) SystemInfo sys_info{};
 

@@ -21,6 +21,7 @@ set(CMAKE_AUTORCC ON)
 add_executable(GamingTrafficPrioritizer
     src/main.cpp
     src/App.cpp
+    src/Telemetry.cpp
     src/GUI/Dashboard.cpp
     include/GUI/Dashboard.hpp
 )
