@@ -21,6 +21,13 @@ namespace Scalpel {
 
 namespace {
 
+// ─── Packet routing context (internal to data plane) ─────────────────────────
+struct RouteContext {
+    int tx_fd;
+    std::shared_ptr<Traffic::Shaper> shaper;
+};
+using RouteFunc = void (*)(const RouteContext&, std::span<uint8_t>, size_t, int);
+
 // ─── Data-plane route handlers ───────────────────────────────────────────────
 
 void fast_path_handler(const RouteContext& ctx, std::span<uint8_t> pkt,

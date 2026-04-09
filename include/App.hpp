@@ -96,13 +96,6 @@ struct QoSConfig {
     }
 };
 
-// Packet routing context and function-pointer type.
-struct RouteContext {
-    int tx_fd;
-    std::shared_ptr<Traffic::Shaper> shaper;
-};
-using RouteFunc = void (*)(const RouteContext&, std::span<uint8_t>, size_t, int);
-
 // Configuration bundle passed to each packet worker thread (§2.2.3).
 struct PacketWorkerConfig {
     int tx_fd;
