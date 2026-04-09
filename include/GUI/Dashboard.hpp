@@ -267,7 +267,7 @@ private:
     void on_apply_all();
 
     struct DeviceRow {
-        uint32_t ip;
+        Net::IPv4Net ip{};
         std::array<uint8_t, 6> mac{};
         QCheckBox* chk_allow;
         QCheckBox* chk_rate;

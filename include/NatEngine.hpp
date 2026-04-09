@@ -17,9 +17,9 @@ namespace Scalpel::Logic {
         check = htons(~(sum + (sum >> 16)));
     }
     
-    static inline void update_checksum_32(uint16_t& check, uint32_t old_val, uint32_t new_val) {
-        update_checksum_16(check, old_val & 0xFFFF, new_val & 0xFFFF);
-        update_checksum_16(check, old_val >> 16, new_val >> 16);
+    static inline void update_checksum_32(uint16_t& check, Net::IPv4Net old_val, Net::IPv4Net new_val) {
+        update_checksum_16(check, old_val.raw() & 0xFFFF, new_val.raw() & 0xFFFF);
+        update_checksum_16(check, old_val.raw() >> 16,    new_val.raw() >> 16);
     }
 
     // True zero-copy user-space NAT engine
@@ -32,8 +32,8 @@ namespace Scalpel::Logic {
         };
 
         struct UpnpMapping {
-            uint32_t internal_ip = 0;
-            uint16_t internal_port = 0;
+            Net::IPv4Net internal_ip{};
+            uint16_t     internal_port = 0;
             uint16_t external_port = 0;
             uint8_t protocol = 0;
             alignas(64) std::atomic<bool> active{false};
@@ -50,8 +50,8 @@ namespace Scalpel::Logic {
         std::array<UpnpMapping, 256> upnp_rules{};
         alignas(64) std::atomic<size_t> upnp_cursor{0};
 
-        uint16_t port_cursor = 10000;
-        uint32_t wan_ip = 0;
+        uint16_t     port_cursor = 10000;
+        Net::IPv4Net wan_ip{};
         std::atomic<uint32_t> current_tick{0};
 
         uint32_t hash_flow(const FlowKey& k) const {
@@ -69,10 +69,10 @@ namespace Scalpel::Logic {
             port_to_index.fill(-1);
         }
 
-        void set_wan_ip(uint32_t ip) { wan_ip = ip; }
+        void set_wan_ip(Net::IPv4Net ip) { wan_ip = ip; }
         
         // Core 1 (control plane): add or override UPnP rule
-        void add_upnp_rule(uint16_t ext_port, uint32_t int_ip, uint16_t int_port, uint8_t proto) {
+        void add_upnp_rule(uint16_t ext_port, Net::IPv4Net int_ip, uint16_t int_port, uint8_t proto) {
             uint16_t net_ext_port = htons(ext_port);
             uint16_t net_int_port = htons(int_port);
 
@@ -232,7 +232,7 @@ namespace Scalpel::Logic {
 
             sessions[idx].last_active_tick.store(
                 current_tick.load(std::memory_order_relaxed), std::memory_order_relaxed);
-            uint32_t internal_ip = sessions[idx].internal_key.saddr;
+            Net::IPv4Net internal_ip = sessions[idx].internal_key.saddr;
             uint16_t internal_port = sessions[idx].internal_key.sport;
 
             // O(1) rewrite and checksum update

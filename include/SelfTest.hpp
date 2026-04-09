@@ -90,7 +90,7 @@ private:
     // ── Packet Builders ──────────────────────────────────────────────────────
     // All use std::array — zero heap allocation
 
-    static std::array<uint8_t, 42> make_udp_pkt(uint32_t sip, uint32_t dip,
+    static std::array<uint8_t, 42> make_udp_pkt(Net::IPv4Net sip, Net::IPv4Net dip,
                                                   uint16_t sport, uint16_t dport) {
         std::array<uint8_t, 42> buf{};
         auto* eth  = reinterpret_cast<Net::EthernetHeader*>(buf.data());
@@ -109,7 +109,7 @@ private:
         return buf;
     }
 
-    static std::array<uint8_t, 54> make_tcp_pkt(uint32_t sip, uint32_t dip,
+    static std::array<uint8_t, 54> make_tcp_pkt(Net::IPv4Net sip, Net::IPv4Net dip,
                                                   uint16_t sport, uint16_t dport,
                                                   uint16_t flags) {
         std::array<uint8_t, 54> buf{};
@@ -329,7 +329,7 @@ private:
 
         // ── FW_Block ──
         auto fw_block = std::make_unique<Logic::FirewallEngine>();
-        uint32_t block_ip = Config::parse_ip_str("192.168.1.200");
+        Net::IPv4Net block_ip = Config::parse_ip_str("192.168.1.200");
         Config::DevicePolicy p{};
         p.ip      = block_ip;
         p.blocked = true;
@@ -344,8 +344,8 @@ private:
 
         // ── FW_Session ──
         auto fw_sess = std::make_unique<Logic::FirewallEngine>();
-        uint32_t lan_ip = Config::parse_ip_str("192.168.1.100");
-        uint32_t srv_ip = Config::parse_ip_str("1.2.3.4");
+        Net::IPv4Net lan_ip = Config::parse_ip_str("192.168.1.100");
+        Net::IPv4Net srv_ip = Config::parse_ip_str("1.2.3.4");
 
         // Outbound SYN: flags = 0x5002 (data_offset=5, SYN=1)
         auto syn_buf = make_tcp_pkt(lan_ip, srv_ip, 54321, 80, 0x5002);
@@ -364,8 +364,8 @@ private:
     }
 
     void test_classifier(Report& r) {
-        uint32_t src = Config::parse_ip_str("192.168.1.100");
-        uint32_t dst = Config::parse_ip_str("8.8.8.8");
+        Net::IPv4Net src = Config::parse_ip_str("192.168.1.100");
+        Net::IPv4Net dst = Config::parse_ip_str("8.8.8.8");
 
         // ── PRIO_DNS: UDP dst=53 → Critical ──
         {

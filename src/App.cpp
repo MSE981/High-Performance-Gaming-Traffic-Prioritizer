@@ -60,7 +60,7 @@ public:
     std::shared_ptr<QoSConfig>             device_shaper;
     std::shared_ptr<Logic::DhcpEngine>     dhcp_engine;
     std::shared_ptr<Logic::FirewallEngine> firewall_engine;
-    uint32_t gateway_ip = 0;
+    Net::IPv4Net gateway_ip{};
 
     std::array<std::array<RouteFunc, 3>, 2> routes;
 
@@ -102,10 +102,10 @@ public:
     static bool step_local_delivery_blocker(PacketConsumer& self, Net::ParsedPacket& pkt) {
         if (!pkt.is_valid_ipv4()) return false;
         if (self.core_id == 3) {
-            uint32_t d = pkt.ipv4->daddr;
-            if (d == self.gateway_ip ||
-                d == 0xFAFFFFEF ||   // 239.255.255.250 SSDP multicast (LE)
-                d == 0xFFFFFFFF)     // broadcast
+            Net::IPv4Net d = pkt.ipv4->daddr;
+            if (d == self.gateway_ip              ||
+                d == Net::IPv4Net{0xFAFFFFEF}     ||  // 239.255.255.250 SSDP multicast (NBO on LE)
+                d == Net::IPv4Net{0xFFFFFFFF})        // broadcast
                 return true;
         }
         return false;
@@ -260,7 +260,7 @@ App::App() {
     device_shaper_dl = std::make_shared<QoSConfig>();
     device_shaper_ul = std::make_shared<QoSConfig>();
     qos_config->update(Config::IP_LIMIT_TABLE, Config::IP_LIMIT_COUNT);
-    nat_engine->set_wan_ip(Config::parse_ip_str(Config::ROUTER_IP));
+    nat_engine->set_wan_ip(Config::parse_ip_str(Config::ROUTER_IP));  // IPv4Net ✓
 }
 
 App::~App() {
@@ -312,7 +312,7 @@ void App::start() {
     shaper_dl = std::make_shared<Traffic::Shaper>(base_dl_mbps);
     shaper_ul = std::make_shared<Traffic::Shaper>(base_ul_mbps);
 
-    uint32_t gw_ip = Config::parse_ip_str(Config::ROUTER_IP);
+    Net::IPv4Net gw_ip = Config::parse_ip_str(Config::ROUTER_IP);
     running_workers.store(true, std::memory_order_relaxed);
 
     worker_downstream = std::thread(
@@ -563,8 +563,8 @@ void App::watchdog_loop() {
                             char ip_str[20]{}, hw[8]{}, flags[8]{}, mac[20]{};
                             if (sscanf(line, "%19s %7s %7s %19s",
                                        ip_str, hw, flags, mac) == 4) {
-                                uint32_t ip = inet_addr(ip_str);
-                                if (ip != INADDR_NONE && strcmp(flags, "0x0") != 0) {
+                                Net::IPv4Net ip = Net::parse_ipv4(ip_str);
+                                if (ip.raw() != INADDR_NONE && strcmp(flags, "0x0") != 0) {
                                     tel.device_table[dcnt].ip = ip;
                                     strncpy(tel.device_table[dcnt].mac.data(), mac, 17);
                                     tel.device_table[dcnt].mac[17] = '\0';
@@ -604,7 +604,7 @@ void App::watchdog_loop() {
                 cfg_ptr->buffers[inactive] = {};
                 for (size_t i = 0; i < Config::DEVICE_POLICY_COUNT; ++i) {
                     const auto& p = Config::DEVICE_POLICY_TABLE[i];
-                    if (p.rate_limited && p.ip != 0)
+                    if (p.rate_limited && p.ip.raw() != 0)
                         cfg_ptr->buffers[inactive].insert(
                             p.ip, std::make_shared<Traffic::Shaper>(
                                 use_dl ? p.dl_mbps : p.ul_mbps));
@@ -618,8 +618,8 @@ void App::watchdog_loop() {
 
         // DNS config sync
         if (dns_engine && tel.dns_config_dirty.exchange(false, std::memory_order_acq_rel)) {
-            uint32_t pri = Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY);
-            uint32_t sec = Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY);
+            Net::IPv4Net pri = Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY);
+            Net::IPv4Net sec = Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY);
             dns_engine->set_upstream(pri, sec);
             dns_engine->set_redirect(
                 Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
@@ -632,8 +632,8 @@ void App::watchdog_loop() {
 
         // DHCP config sync
         if (dhcp_engine && tel.dhcp_config_dirty.exchange(false, std::memory_order_acq_rel)) {
-            uint32_t start = Config::parse_ip_str(Config::DHCP_POOL_START);
-            uint32_t end   = Config::parse_ip_str(Config::DHCP_POOL_END);
+            Net::IPv4Net start = Config::parse_ip_str(Config::DHCP_POOL_START);
+            Net::IPv4Net end   = Config::parse_ip_str(Config::DHCP_POOL_END);
             dhcp_engine->reconfigure(start, end, Config::DHCP_LEASE_SECONDS);
             std::println("[DHCP] Pool reconfigured: {} – {}, lease {}s",
                 Config::DHCP_POOL_START, Config::DHCP_POOL_END,

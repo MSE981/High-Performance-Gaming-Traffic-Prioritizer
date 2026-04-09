@@ -40,9 +40,9 @@ namespace Scalpel::Logic {
 #pragma pack(pop)
 
     struct DhcpLease {
-        uint8_t mac[6]{};
-        uint32_t ip;      // Managed IP in network byte order
-        bool active = false;
+        uint8_t      mac[6]{};
+        Net::IPv4Net ip{};    // NBO — from pool, never host-order arithmetic
+        bool         active = false;
         std::chrono::steady_clock::time_point lease_expiry;
     };
 
@@ -52,32 +52,32 @@ namespace Scalpel::Logic {
 
         static constexpr size_t MAX_POOL_SIZE = 253; // max usable IPs in a /24
         std::array<DhcpLease, MAX_POOL_SIZE> leases{};
-        size_t pool_count = 0;
-        uint32_t router_ip;
-        uint32_t lease_seconds = 86400;
+        size_t       pool_count   = 0;
+        Net::IPv4Net router_ip{};
+        uint32_t     lease_seconds = 86400;
 
-        void init_pool(uint32_t start_ip, uint32_t end_ip) {
-            uint32_t start_h = ntohl(start_ip);
-            uint32_t end_h   = ntohl(end_ip);
+        void init_pool(Net::IPv4Net start_ip, Net::IPv4Net end_ip) {
+            uint32_t start_h = start_ip.to_host().raw();
+            uint32_t end_h   = end_ip.to_host().raw();
             if (end_h < start_h) end_h = start_h;
             pool_count = std::min(static_cast<size_t>(end_h - start_h + 1), MAX_POOL_SIZE);
             for (size_t i = 0; i < pool_count; ++i) {
-                leases[i].ip = htonl(start_h + static_cast<uint32_t>(i));
+                leases[i].ip     = Net::pool_advance(start_ip, static_cast<uint32_t>(i));
                 leases[i].active = false;
             }
         }
 
     public:
         DhcpEngine(const std::string& lan_ip) {
-            router_ip = inet_addr(lan_ip.c_str());
-            uint32_t start_ip = inet_addr(Config::DHCP_POOL_START.c_str());
-            uint32_t end_ip   = inet_addr(Config::DHCP_POOL_END.c_str());
-            lease_seconds = Config::DHCP_LEASE_SECONDS;
+            router_ip              = Net::parse_ipv4(lan_ip.c_str());
+            Net::IPv4Net start_ip  = Net::parse_ipv4(Config::DHCP_POOL_START.c_str());
+            Net::IPv4Net end_ip    = Net::parse_ipv4(Config::DHCP_POOL_END.c_str());
+            lease_seconds          = Config::DHCP_LEASE_SECONDS;
             init_pool(start_ip, end_ip);
         }
 
         // Called by Core 1 watchdog when GUI sets dhcp_config_dirty
-        void reconfigure(uint32_t start_ip, uint32_t end_ip, uint32_t lease_secs) {
+        void reconfigure(Net::IPv4Net start_ip, Net::IPv4Net end_ip, uint32_t lease_secs) {
             lease_seconds = lease_secs;
             init_pool(start_ip, end_ip);
         }
@@ -119,33 +119,35 @@ namespace Scalpel::Logic {
             const uint8_t* opt = msg.data.data() + dhcp_offset + sizeof(DhcpHeader);
             const uint8_t* end = msg.data.data() + msg.len;
             
-            uint32_t requested_ip = 0;
-            
+            uint32_t raw_requested_ip = 0;
+
             while (opt < end && *opt != 255) {
                 if (*opt == 0) { opt++; continue; }
                 uint8_t len = opt[1];
                 if (opt + 2 + len > end) break;
-                
+
                 if (opt[0] == 53 && len == 1) msg_type = opt[2];
-                if (opt[0] == 50 && len == 4) std::memcpy(&requested_ip, &opt[2], 4);
+                if (opt[0] == 50 && len == 4) std::memcpy(&raw_requested_ip, &opt[2], 4);
                 
                 opt += 2 + len;
             }
+            Net::IPv4Net requested_ip{raw_requested_ip};  // NBO from option 50 wire field
 
             if (msg_type == 1) { // DHCP Discover
-                uint32_t offered_ip = find_or_assign_lease(dhcp->chaddr);
-                if (offered_ip != 0) {
+                Net::IPv4Net offered_ip = find_or_assign_lease(dhcp->chaddr);
+                if (offered_ip.raw() != 0) {
                     send_dhcp_response(msg.data, parsed, dhcp, 2, offered_ip, lan_fd); // DHCP Offer
                 }
             } else if (msg_type == 3) { // DHCP Request
-                if (requested_ip == 0) requested_ip = dhcp->ciaddr;
-                uint32_t leased_ip = find_or_assign_lease(dhcp->chaddr);
-                
+                if (requested_ip.raw() == 0) requested_ip = Net::IPv4Net{dhcp->ciaddr};
+                Net::IPv4Net leased_ip = find_or_assign_lease(dhcp->chaddr);
+
                 if (leased_ip == requested_ip) {
                     commit_lease(dhcp->chaddr, leased_ip);
                     send_dhcp_response(msg.data, parsed, dhcp, 5, leased_ip, lan_fd); // DHCP ACK
                     char ip_buf[INET_ADDRSTRLEN]{};
-                    inet_ntop(AF_INET, &leased_ip, ip_buf, sizeof(ip_buf));
+                    uint32_t raw_ip = leased_ip.raw();
+                    inet_ntop(AF_INET, &raw_ip, ip_buf, sizeof(ip_buf));
                     std::println("[DHCP Engine] Assigned IP to device: {}", ip_buf);
                 } else {
                     send_dhcp_response(msg.data, parsed, dhcp, 6, requested_ip, lan_fd); // DHCP NAK
@@ -153,37 +155,36 @@ namespace Scalpel::Logic {
             }
         }
 
-        uint32_t find_or_assign_lease(const uint8_t* mac) {
-            auto now = std::chrono::steady_clock::now();
+        Net::IPv4Net find_or_assign_lease(const uint8_t* mac) {
+            auto now      = std::chrono::steady_clock::now();
             auto duration = std::chrono::seconds(lease_seconds);
 
             for (size_t i = 0; i < pool_count; ++i) {
                 if (leases[i].active && std::memcmp(leases[i].mac, mac, 6) == 0) return leases[i].ip;
             }
-
             for (size_t i = 0; i < pool_count; ++i) {
                 if (!leases[i].active || now > leases[i].lease_expiry) {
                     std::memcpy(leases[i].mac, mac, 6);
-                    leases[i].active = true;
+                    leases[i].active       = true;
                     leases[i].lease_expiry = now + duration;
                     return leases[i].ip;
                 }
             }
-            return 0;
+            return Net::IPv4Net{};  // pool exhausted
         }
 
-        void commit_lease(const uint8_t* mac, uint32_t ip) {
+        void commit_lease(const uint8_t* mac, Net::IPv4Net ip) {
             auto duration = std::chrono::seconds(lease_seconds);
             for (size_t i = 0; i < pool_count; ++i) {
                 if (leases[i].ip == ip) {
-                    leases[i].active = true;
+                    leases[i].active       = true;
                     leases[i].lease_expiry = std::chrono::steady_clock::now() + duration;
                     return;
                 }
             }
         }
 
-        void send_dhcp_response(const std::array<uint8_t, 512>& request_data, const Net::ParsedPacket& parsed, const DhcpHeader* req_dhcp, uint8_t type, uint32_t yiaddr, int lan_fd) {
+        void send_dhcp_response(const std::array<uint8_t, 512>& request_data, const Net::ParsedPacket& parsed, const DhcpHeader* req_dhcp, uint8_t type, Net::IPv4Net yiaddr, int lan_fd) {
             alignas(64) std::array<uint8_t, 512> response{};
             
             auto eth = reinterpret_cast<Net::EthernetHeader*>(response.data());
@@ -199,7 +200,7 @@ namespace Scalpel::Logic {
             ip->ttl = 64;
             ip->protocol = 17;
             ip->saddr = router_ip;
-            ip->daddr = 0xFFFFFFFF; // Broadcast reply
+            ip->daddr = Net::IPv4Net{0xFFFFFFFF}; // Broadcast reply
             
             auto udp = reinterpret_cast<Net::UDPHeader*>(response.data() + sizeof(Net::EthernetHeader) + sizeof(Net::IPv4Header));
             udp->source = htons(67);
@@ -214,8 +215,8 @@ namespace Scalpel::Logic {
             dhcp->secs = 0;
             dhcp->flags = htons(0x8000); // Broadcast flag enabled
             dhcp->ciaddr = 0;
-            dhcp->yiaddr = yiaddr;
-            dhcp->siaddr = router_ip;
+            dhcp->yiaddr = yiaddr.raw();     // DhcpHeader wire field — uint32_t NBO
+            dhcp->siaddr = router_ip.raw();  // DhcpHeader wire field — uint32_t NBO
             dhcp->giaddr = 0;
             std::memcpy(dhcp->chaddr, req_dhcp->chaddr, 16);
             dhcp->magic_cookie = htonl(0x63825363);
@@ -224,11 +225,11 @@ namespace Scalpel::Logic {
             
             *opt++ = 53; *opt++ = 1; *opt++ = type;
             *opt++ = 1; *opt++ = 4; *opt++ = 255; *opt++ = 255; *opt++ = 255; *opt++ = 0;
-            *opt++ = 3; *opt++ = 4; std::memcpy(opt, &router_ip, 4); opt += 4;
-            *opt++ = 6; *opt++ = 4; std::memcpy(opt, &router_ip, 4); opt += 4;
-            uint32_t lease_time = htonl(lease_seconds);
-            *opt++ = 51; *opt++ = 4; std::memcpy(opt, &lease_time, 4); opt += 4;
-            *opt++ = 54; *opt++ = 4; std::memcpy(opt, &router_ip, 4); opt += 4;
+            { uint32_t r = router_ip.raw(); *opt++ = 3; *opt++ = 4; std::memcpy(opt, &r, 4); opt += 4; }
+            { uint32_t r = router_ip.raw(); *opt++ = 6; *opt++ = 4; std::memcpy(opt, &r, 4); opt += 4; }
+            { uint32_t lease_time = htonl(lease_seconds);
+              *opt++ = 51; *opt++ = 4; std::memcpy(opt, &lease_time, 4); opt += 4; }
+            { uint32_t r = router_ip.raw(); *opt++ = 54; *opt++ = 4; std::memcpy(opt, &r, 4); opt += 4; }
             *opt++ = 255; // DHCP End Indicator
 
             size_t dhcp_len = (opt - reinterpret_cast<uint8_t*>(dhcp));

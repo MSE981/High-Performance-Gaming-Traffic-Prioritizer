@@ -33,16 +33,17 @@ template<typename T, size_t Capacity = 256>
 class StaticIpMap {
 public:
     struct Entry {
-        uint32_t key      = 0;
-        T        value    = nullptr;
-        bool     occupied = false;
+        Net::IPv4Net key{};
+        T            value    = nullptr;
+        bool         occupied = false;
     };
 
 private:
     std::array<Entry, Capacity> table{};
 
-    static uint32_t fnv1a_hash(uint32_t val) {
-        uint32_t h = 2166136261U;
+    static uint32_t fnv1a_hash(Net::IPv4Net addr) {
+        uint32_t val = addr.raw();
+        uint32_t h   = 2166136261U;
         h ^= (val & 0xFF);         h *= 16777619U;
         h ^= ((val >>  8) & 0xFF); h *= 16777619U;
         h ^= ((val >> 16) & 0xFF); h *= 16777619U;
@@ -57,7 +58,7 @@ public:
             if (e.occupied && e.value) cb(e.value);
     }
 
-    void insert(uint32_t ip, T val) {
+    void insert(Net::IPv4Net ip, T val) {
         uint32_t h = fnv1a_hash(ip) % Capacity;
         for (size_t i = 0; i < Capacity; ++i) {
             size_t idx = (h + i) % Capacity;
@@ -68,7 +69,7 @@ public:
         }
     }
 
-    T find(uint32_t ip) const {
+    T find(Net::IPv4Net ip) const {
         uint32_t h = fnv1a_hash(ip) % Capacity;
         for (size_t i = 0; i < Capacity; ++i) {
             size_t idx = (h + i) % Capacity;
@@ -107,7 +108,7 @@ struct PacketWorkerConfig {
     std::shared_ptr<QoSConfig>             device_shaper;
     std::shared_ptr<Logic::DhcpEngine>     dhcp_engine;
     std::shared_ptr<Logic::FirewallEngine> firewall_engine;
-    uint32_t gateway_ip;
+    Net::IPv4Net gateway_ip{};
 };
 
 // ─── Application class ───────────────────────────────────────────────────────

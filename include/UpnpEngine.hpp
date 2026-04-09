@@ -189,7 +189,7 @@ namespace Scalpel::Logic {
                                     
                                     char ip_buf[32] = {0};
                                     std::memcpy(ip_buf, int_client.data(), std::min(int_client.size(), size_t(31)));
-                                    uint32_t cIP = inet_addr(ip_buf);
+                                    Net::IPv4Net cIP = Net::parse_ipv4(ip_buf);
 
                                     nat_engine->add_upnp_rule(eP, cIP, iP, proto);
                                     std::println("[UPnP] Port mapping accepted: {} [{}] -> {}:{} forwarded to data plane.", ext_port, protocol, int_client, iP);

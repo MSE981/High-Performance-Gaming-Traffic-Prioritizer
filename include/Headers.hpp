@@ -3,7 +3,7 @@
 #include <atomic>
 #include <array>
 #include <span>
-#include <netinet/in.h>
+#include "NetworkTypes.hpp"
 
 namespace Scalpel::Net {
     enum class Priority : uint8_t {
@@ -28,8 +28,8 @@ namespace Scalpel::Net {
         uint8_t  ttl;
         uint8_t  protocol;
         uint16_t check;
-        uint32_t saddr;
-        uint32_t daddr;
+        IPv4Net  saddr;   // always NBO — from wire
+        IPv4Net  daddr;   // always NBO — from wire
     };
 
     struct UDPHeader {

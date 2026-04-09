@@ -31,10 +31,10 @@ namespace Scalpel::Logic {
     class DnsEngine {
         // Static table: compliance with principle 3.1 - Zero Dynamic Allocation
         struct DnsCacheEntry {
-            uint32_t domain_hash = 0;
-            uint32_t ipv4_address = 0;
-            uint32_t expire_tick = 0;
-            std::atomic<bool> valid{false}; 
+            uint32_t     domain_hash  = 0;
+            Net::IPv4Net ipv4_address{};
+            uint32_t     expire_tick  = 0;
+            std::atomic<bool> valid{false};
         };
 
         static constexpr size_t CACHE_SIZE = 4096;
@@ -43,15 +43,15 @@ namespace Scalpel::Logic {
 
         std::atomic<uint32_t> current_tick{0};
 
-        // Upstream DNS server IPs (network byte order); 0 = not configured
-        std::atomic<uint32_t> upstream_primary_ip{0};
-        std::atomic<uint32_t> upstream_secondary_ip{0};
+        // Upstream DNS server IPs (NBO); default-constructed = 0.0.0.0 = not configured
+        std::atomic<Net::IPv4Net> upstream_primary_ip{};
+        std::atomic<Net::IPv4Net> upstream_secondary_ip{};
         std::atomic<bool>     redirect_enabled{false};
 
         // Static DNS records: written by Core 1 watchdog, read by Core 3 hot path
         struct StaticRecord {
-            uint32_t domain_hash = 0;
-            uint32_t ip          = 0;
+            uint32_t     domain_hash = 0;
+            Net::IPv4Net ip{};
         };
         static constexpr size_t MAX_STATIC = 64;
         std::array<StaticRecord, MAX_STATIC> static_records{};
@@ -70,7 +70,7 @@ namespace Scalpel::Logic {
 
         // Swap Eth/IP/UDP headers and inject a single A-record answer, then send back on bounce_fd.
         void do_bounce(Net::ParsedPacket& pkt, DnsHeader* dns, Net::UDPHeader* udp,
-                       uint32_t ip, int bounce_fd) {
+                       Net::IPv4Net ip, int bounce_fd) {
             size_t old_len = pkt.raw_span.size();
             size_t new_len = old_len + 16;
             if (new_len > 1500) return; // MTU guard
@@ -84,10 +84,11 @@ namespace Scalpel::Logic {
             tail[4] = 0x00; tail[5] = 0x01;                   // Class IN
             tail[6] = 0x00; tail[7] = 0x00; tail[8] = 0x01; tail[9] = 0x2C; // TTL 300
             tail[10] = 0x00; tail[11] = 0x04;                 // RDLength = 4
-            std::memcpy(&tail[12], &ip, 4);
+            uint32_t raw_ip = ip.raw();
+            std::memcpy(&tail[12], &raw_ip, 4);
 
             for (int i = 0; i < 6; ++i) std::swap(pkt.eth->src[i], pkt.eth->dest[i]);
-            uint32_t s_ip = pkt.ipv4->saddr;
+            Net::IPv4Net s_ip = pkt.ipv4->saddr;
             pkt.ipv4->saddr = pkt.ipv4->daddr;
             pkt.ipv4->daddr = s_ip;
             pkt.ipv4->tot_len = htons(static_cast<uint16_t>(new_len - sizeof(Net::EthernetHeader)));
@@ -110,7 +111,7 @@ namespace Scalpel::Logic {
         }
 
         // Rewrite IPv4 destination + recompute IP header checksum (used for DNS redirect)
-        static void rewrite_upstream(Net::ParsedPacket& pkt, uint32_t upstream_ip) {
+        static void rewrite_upstream(Net::ParsedPacket& pkt, Net::IPv4Net upstream_ip) {
             pkt.ipv4->daddr = upstream_ip;
             pkt.ipv4->check = 0;
             uint32_t sum = 0;
@@ -125,7 +126,7 @@ namespace Scalpel::Logic {
         void tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
 
         // Core 1: apply upstream DNS server config (called from watchdog on dns_config_dirty)
-        void set_upstream(uint32_t primary, uint32_t secondary) {
+        void set_upstream(Net::IPv4Net primary, Net::IPv4Net secondary) {
             upstream_primary_ip.store(primary,   std::memory_order_release);
             upstream_secondary_ip.store(secondary, std::memory_order_release);
         }
@@ -189,8 +190,8 @@ namespace Scalpel::Logic {
 
             // Stage 3: cache miss — redirect query to configured upstream DNS server
             if (redirect_enabled.load(std::memory_order_relaxed)) {
-                uint32_t upstream = upstream_primary_ip.load(std::memory_order_relaxed);
-                if (upstream != 0) rewrite_upstream(pkt, upstream);
+                Net::IPv4Net upstream = upstream_primary_ip.load(std::memory_order_relaxed);
+                if (upstream.raw() != 0) rewrite_upstream(pkt, upstream);
             }
             return false; // continue pipeline → NAT handles SNAT to upstream
         }
@@ -236,10 +237,10 @@ namespace Scalpel::Logic {
                 if (ptr + 12 <= msg.len) {
                     // Type A (0x0001) record
                     if (msg.data[ptr+2] == 0x00 && msg.data[ptr+3] == 0x01) {
-                        uint32_t ipv4 = *reinterpret_cast<const uint32_t*>(&msg.data[ptr+10]);
-                        
+                        Net::IPv4Net ipv4{*reinterpret_cast<const uint32_t*>(&msg.data[ptr+10])};
+
                         size_t idx = h % CACHE_SIZE;
-                        cache[idx].domain_hash = h;
+                        cache[idx].domain_hash  = h;
                         cache[idx].ipv4_address = ipv4;
                         cache[idx].expire_tick = current_tick.load(std::memory_order_relaxed) + 300;
                         // Principle 3.0: release barrier ensures memory writes complete before data plane acquires true

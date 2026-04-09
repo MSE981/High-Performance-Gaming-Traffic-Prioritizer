@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <unistd.h>
+#include "NetworkTypes.hpp"
 
 namespace Scalpel::Config {
     // Per-interface role assignment
@@ -84,8 +85,8 @@ namespace Scalpel::Config {
     // Written by GUI (Core 0), applied to DnsEngine by Core 1 via dns_config_dirty
     static constexpr size_t MAX_STATIC_DNS = 64;
     struct StaticDnsRecord {
-        uint32_t domain_hash = 0;
-        uint32_t ip          = 0;
+        uint32_t      domain_hash = 0;
+        Net::IPv4Net  ip{};
         std::array<char, 64> hostname{};  // dotted notation, for GUI display
     };
     inline std::array<StaticDnsRecord, MAX_STATIC_DNS> STATIC_DNS_TABLE{};
@@ -144,12 +145,12 @@ namespace Scalpel::Config {
     // Per-device policy table (populated by GUI DevicePage, consumed by Core 1 watchdog)
     static constexpr size_t MAX_DEVICE_POLICIES = 64;
     struct DevicePolicy {
-        uint32_t ip = 0;
-        uint8_t  mac[6]{};
-        bool     blocked      = false;
-        bool     rate_limited = false;
-        double   dl_mbps      = 100.0;
-        double   ul_mbps      = 10.0;
+        Net::IPv4Net ip{};
+        uint8_t      mac[6]{};
+        bool         blocked      = false;
+        bool         rate_limited = false;
+        double       dl_mbps      = 100.0;
+        double       ul_mbps      = 10.0;
     };
     inline std::array<DevicePolicy, MAX_DEVICE_POLICIES> DEVICE_POLICY_TABLE{};
     inline size_t DEVICE_POLICY_COUNT = 0;
@@ -169,15 +170,15 @@ namespace Scalpel::Config {
     // Static IP rate limit table (max 256 entries, zero heap allocation)
     static constexpr size_t MAX_IP_LIMITS = 256;
     struct IpLimitEntry {
-        uint32_t ip       = 0;
-        double   rate_mbps = 0.0;
+        Net::IPv4Net ip{};
+        double       rate_mbps = 0.0;
     };
     inline std::array<IpLimitEntry, MAX_IP_LIMITS> IP_LIMIT_TABLE{};
     inline size_t IP_LIMIT_COUNT = 0;
     inline std::atomic<bool> IP_LIMIT_ACTIVE{false};
 
     inline void clear_ip_limits() { IP_LIMIT_COUNT = 0; }
-    inline void add_ip_limit(uint32_t ip, double rate_mbps) {
+    inline void add_ip_limit(Net::IPv4Net ip, double rate_mbps) {
         // Update existing entry if found
         for (size_t i = 0; i < IP_LIMIT_COUNT; ++i) {
             if (IP_LIMIT_TABLE[i].ip == ip) { IP_LIMIT_TABLE[i].rate_mbps = rate_mbps; return; }
@@ -196,25 +197,25 @@ namespace Scalpel::Config {
         return false;
     }
 
-    // Helper: parse string IP (A.B.C.D) to network-order uint32
-    inline uint32_t parse_ip_str(const std::string& ip_str) {
+    // Helper: parse dotted-decimal string to NBO IPv4Net (manual, no syscall)
+    inline Net::IPv4Net parse_ip_str(const std::string& ip_str) {
         uint32_t a, b, c, d;
-        if (sscanf(ip_str.c_str(), "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
-            return (a << 0) | (b << 8) | (c << 16) | (d << 24);
-        }
-        return 0;
+        if (sscanf(ip_str.c_str(), "%u.%u.%u.%u", &a, &b, &c, &d) == 4)
+            return Net::IPv4Net{(a << 0) | (b << 8) | (c << 16) | (d << 24)};
+        return Net::IPv4Net{};
     }
 
-    // Helper: convert network-order uint32 to dotted-decimal string
-    inline std::string ip_to_str(uint32_t ip) {
+    // Helper: convert NBO IPv4Net to dotted-decimal string
+    inline std::string ip_to_str(Net::IPv4Net ip) {
+        uint32_t v = ip.raw();
         return std::format("{}.{}.{}.{}",
-            ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF);
+            v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF);
     }
 
     // Insert or update a static DNS record (called by GUI); parse_ip_str must precede this
     inline void upsert_static_dns(const std::string& hostname, const std::string& ip_str) {
-        uint32_t hash = dns_hash_hostname(hostname);
-        uint32_t ip   = parse_ip_str(ip_str);
+        uint32_t     hash = dns_hash_hostname(hostname);
+        Net::IPv4Net ip   = parse_ip_str(ip_str);
         for (size_t i = 0; i < STATIC_DNS_COUNT; ++i) {
             if (STATIC_DNS_TABLE[i].domain_hash == hash) {
                 STATIC_DNS_TABLE[i].ip = ip;
@@ -333,7 +334,7 @@ namespace Scalpel::Config {
                         char* colon = strchr(val, ':');
                         if (colon) {
                             *colon = '\0';
-                            uint32_t ip = parse_ip_str(val);
+                            Net::IPv4Net ip = parse_ip_str(val);
                             double limit = atof(colon + 1);
                             add_ip_limit(ip, limit);
                         }
@@ -399,13 +400,13 @@ namespace Scalpel::Config {
         dprintf(fd, "DNS_UPSTREAM_SECONDARY=%s\n", DNS_UPSTREAM_SECONDARY.c_str());
         dprintf(fd, "DNS_REDIRECT_ENABLED=%s\n",   b(DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed)));
         for (size_t i = 0; i < STATIC_DNS_COUNT; ++i) {
-            uint32_t ip = STATIC_DNS_TABLE[i].ip;
+            uint32_t ip = STATIC_DNS_TABLE[i].ip.raw();
             dprintf(fd, "STATIC_DNS=%s:%u.%u.%u.%u\n",
                 STATIC_DNS_TABLE[i].hostname.data(),
                 ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF);
         }
         for (size_t i = 0; i < IP_LIMIT_COUNT; ++i) {
-            uint32_t ip = IP_LIMIT_TABLE[i].ip;
+            uint32_t ip = IP_LIMIT_TABLE[i].ip.raw();
             dprintf(fd, "IP_LIMIT=%u.%u.%u.%u:%.6g\n",
                 ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF,
                 IP_LIMIT_TABLE[i].rate_mbps);

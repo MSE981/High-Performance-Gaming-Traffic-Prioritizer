@@ -1154,7 +1154,7 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
         static_dns_table->insertRow(row);
         static_dns_table->setItem(row, 0, new QTableWidgetItem(
             QString::fromLatin1(Config::STATIC_DNS_TABLE[i].hostname.data())));
-        uint32_t ip = Config::STATIC_DNS_TABLE[i].ip;
+        Net::IPv4Net ip = Config::STATIC_DNS_TABLE[i].ip;
         static_dns_table->setItem(row, 1, new QTableWidgetItem(
             QString("%1.%2.%3.%4")
                 .arg(ip & 0xFF).arg((ip >> 8) & 0xFF)
@@ -1409,7 +1409,7 @@ void DevicePage::refresh() {
     }
 
     for (uint8_t i = 0; i < cnt; ++i) {
-        uint32_t ip         = tel.device_table[i].ip;
+        Net::IPv4Net ip     = tel.device_table[i].ip;
         const char* mac_str = tel.device_table[i].mac.data();
 
         // Look up existing policy
@@ -1435,7 +1435,7 @@ void DevicePage::refresh() {
         cl->setContentsMargins(12, 8, 12, 8);
 
         // Header: IP + MAC
-        struct in_addr addr{}; addr.s_addr = ip;
+        struct in_addr addr{}; addr.s_addr = ip.raw();  // POSIX boundary
         auto* lbl_info = new QLabel(
             QString("<b>%1</b>  <span style='color:#707080;font-size:12px;'>%2</span>")
                 .arg(inet_ntoa(addr)).arg(mac_str));

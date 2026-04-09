@@ -58,7 +58,7 @@ namespace Scalpel::Logic {
         // Per-device block list: written by Core 1 watchdog, read by Core 2/3 hot path.
         // Using a small linear array — max 64 blocked devices, O(n) scan is negligible.
         static constexpr size_t MAX_BLOCKED = 64;
-        std::array<uint32_t, MAX_BLOCKED> blocked_ips{};
+        std::array<Net::IPv4Net, MAX_BLOCKED> blocked_ips{};
         std::atomic<uint8_t> blocked_count{0};
 
         // FNV-1a keyed on remote side only — ensures outbound writes and inbound reads
@@ -103,7 +103,7 @@ namespace Scalpel::Logic {
         }
 
         // Core 2/3 hot path: O(n) scan over tiny list
-        bool is_blocked_ip(uint32_t ip) const {
+        bool is_blocked_ip(Net::IPv4Net ip) const {
             uint8_t cnt = blocked_count.load(std::memory_order_acquire);
             for (uint8_t i = 0; i < cnt; ++i)
                 if (blocked_ips[i] == ip) return true;

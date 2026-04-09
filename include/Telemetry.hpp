@@ -3,12 +3,7 @@
 #include <cstdint>
 #include <array>
 #include <cstring>
-
-namespace Scalpel::Net {
-    // Network-byte-order IPv4 address — opaque alias over uint32_t.
-    // Use Config::ip_to_str() / inet_ntoa() to convert for display.
-    using IPv4Addr = uint32_t;
-}
+#include "NetworkTypes.hpp"
 
 namespace Scalpel {
 
@@ -43,7 +38,7 @@ namespace Scalpel {
         // Plain char arrays — torn reads acceptable for display-only data.
         static constexpr uint8_t MAX_TRACKED_DEVICES = 64;
         struct DeviceEntry {
-            Net::IPv4Addr ip = 0;
+            Net::IPv4Net ip{};
             std::array<char, 18> mac{};  // "xx:xx:xx:xx:xx:xx\0"
         };
         std::array<DeviceEntry, MAX_TRACKED_DEVICES> device_table{};
