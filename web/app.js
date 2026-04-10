@@ -2,7 +2,7 @@ const express = require('express');
 const session = require('express-session');
 const path = require('path');
 const si = require('systeminformation');
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 const os = require('os');
 const app = express();
 
@@ -74,9 +74,13 @@ app.get('/interfaces', requireAuth, (req, res) => { res.render('interfaces'); })
 app.get('/services', requireAuth, (req, res) => { res.render('services'); });
 
 app.post('/api/ping', requireAuth, (req, res) => {
-    const target = req.body.target || '8.8.8.8';
+    let target = req.body.target || '8.8.8.8';
+    // Sanitize target to prevent shell injection
+    target = target.replace(/[^a-zA-Z0-9.-]/g, '');
+    if (!target) return res.json({ status: 'error', output: 'Invalid target' });
+    
     const pingFlag = os.platform() === 'win32' ? '-n' : '-c';
-    exec(`ping ${pingFlag} 4 ${target}`, (error, stdout, stderr) => {
+    execFile('ping', [pingFlag, '4', target], (error, stdout, stderr) => {
         res.json({ status: error ? "error" : "success", output: stderr || stdout || error.message });
     });
 });
@@ -97,6 +101,11 @@ app.get('/devices', requireAuth, (req, res) => {
 app.get('/logs', requireAuth, (req, res) => {
     res.render('logs', { logs: [{ timestamp: new Date().toLocaleString(), level: "INFO", message: "System running normally." }] });
 });
+
+// Mock endpoints for new features
+app.post('/api/services/toggle', requireAuth, (req, res) => { res.json({ status: 'success' }); });
+app.post('/api/interfaces/apply', requireAuth, (req, res) => { res.json({ status: 'success' }); });
+
 
 app.get('/dev', requireAuth, (req, res) => { res.render('dev'); });
 
