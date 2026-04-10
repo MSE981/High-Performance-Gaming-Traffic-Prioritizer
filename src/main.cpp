@@ -92,11 +92,11 @@ int main(int argc, char* argv[]) {
             // Watchdog thread: when underlying engine receives Ctrl+C (stop set),
             // safely notify Qt to exit GUI. Fixes bug where signal_handler alone couldn't
             // interrupt Qt exec(), causing terminal to hang completely.
-            std::thread([&app, &qapp]() {
+            std::thread watchdog_notify([&app, &qapp]() {
                 Scalpel::System::Optimizer::set_current_thread_affinity(1); // Core 1: Watchdog
                 app.wait_for_shutdown();
                 QMetaObject::invokeMethod(&qapp, "quit", Qt::QueuedConnection);
-            }).detach();
+            });
 
             ret = qapp.exec(); // Block on main event loop
 
@@ -104,6 +104,7 @@ int main(int argc, char* argv[]) {
             if (!signal_received.exchange(true)) {
                 app.stop();
             }
+            watchdog_notify.join(); // qapp still in scope; thread is done on both exit paths
         } else {
             // Pure CLI mode — run selftest synchronously then start engine
             {
