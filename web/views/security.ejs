@@ -1,283 +1,290 @@
 <!DOCTYPE html>
 <html lang="en">
-
-<head>
-    <meta charset="UTF-8">
+  <head>
+    <meta charset="UTF-8" />
     <title>Security & Password</title>
     <style>
-        body {
-            font-family: sans-serif;
-            background: #1a1a1a;
-            color: white;
-            padding: 20px;
-            margin: 0;
+      body {
+        font-family: sans-serif;
+        background: #1a1a1a;
+        color: white;
+        padding: 20px;
+        margin: 0;
+      }
+
+      h1 {
+        text-align: center;
+        margin-bottom: 30px;
+      }
+
+      .navbar {
+        background-color: #2d2d2d;
+        overflow: hidden;
+        border-radius: 8px;
+        margin-bottom: 25px;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+        display: flex;
+        justify-content: center;
+        flex-wrap: wrap;
+      }
+
+      .navbar a {
+        display: block;
+        color: #ccc;
+        text-align: center;
+        padding: 14px 20px;
+        text-decoration: none;
+        font-weight: bold;
+        transition: 0.3s;
+      }
+
+      .navbar a:hover {
+        background-color: #444;
+        color: white;
+      }
+
+      .navbar a.active {
+        background-color: #17a2b8;
+        color: white;
+      }
+
+      .layout-container {
+        display: grid;
+        grid-template-columns: 250px 1fr;
+        gap: 20px;
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+
+      .sidebar {
+        background: #2d2d2d;
+        border-radius: 8px;
+        padding: 15px 0;
+        height: fit-content;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+      }
+
+      .sidebar-header {
+        padding: 0 20px 10px 20px;
+        color: #17a2b8;
+        font-size: 18px;
+        font-weight: bold;
+        border-bottom: 1px solid #444;
+        margin-bottom: 10px;
+      }
+
+      .sidebar ul {
+        list-style-type: none;
+        padding: 0;
+        margin: 0;
+      }
+
+      .sidebar li a {
+        display: block;
+        padding: 15px 20px;
+        color: #ccc;
+        text-decoration: none;
+        border-left: 4px solid transparent;
+        transition: 0.2s;
+        cursor: pointer;
+      }
+
+      .sidebar li a:hover {
+        background: #333;
+        color: white;
+      }
+
+      .sidebar li a.active-menu {
+        background: #333;
+        color: #17a2b8;
+        border-left: 4px solid #17a2b8;
+        font-weight: bold;
+      }
+
+      .main-panel {
+        background: #2d2d2d;
+        border-radius: 8px;
+        padding: 30px;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+        min-height: 400px;
+      }
+
+      .main-panel h2 {
+        margin-top: 0;
+        border-bottom: 2px solid #444;
+        padding-bottom: 10px;
+        color: white;
+      }
+
+      /* Hidden by default, toggled via JS */
+      .settings-section {
+        display: none;
+        animation: fadeIn 0.3s;
+      }
+
+      .settings-section.active {
+        display: block;
+      }
+
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
         }
 
-        h1 {
-            text-align: center;
-            margin-bottom: 30px;
+        to {
+          opacity: 1;
         }
+      }
 
-        .navbar {
-            background-color: #2d2d2d;
-            overflow: hidden;
-            border-radius: 8px;
-            margin-bottom: 25px;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
-            display: flex;
-            justify-content: center;
-            flex-wrap: wrap;
-        }
+      label {
+        display: block;
+        margin-top: 20px;
+        margin-bottom: 8px;
+        color: #ccc;
+        font-weight: bold;
+      }
 
-        .navbar a {
-            display: block;
-            color: #ccc;
-            text-align: center;
-            padding: 14px 20px;
-            text-decoration: none;
-            font-weight: bold;
-            transition: 0.3s;
-        }
+      input,
+      select {
+        padding: 12px;
+        width: 100%;
+        box-sizing: border-box;
+        border-radius: 5px;
+        border: 1px solid #555;
+        background: #222;
+        color: white;
+        font-size: 16px;
+        margin-bottom: 10px;
+      }
 
-        .navbar a:hover {
-            background-color: #444;
-            color: white;
-        }
+      input:focus,
+      select:focus {
+        outline: none;
+        border-color: #17a2b8;
+      }
 
-        .navbar a.active {
-            background-color: #17a2b8;
-            color: white;
-        }
+      .btn-primary {
+        padding: 12px 20px;
+        background: #17a2b8;
+        color: white;
+        border: none;
+        cursor: pointer;
+        border-radius: 5px;
+        font-weight: bold;
+        font-size: 16px;
+        transition: 0.3s;
+        width: 100%;
+        margin-top: 15px;
+      }
 
-        .layout-container {
-            display: grid;
-            grid-template-columns: 250px 1fr;
-            gap: 20px;
-            max-width: 1200px;
-            margin: 0 auto;
-        }
+      .btn-primary:hover {
+        background: #138496;
+      }
 
-        .sidebar {
-            background: #2d2d2d;
-            border-radius: 8px;
-            padding: 15px 0;
-            height: fit-content;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
-        }
+      .btn-danger {
+        padding: 12px 20px;
+        background: #dc3545;
+        color: white;
+        border: none;
+        cursor: pointer;
+        border-radius: 5px;
+        font-weight: bold;
+        font-size: 16px;
+        transition: 0.3s;
+        width: 100%;
+        margin-top: 15px;
+      }
 
-        .sidebar-header {
-            padding: 0 20px 10px 20px;
-            color: #17a2b8;
-            font-size: 18px;
-            font-weight: bold;
-            border-bottom: 1px solid #444;
-            margin-bottom: 10px;
-        }
+      .btn-danger:hover {
+        background: #c82333;
+      }
 
-        .sidebar ul {
-            list-style-type: none;
-            padding: 0;
-            margin: 0;
-        }
+      .hint {
+        font-size: 12px;
+        color: #888;
+        margin-top: 2px;
+      }
 
-        .sidebar li a {
-            display: block;
-            padding: 15px 20px;
-            color: #ccc;
-            text-decoration: none;
-            border-left: 4px solid transparent;
-            transition: 0.2s;
-            cursor: pointer;
-        }
-
-        .sidebar li a:hover {
-            background: #333;
-            color: white;
-        }
-
-        .sidebar li a.active-menu {
-            background: #333;
-            color: #17a2b8;
-            border-left: 4px solid #17a2b8;
-            font-weight: bold;
-        }
-
-        .main-panel {
-            background: #2d2d2d;
-            border-radius: 8px;
-            padding: 30px;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
-            min-height: 400px;
-        }
-
-        .main-panel h2 {
-            margin-top: 0;
-            border-bottom: 2px solid #444;
-            padding-bottom: 10px;
-            color: white;
-        }
-
-        /* Hidden by default, toggled via JS */
-        .settings-section {
-            display: none;
-            animation: fadeIn 0.3s;
-        }
-
-        .settings-section.active {
-            display: block;
-        }
-
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-            }
-
-            to {
-                opacity: 1;
-            }
-        }
-
-        label {
-            display: block;
-            margin-top: 20px;
-            margin-bottom: 8px;
-            color: #ccc;
-            font-weight: bold;
-        }
-
-        input,
-        select {
-            padding: 12px;
-            width: 100%;
-            box-sizing: border-box;
-            border-radius: 5px;
-            border: 1px solid #555;
-            background: #222;
-            color: white;
-            font-size: 16px;
-            margin-bottom: 10px;
-        }
-
-        input:focus,
-        select:focus {
-            outline: none;
-            border-color: #17a2b8;
-        }
-
-        .btn-primary {
-            padding: 12px 20px;
-            background: #17a2b8;
-            color: white;
-            border: none;
-            cursor: pointer;
-            border-radius: 5px;
-            font-weight: bold;
-            font-size: 16px;
-            transition: 0.3s;
-            width: 100%;
-            margin-top: 15px;
-        }
-
-        .btn-primary:hover {
-            background: #138496;
-        }
-
-        .btn-danger {
-            padding: 12px 20px;
-            background: #dc3545;
-            color: white;
-            border: none;
-            cursor: pointer;
-            border-radius: 5px;
-            font-weight: bold;
-            font-size: 16px;
-            transition: 0.3s;
-            width: 100%;
-            margin-top: 15px;
-        }
-
-        .btn-danger:hover {
-            background: #c82333;
-        }
-
-        .hint {
-            font-size: 12px;
-            color: #888;
-            margin-top: 2px;
-        }
-
-        .status-box {
-            background: #222;
-            border: 1px solid #444;
-            padding: 15px;
-            border-radius: 5px;
-            margin-top: 15px;
-            text-align: center;
-        }
+      .status-box {
+        background: #222;
+        border: 1px solid #444;
+        padding: 15px;
+        border-radius: 5px;
+        margin-top: 15px;
+        text-align: center;
+      }
     </style>
-</head>
+  </head>
 
-<body>
-
+  <body>
     <h1>🚀 Core System Management (BMC)</h1>
 
     <div class="navbar">
-        <a href="/">📊 Dashboard</a>
-        <a href="/network">🌐 Network</a>
-        <a href="/qos">🚦 QoS</a>
-        <a href="/devices">📱 Devices</a>
-        <a href="/logs">📈 Logs</a>
-        <a href="/dev">🛠️ Dev</a>
-        <a href="/security" class="active"> Security</a>
+      <a href="/">📊 Dashboard</a>
+      <a href="/network">🌐 Network</a>
+      <a href="/qos">🚦 QoS</a>
+      <a href="/devices">📱 Devices</a>
+      <a href="/logs">📈 Logs</a>
+      <a href="/dev">🛠️ Dev</a>
+      <a href="/security" class="active"> Security</a>
     </div>
 
     <div class="layout-container">
-        <div class="sidebar">
-            <div class="sidebar-header">Advanced Settings</div>
-            <ul id="sidebar-menu">
-                <li><a class="sidebar-link active-menu" data-target="sec-password">🔑 Security & Password</a></li>
-            </ul>
+      <div class="sidebar">
+        <div class="sidebar-header">Advanced Settings</div>
+        <ul id="sidebar-menu">
+          <li>
+            <a class="sidebar-link active-menu" data-target="sec-password"
+              >🔑 Security & Password</a
+            >
+          </li>
+        </ul>
+      </div>
+
+      <div class="main-panel">
+        <div id="sec-password" class="settings-section active">
+          <h2>Account Security</h2>
+          <form action="/api/change_password" method="POST">
+            <label>Current Password</label>
+            <input
+              type="password"
+              name="old_password"
+              required
+              placeholder="Enter current admin password"
+            />
+            <label>New Password</label>
+            <input
+              type="password"
+              name="new_password"
+              required
+              placeholder="Enter new strong password"
+            />
+            <button type="submit" class="btn-primary">Save Password</button>
+          </form>
         </div>
-
-        <div class="main-panel">
-
-            <div id="sec-password" class="settings-section active">
-                <h2>Account Security</h2>
-                <form action="/api/change_password" method="POST">
-                    <label>Current Password</label>
-                    <input type="password" name="old_password" required placeholder="Enter current admin password">
-                    <label>New Password</label>
-                    <input type="password" name="new_password" required placeholder="Enter new strong password">
-                    <button type="submit" class="btn-primary">Save Password</button>
-                </form>
-            </div>
-
-
-
-        </div>
+      </div>
     </div>
 
     <script>
-        const links = document.querySelectorAll('.sidebar-link');
-        const sections = document.querySelectorAll('.settings-section');
+      const links = document.querySelectorAll(".sidebar-link");
+      const sections = document.querySelectorAll(".settings-section");
 
-        links.forEach(link => {
-            link.addEventListener('click', function (e) {
-                e.preventDefault();
+      links.forEach((link) => {
+        link.addEventListener("click", function (e) {
+          e.preventDefault();
 
-                // Remove active class from all links and sections
-                links.forEach(l => l.classList.remove('active-menu'));
-                sections.forEach(s => s.classList.remove('active'));
+          // Remove active class from all links and sections
+          links.forEach((l) => l.classList.remove("active-menu"));
+          sections.forEach((s) => s.classList.remove("active"));
 
-                // Add active class to clicked link
-                this.classList.add('active-menu');
+          // Add active class to clicked link
+          this.classList.add("active-menu");
 
-                // Show corresponding section
-                const targetId = this.getAttribute('data-target');
-                document.getElementById(targetId).classList.add('active');
-            });
+          // Show corresponding section
+          const targetId = this.getAttribute("data-target");
+          document.getElementById(targetId).classList.add("active");
         });
+      });
     </script>
-</body>
-
+  </body>
 </html>
