@@ -11,15 +11,15 @@ const PORT = 8888;
 // === Global Configurations ===
 let adminPassword = 'admin123';
 
-let systemConfig = { traffic_mode: "gaming", bandwidth_limit: 100, target_port: 27015 };
-let extraFeaturesConfig = { dmz_ip: "", timezone: "Asia/Shanghai" };
+let systemConfig = { traffic_mode: 'gaming', bandwidth_limit: 100, target_port: 27015 };
+let extraFeaturesConfig = { dmz_ip: '', timezone: 'Asia/Shanghai' };
 
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.use(express.urlencoded({ extended: true }));
 
 // === NEW: Global Template Variables (Accessible in all .ejs files) ===
-app.locals.systemVersion = "v1.0.4-gaming-core";
+app.locals.systemVersion = 'v1.0.4-gaming-core';
 app.locals.currentYear = new Date().getFullYear();
 
 app.use(session({
@@ -63,9 +63,9 @@ app.get('/api/status', requireAuth, async (req, res) => {
             memory: Math.round((mem.active / mem.total) * 100),
             uptime: `${hours}h ${minutes}m ${seconds}s`,
             download_speed: Math.floor(Math.random() * 200) + 300,
-            connections: [{ source: "192.168.1.100:54321", dest: "104.160.131.3:27015", proto: "UDP", rule: "Gaming Priority", up: 15, down: 45, time: "00:15:22" }]
+            connections: [{ source: '192.168.1.100:54321', dest: '104.160.131.3:27015', proto: 'UDP', rule: 'Gaming Priority', up: 15, down: 45, time: '00:15:22' }]
         });
-    } catch (error) { res.status(500).json({ error: 'Failed to fetch hardware data' }); }
+    } catch (error) { console.error(error); res.status(500).json({ error: 'Failed to fetch hardware data' }); }
 });
 
 app.get('/interfaces', requireAuth, (req, res) => { res.render('interfaces'); });
@@ -81,7 +81,7 @@ app.post('/api/ping', requireAuth, (req, res) => {
     
     const pingFlag = os.platform() === 'win32' ? '-n' : '-c';
     execFile('ping', [pingFlag, '4', target], (error, stdout, stderr) => {
-        res.json({ status: error ? "error" : "success", output: stderr || stdout || error.message });
+        res.json({ status: error ? 'error' : 'success', output: stderr || stdout || error.message });
     });
 });
 
@@ -95,11 +95,11 @@ app.post('/update_qos_settings', requireAuth, (req, res) => {
 });
 
 app.get('/devices', requireAuth, (req, res) => {
-    res.render('devices', { devices: [{ ip: "192.168.1.100", mac: "00:1A:2B:3C:4D:5E", name: "My-Gaming-PC", status: "Optimized" }] });
+    res.render('devices', { devices: [{ ip: '192.168.1.100', mac: '00:1A:2B:3C:4D:5E', name: 'My-Gaming-PC', status: 'Optimized' }] });
 });
 
 app.get('/logs', requireAuth, (req, res) => {
-    res.render('logs', { logs: [{ timestamp: new Date().toLocaleString(), level: "INFO", message: "System running normally." }] });
+    res.render('logs', { logs: [{ timestamp: new Date().toLocaleString(), level: 'INFO', message: 'System running normally.' }] });
 });
 
 // Mock endpoints for new features
@@ -111,9 +111,9 @@ app.get('/dev', requireAuth, (req, res) => { res.render('dev'); });
 
 app.post('/api/terminal', requireAuth, (req, res) => {
     const command = req.body.command || '';
-    if (!command) return res.json({ status: "error", output: "No command provided." });
+    if (!command) return res.json({ status: 'error', output: 'No command provided.' });
     exec(command, { timeout: 15000 }, (error, stdout, stderr) => {
-        res.json({ status: "success", output: stdout || stderr || "Executed." });
+        res.json({ status: 'success', output: stdout || stderr || 'Executed.' });
     });
 });
 
@@ -131,7 +131,7 @@ app.post('/api/change_password', requireAuth, (req, res) => {
 
 app.post('/api/update_dmz', requireAuth, (req, res) => {
     if (req.body.dmz_enable === 'on') { extraFeaturesConfig.dmz_ip = req.body.dmz_ip; }
-    else { extraFeaturesConfig.dmz_ip = ""; }
+    else { extraFeaturesConfig.dmz_ip = ''; }
     res.redirect('/security');
 });
 
@@ -154,7 +154,7 @@ app.post('/api/check_update', requireAuth, (req, res) => {
 
 app.post('/api/reboot', requireAuth, (req, res) => {
     exec('sudo reboot', () => { });
-    res.send("System rebooting...");
+    res.send('System rebooting...');
 });
 
 app.listen(PORT, () => { console.log(`Server is running at http://localhost:${PORT}`); });

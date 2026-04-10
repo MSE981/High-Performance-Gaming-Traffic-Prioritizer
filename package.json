@@ -4,7 +4,8 @@
   "description": "> A Raspberry Pi 5 that sits between your router and your desk. Your games get the fast lane. Everything else waits its turn.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint web/**/*.js"
   },
   "repository": {
     "type": "git",
@@ -24,5 +25,10 @@
     "express-session": "^1.19.0",
     "socket.io": "^4.8.3",
     "systeminformation": "^5.31.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.2.0",
+    "globals": "^17.4.0"
   }
 }
