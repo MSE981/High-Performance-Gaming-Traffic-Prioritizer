@@ -1,175 +1,122 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-    <meta charset="UTF-8">
-    <title>Traffic QoS Management</title>
+    <title>HPGTP - QoS</title>
+    <%- include('partials/head') %>
     <style>
-        body {
-            font-family: sans-serif;
-            background: #1a1a1a;
-            color: white;
-            padding: 20px;
-            margin: 0;
-        }
-
-        h1 {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-
-        .navbar {
-            background-color: #2d2d2d;
-            overflow: hidden;
-            border-radius: 8px;
-            margin-bottom: 25px;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+        .top-status-bar {
             display: flex;
-            justify-content: center;
-            flex-wrap: wrap;
-        }
-
-        .navbar a {
-            display: block;
-            color: #ccc;
-            text-align: center;
-            padding: 14px 20px;
-            text-decoration: none;
-            font-weight: bold;
-            transition: 0.3s;
-        }
-
-        .navbar a:hover {
-            background-color: #444;
-            color: white;
-        }
-
-        .navbar a.active {
-            background-color: #28a745;
-            color: white;
-        }
-
-        .container {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            max-width: 800px;
-            margin: 0 auto;
-            gap: 20px;
-        }
-
-        .panel {
-            background: #2d2d2d;
-            padding: 30px;
-            border-radius: 10px;
-            width: 100%;
-            box-sizing: border-box;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
-        }
-
-        h2 {
-            margin-top: 0;
-            border-bottom: 2px solid #444;
+            justify-content: space-between;
             padding-bottom: 10px;
-            color: #28a745;
+            border-bottom: 2px solid #2a50a0;
+            margin-bottom: 15px;
         }
-
-        label {
-            display: block;
-            margin-top: 20px;
-            margin-bottom: 8px;
-            color: #ccc;
-            font-weight: bold;
+        .shutdown-btn { color: #ff4d4d; font-weight: bold; cursor: pointer; }
+        .small-stats { color: #00f0ff; font-family: monospace; }
+        
+        .toggle-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
         }
-
-        input,
-        select {
-            padding: 12px;
+        .custom-toggle {
+            width: 30px;
+            height: 30px;
+            background-color: #00f0ff;
+            border-radius: 6px;
+            margin-right: 15px;
+            /* Placeholder for actual toggle visual */
+        }
+        
+        .slider-container {
+            margin: 20px 0;
+            padding: 15px 0;
+        }
+        .slider {
+            -webkit-appearance: none;
             width: 100%;
-            box-sizing: border-box;
-            border-radius: 5px;
-            border: 1px solid #555;
-            background: #222;
-            color: white;
-            font-size: 16px;
-        }
-
-        input:focus,
-        select:focus {
+            height: 8px;
+            background: #1c3b80;
             outline: none;
-            border-color: #28a745;
+            border-radius: 4px;
         }
-
-        button {
-            padding: 15px;
-            width: 100%;
-            background: #28a745;
-            color: white;
-            border: none;
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 25px;
+            height: 25px;
+            background: #fff;
+            border-radius: 4px;
             cursor: pointer;
-            border-radius: 5px;
-            font-weight: bold;
-            font-size: 18px;
-            margin-top: 30px;
-            transition: 0.3s;
         }
-
-        button:hover {
-            background: #218838;
-        }
-
-        .hint {
-            font-size: 12px;
-            color: #888;
-            margin-top: 5px;
-        }
+        
     </style>
 </head>
-
 <body>
+    <div class="app-container">
+        <div class="top-status-bar">
+            <div><span class="shutdown-btn">Shutdown</span> <span style="font-weight:bold; margin-left:10px;">HPGTP</span></div>
+            <div class="small-stats">10.0 10.0 45°C</div>
+        </div>
 
-    <h1>🚀 Core System Management (BMC)</h1>
+        <div class="page-title" style="margin-bottom:20px; color:#fff;">QoS & Traffic Control</div>
 
-    <div class="navbar">
-        <a href="/">📊 Dashboard</a>
-        <a href="/network">🌐 Network</a>
-        <a href="/qos" class="active">🚦 QoS</a>
-        <a href="/devices">📱 Devices</a>
-        <a href="/logs">📈 Logs</a>
-        <a href="/dev">🛠️ Dev</a>
-        <a href="/security"> Security</a>
-    </div>
+        <div class="toggle-row">
+            <div class="custom-toggle"></div>
+            <div style="font-weight:bold; color:#fff;">Enable Gaming Traffic Acceleration (Heuristic Priority Scheduling)</div>
+        </div>
 
-    <div class="container">
         <div class="panel">
-            <h2>Quality of Service (QoS) Engine</h2>
-
+            <div class="panel-header">Global Bandwidth Limits</div>
             <form action="/update_qos_settings" method="POST">
-
-                <label>System Optimization Mode</label>
-                <select name="mode">
-                    <option value="gaming" <%=config.traffic_mode==='gaming' ? 'selected' : '' %>>Gaming Priority (Low
-                        Latency / UDP Focus)</option>
-                    <option value="streaming" <%=config.traffic_mode==='streaming' ? 'selected' : '' %>>Streaming Mode
-                        (High Throughput / TCP Focus)</option>
-                </select>
-                <div class="hint">Select Gaming for competitive matches, Streaming for Netflix/YouTube.</div>
-
-                <label>Global Bandwidth Limit (Mbps)</label>
-                <input type="number" name="limit" value="<%= config.bandwidth_limit %>" required min="1" max="10000">
-                <div class="hint">Prevents background downloads from consuming all your internet speed.</div>
-
-                <label>Priority Game Port</label>
-                <input type="number" name="target_port" value="<%= config.target_port %>" required min="1" max="65535">
-                <div class="hint">Traffic on this specific port will bypass the queue. Default CS2/Source port: 27015.
+                <div style="display:flex; align-items:center; margin-bottom:10px;">
+                    <label class="form-label" style="width:200px; margin:0;">Download Limit (Mbps):</label>
+                    <input type="number" name="limit" class="form-control" value="<%= config.bandwidth_limit || 500 %>" style="flex:1;">
                 </div>
-
-                <button type="submit">Apply Traffic Rules</button>
-
+                <div style="display:flex; align-items:center;">
+                    <label class="form-label" style="width:200px; margin:0;">Upload Limit (Mbps):</label>
+                    <input type="number" name="up_limit" class="form-control" value="50" style="flex:1;">
+                </div>
             </form>
+        </div>
+
+        <div class="panel">
+            <div class="panel-header">Real-Time Throttle</div>
+            <div class="slider-container">
+                <input type="range" min="0" max="100" value="85" class="slider" id="throttle-slider">
+                <div style="display:flex; justify-content:space-between; margin-top:10px; color:#9ab4e0; font-size:0.9rem;">
+                    <span>0%</span><span>100%</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-header">Game Port Whitelist</div>
+            <table class="data-table" style="margin-bottom:20px;">
+                <thead>
+                    <tr>
+                        <th>Port / Range</th>
+                        <th>Protocol</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>1119</td><td>TCP/UDP</td><td>Blizzard Battle.net</td></tr>
+                    <tr><td>6112</td><td>TCP/UDP</td><td>Blizzard / StarCraft</td></tr>
+                    <tr><td>3074</td><td>UDP</td><td>Call of Duty</td></tr>
+                    <tr><td>3659</td><td>UDP</td><td>EA / Origin</td></tr>
+                    <tr><td>8080</td><td>TCP</td><td>Game HTTP services</td></tr>
+                    <tr><td>7777-7778</td><td>UDP</td><td>Garena / Arena games</td></tr>
+                    <tr><td>4380</td><td>UDP</td><td>Steam (In-Home Streaming)</td></tr>
+                    <tr><td>27031-27036</td><td>UDP</td><td>Steam Remote Play</td></tr>
+                    <tr><td>27015</td><td>UDP</td><td>Steam / Valve</td></tr>
+                    <tr><td>443</td><td>TCP</td><td>HTTPS / Secure game APIs</td></tr>
+                </tbody>
+            </table>
+            <button class="btn btn-secondary">Edit Whitelist...</button>
         </div>
     </div>
 
+    <%- include('partials/bottom_nav', { activeTab: 'qos' }) %>
 </body>
-
 </html>

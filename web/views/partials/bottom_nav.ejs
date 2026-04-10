@@ -1,0 +1,63 @@
+<style>
+    .bottom-nav {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        background-color: #081736;
+        border-top: 1px solid #1a3885;
+        display: flex;
+        justify-content: space-around;
+        padding: 10px 0;
+        box-shadow: 0 -4px 10px rgba(0,0,0,0.5);
+        z-index: 1000;
+    }
+
+    .nav-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-decoration: none;
+        color: #7b9fd9;
+        font-size: 0.8rem;
+        flex: 1;
+        transition: 0.3s;
+    }
+
+    .nav-item.active {
+        color: #00f0ff;
+        font-weight: bold;
+    }
+
+    .nav-icon {
+        background-color: transparent;
+        font-size: 1.5rem;
+        margin-bottom: 5px;
+    }
+    .nav-item.active .nav-icon {
+        color: #00f0ff;
+    }
+</style>
+
+<div class="bottom-nav">
+    <a href="/dashboard" class="nav-item <%= typeof activeTab !== 'undefined' && activeTab === 'overview' ? 'active' : '' %>">
+        <span class="nav-icon">⌂</span>
+        <span>Overview</span>
+    </a>
+    <a href="/qos" class="nav-item <%= typeof activeTab !== 'undefined' && activeTab === 'qos' ? 'active' : '' %>">
+        <span class="nav-icon">⚡</span>
+        <span>QoS</span>
+    </a>
+    <a href="/services" class="nav-item <%= typeof activeTab !== 'undefined' && activeTab === 'services' ? 'active' : '' %>">
+        <span class="nav-icon">⚙️</span>
+        <span>Services</span>
+    </a>
+    <a href="/devices" class="nav-item <%= typeof activeTab !== 'undefined' && activeTab === 'devices' ? 'active' : '' %>">
+        <span class="nav-icon">📱</span>
+        <span>Devices</span>
+    </a>
+    <a href="/interfaces" class="nav-item <%= typeof activeTab !== 'undefined' && activeTab === 'interfaces' ? 'active' : '' %>">
+        <span class="nav-icon">🌐</span>
+        <span>Interfaces</span>
+    </a>
+</div>

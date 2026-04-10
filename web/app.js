@@ -68,7 +68,10 @@ app.get('/api/status', requireAuth, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Failed to fetch hardware data' }); }
 });
 
-app.get('/network', requireAuth, (req, res) => { res.render('network'); });
+app.get('/interfaces', requireAuth, (req, res) => { res.render('interfaces'); });
+
+// Add /services route
+app.get('/services', requireAuth, (req, res) => { res.render('services'); });
 
 app.post('/api/ping', requireAuth, (req, res) => {
     const target = req.body.target || '8.8.8.8';
