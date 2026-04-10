@@ -6,7 +6,7 @@ const { exec, execFile } = require('child_process');
 const os = require('os');
 const app = express();
 
-const PORT = 5001;
+const PORT = 8888;
 
 // === Global Configurations ===
 let adminPassword = 'admin123';
