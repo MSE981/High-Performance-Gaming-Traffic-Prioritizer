@@ -59,7 +59,9 @@ void load_config(const std::string& path) {
                 if      (!strcmp(key, "IFACE_WAN"))  IFACE_WAN  = val;
                 else if (!strcmp(key, "IFACE_LAN"))  IFACE_LAN  = val;
                 else if (!strcmp(key, "ROUTER_IP"))  ROUTER_IP  = val;
-                else if (!strcmp(key, "ENABLE_ACCELERATION")) ENABLE_ACCELERATION = (!strcmp(val, "true") || !strcmp(val, "1"));
+                else if (!strcmp(key, "ENABLE_ACCELERATION"))
+                    ENABLE_ACCELERATION.store(!strcmp(val, "true") || !strcmp(val, "1"),
+                        std::memory_order_relaxed);
                 else if (!strcmp(key, "ENABLE_STP"))          ENABLE_STP.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                 else if (!strcmp(key, "ENABLE_IGMP_SNOOPING")) ENABLE_IGMP_SNOOPING.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                 else if (!strcmp(key, "BRIDGE_IFACE")) {
