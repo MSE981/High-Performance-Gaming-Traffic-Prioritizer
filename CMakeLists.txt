@@ -34,6 +34,7 @@ endif()
 
 # ── Infrastructure utilities ──────────────────────────────────────────────────
 add_library(utils_network    src/NetworkUtils.cpp)
+add_library(dataplane        src/DataPlane.cpp)
 add_library(utils_system     src/SystemOptimizer.cpp)
 add_library(config           src/Config.cpp)
 
@@ -43,6 +44,8 @@ add_library(engine_dns       src/DnsEngine.cpp)
 add_library(engine_dhcp      src/DhcpEngine.cpp)
 add_library(engine_firewall  src/FirewallEngine.cpp)
 add_library(engine_scheduler src/Scheduler.cpp)
+
+target_link_libraries(engine_scheduler PRIVATE dataplane)
 
 # ── I/O engines ───────────────────────────────────────────────────────────────
 add_library(engine_net       src/NetworkEngine.cpp)
@@ -54,7 +57,7 @@ add_library(selftest         src/SelfTest.cpp)
 
 # Apply compile options and _GNU_SOURCE to every library
 set(ALL_SCALPEL_LIBS
-    utils_network utils_system config
+    utils_network utils_system config dataplane
     engine_nat engine_dns engine_dhcp engine_firewall engine_scheduler
     engine_net engine_probe engine_upnp
     selftest
@@ -68,7 +71,6 @@ endforeach()
 add_executable(GamingTrafficPrioritizer
     src/main.cpp
     src/App.cpp
-    src/DataPlane.cpp
     src/Telemetry.cpp
     src/GUI/Dashboard.cpp
     include/GUI/Dashboard.hpp
