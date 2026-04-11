@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <array>
 #include <cstring>
+#include <expected>
+#include <string>
 #include "NetworkTypes.hpp"
 
 namespace Scalpel {
@@ -65,7 +67,7 @@ namespace Scalpel {
 
             // On-demand rescan signalling via eventfd pair.
             // Initialised once before any thread starts; thereafter accessed only through methods.
-            void init_event_fds();           // creates both fds (call from main before threads)
+            std::expected<void, std::string> init_event_fds();
 
             // UI (Core 0) interface — no raw fd values exposed
             void request_rescan();           // signal watchdog to re-scan immediately

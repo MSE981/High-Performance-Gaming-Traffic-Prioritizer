@@ -36,8 +36,10 @@ int main(int argc, char* argv[]) {
     // Requires the working directory to be the project root (i.e. run as: ./build/app from project root)
     Scalpel::Config::load_config("config/config.txt");
 
-    // Create eventfd pair for iface rescan signalling — must happen before watchdog thread starts
-    Scalpel::Telemetry::instance().sys_info.init_event_fds();
+    if (auto r = Scalpel::Telemetry::instance().sys_info.init_event_fds(); !r) {
+        std::println(stderr, "[Fatal] {}", r.error());
+        return 1;
+    }
 
     Scalpel::App app;
     global_app = &app;
