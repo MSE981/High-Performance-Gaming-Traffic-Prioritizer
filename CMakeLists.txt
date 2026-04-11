@@ -45,6 +45,8 @@ add_library(engine_dhcp      src/DhcpEngine.cpp)
 add_library(engine_firewall  src/FirewallEngine.cpp)
 add_library(engine_scheduler src/Scheduler.cpp)
 
+target_link_libraries(engine_dns       PRIVATE dataplane)
+target_link_libraries(engine_dhcp      PRIVATE dataplane)
 target_link_libraries(engine_scheduler PRIVATE dataplane)
 
 # ── I/O engines ───────────────────────────────────────────────────────────────

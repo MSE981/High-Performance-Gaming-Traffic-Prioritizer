@@ -1,6 +1,6 @@
 #include "DhcpEngine.hpp"
+#include "DataPlane.hpp"
 #include <netinet/in.h>
-#include <sys/socket.h>
 #include <arpa/inet.h>
 #include <print>
 #include <algorithm>
@@ -167,7 +167,11 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
         resp_udp->len   = htons(udp_len);
         resp_udp->check = 0;
 
-        send(lan_fd, response.data(), total_len, MSG_DONTWAIT);
+        DataPlane::TxFrameOutput::send_best_effort(
+            lan_fd,
+            std::span<const uint8_t>(response.data(), total_len),
+            2,
+            0);
     };
 
     if (msg_type == 1) { // DHCP Discover

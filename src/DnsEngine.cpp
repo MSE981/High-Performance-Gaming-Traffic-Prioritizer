@@ -1,6 +1,6 @@
 #include "DnsEngine.hpp"
+#include "DataPlane.hpp"
 #include <netinet/in.h>
-#include <sys/socket.h>
 #include <cstring>
 #include <print>
 
@@ -71,8 +71,11 @@ void DnsEngine::do_bounce(Net::ParsedPacket& pkt, DnsHeader* dns, Net::UDPHeader
     udp->len    = htons(static_cast<uint16_t>(new_len - sizeof(Net::EthernetHeader) - pkt.ihl));
     udp->check  = 0;
 
-    if (send(bounce_fd, pkt.raw_span.data(), new_len, MSG_DONTWAIT) < 0)
-        Telemetry::instance().core_metrics[3].dropped[1].fetch_add(1, std::memory_order_relaxed);
+    DataPlane::TxFrameOutput::send_best_effort(
+        bounce_fd,
+        std::span<const uint8_t>(pkt.raw_span.data(), new_len),
+        3,
+        1);
 }
 
 void DnsEngine::rewrite_upstream(Net::ParsedPacket& pkt, Net::IPv4Net upstream_ip) {
