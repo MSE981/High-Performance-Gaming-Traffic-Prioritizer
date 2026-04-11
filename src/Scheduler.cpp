@@ -5,8 +5,13 @@
 namespace Scalpel::Traffic {
 
 static TxResult try_hardware_send(int fd, std::span<const uint8_t> pkt) {
-    return DataPlane::TxFrameOutput::send_blocking(fd, pkt) ? TxResult::Success
-                                                             : TxResult::Fatal;
+    using DataPlane::TxFrameOutput;
+    switch (TxFrameOutput::try_send_packet_nonblocking(fd, pkt)) {
+    case TxFrameOutput::PacketTxTry::Complete: return TxResult::Success;
+    case TxFrameOutput::PacketTxTry::Busy: return TxResult::Congested;
+    case TxFrameOutput::PacketTxTry::Error: return TxResult::Fatal;
+    }
+    return TxResult::Fatal;
 }
 
 void Shaper::set_rate_limit(Mbps limit) {

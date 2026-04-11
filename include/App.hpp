@@ -142,6 +142,7 @@ class App {
     std::atomic<bool> running_watchdog{false};
     std::promise<void> shutdown_promise;
     std::future<void>  shutdown_future;
+    std::atomic<bool>   shutdown_sequence_started_{false};
 
 public:
     App();
@@ -150,6 +151,7 @@ public:
     std::expected<void, std::string> init();
     void start();
     void stop() {
+        if (shutdown_sequence_started_.exchange(true, std::memory_order_acq_rel)) return;
         stress_cancel_.store(true, std::memory_order_relaxed);
         if (stress_thread_.joinable()) stress_thread_.join();
         running_workers.store(false, std::memory_order_relaxed);

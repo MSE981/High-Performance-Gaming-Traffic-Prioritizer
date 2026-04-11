@@ -2,8 +2,23 @@
 #include "Telemetry.hpp"
 #include <sys/socket.h>
 #include <cerrno>
+#include <cstdint>
 
 namespace Scalpel::DataPlane {
+
+TxFrameOutput::PacketTxTry TxFrameOutput::try_send_packet_nonblocking(
+    int tx_fd, std::span<const uint8_t> pkt) noexcept {
+    for (;;) {
+        ssize_t n = ::send(tx_fd, pkt.data(), pkt.size(), MSG_DONTWAIT);
+        if (n >= 0) {
+            return static_cast<size_t>(n) == pkt.size() ? PacketTxTry::Complete
+                                                        : PacketTxTry::Error;
+        }
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS) return PacketTxTry::Busy;
+        return PacketTxTry::Error;
+    }
+}
 
 bool TxFrameOutput::send_blocking(int tx_fd, std::span<const uint8_t> pkt) noexcept {
     const uint8_t* p   = pkt.data();
@@ -22,7 +37,7 @@ bool TxFrameOutput::send_blocking(int tx_fd, std::span<const uint8_t> pkt) noexc
 
 void TxFrameOutput::send_best_effort(int tx_fd, std::span<const uint8_t> pkt,
                                      int core_id, size_t prio_idx) {
-    if (!send_blocking(tx_fd, pkt))
+    if (try_send_packet_nonblocking(tx_fd, pkt) != PacketTxTry::Complete)
         Telemetry::instance().core_metrics[core_id].dropped[prio_idx]
             .fetch_add(1, std::memory_order_relaxed);
 }

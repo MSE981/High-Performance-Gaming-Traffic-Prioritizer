@@ -3,26 +3,32 @@
 #include "Telemetry.hpp"
 #include "SelfTest.hpp"
 #include <csignal>
+#include <cerrno>
+#include <cstring>
 #include <print>
+#include <thread>
+#include <atomic>
+#include <sys/eventfd.h>
+#include <unistd.h>
 
 // Global pointer and signal debounce flag
 Scalpel::App* global_app = nullptr;
 std::atomic<bool> signal_received{false};
 
-// Signal handler entry point
+// Written only from signal_handler (async-signal-safe path); read on a normal thread.
+static int shutdown_signal_efd = -1;
+
+// Async-signal-safe: only set flag and bump eventfd; never join threads here.
 extern "C" void signal_handler(int signal) {
     (void)signal;
-    if (signal_received.exchange(true, std::memory_order_acq_rel)) return; // Intercept double shutdown
-
-    // Note: don't execute heavy logic directly in async UNIX signal, just trigger shutdown
-    if (global_app) {
-        global_app->stop();
-    }
+    if (signal_received.exchange(true, std::memory_order_acq_rel)) return;
+    if (shutdown_signal_efd >= 0)
+        (void)::eventfd_write(shutdown_signal_efd, 1);
 }
 
 #include <QApplication>
 #include <QMetaObject>
-#include <thread>
+#include <QSocketNotifier>
 #include "GUI/Dashboard.hpp"
 #include "SystemOptimizer.hpp"
 
@@ -41,16 +47,25 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    shutdown_signal_efd = ::eventfd(0, EFD_CLOEXEC);
+    if (shutdown_signal_efd < 0) {
+        std::println(stderr, "[Fatal] shutdown eventfd: {}", std::strerror(errno));
+        return 1;
+    }
+
     Scalpel::App app;
     global_app = &app;
 
-    // 2. Register shutdown signals
+    // 2. Register shutdown signals (handler must not call App::stop)
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
     // 3. Low-level system initialization
     if (auto res = app.init(); !res) {
         std::println(stderr, "[Fatal Error] Initialization failed: {}", res.error());
+        ::close(shutdown_signal_efd);
+        shutdown_signal_efd = -1;
+        global_app = nullptr;
         return 1;
     }
 
@@ -63,6 +78,13 @@ int main(int argc, char* argv[]) {
             QApplication qapp(argc, argv);
             Scalpel::GUI::Dashboard gui;
             gui.showFullScreen();
+
+            QSocketNotifier shutdown_sn(shutdown_signal_efd, QSocketNotifier::Read, &qapp);
+            QObject::connect(&shutdown_sn, &QSocketNotifier::activated, &qapp, [](int) {
+                uint64_t v;
+                (void)::eventfd_read(shutdown_signal_efd, &v);
+                if (global_app) global_app->stop();
+            });
 
             // Async self-test: GUI shows with an overlay; when the test finishes the callback
             // runs on the Qt main thread and calls app.start() once. selftest is destroyed after
@@ -108,7 +130,21 @@ int main(int argc, char* argv[]) {
             }
             watchdog_notify.join(); // qapp still in scope; thread is done on both exit paths
         } else {
-            // Pure CLI mode — run selftest synchronously then start engine
+            // Pure CLI mode: dedicated thread reads shutdown eventfd and calls App::stop().
+            std::atomic<bool> cli_listener_run{true};
+            std::thread cli_shutdown_listener([&cli_listener_run] {
+                while (cli_listener_run.load(std::memory_order_relaxed)) {
+                    uint64_t v;
+                    int      r = ::eventfd_read(shutdown_signal_efd, &v);
+                    if (r < 0) {
+                        if (errno == EINTR) continue;
+                        break;
+                    }
+                    if (!cli_listener_run.load(std::memory_order_relaxed)) break;
+                    if (global_app) global_app->stop();
+                }
+            });
+
             {
                 Scalpel::SelfTest::SelfTest selftest;
                 selftest.registerCallback([](const Scalpel::SelfTest::Report& r) {
@@ -131,13 +167,25 @@ int main(int argc, char* argv[]) {
             }
             app.start();
             app.wait_for_shutdown();
+            cli_listener_run.store(false, std::memory_order_relaxed);
+            (void)::eventfd_write(shutdown_signal_efd, 1);
+            cli_shutdown_listener.join();
         }
     } catch (const std::exception& e) {
         std::println(stderr, "[Fatal Error] Uncaught exception: {}", e.what());
+        if (shutdown_signal_efd >= 0) {
+            ::close(shutdown_signal_efd);
+            shutdown_signal_efd = -1;
+        }
+        global_app = nullptr;
         return 1;
     }
 
     global_app = nullptr;
+    if (shutdown_signal_efd >= 0) {
+        ::close(shutdown_signal_efd);
+        shutdown_signal_efd = -1;
+    }
     if (Scalpel::Config::SAVE_ON_EXIT.load(std::memory_order_relaxed))
         Scalpel::Config::save_config("config/config.txt");
     std::println("[System] Application cleanly exited. Kernel resources fully released.");
