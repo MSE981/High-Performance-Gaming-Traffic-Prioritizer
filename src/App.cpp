@@ -301,6 +301,7 @@ void App::start() {
     Utils::Network::force_arp_resolution(Utils::Network::get_gateway_ip());
 
     std::thread([] {
+        Scalpel::System::Optimizer::set_current_thread_affinity(1);
         Probe::Manager::run_internal_stress([](double mbps) {
             Telemetry::instance().internal_limit_mbps.store(
                 mbps, std::memory_order_relaxed);
