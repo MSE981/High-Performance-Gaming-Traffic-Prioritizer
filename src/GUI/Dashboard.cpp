@@ -1419,8 +1419,8 @@ void DevicePage::refresh() {
             if (Config::DEVICE_POLICY_TABLE[j].ip == ip) {
                 blocked      = Config::DEVICE_POLICY_TABLE[j].blocked;
                 rate_limited = Config::DEVICE_POLICY_TABLE[j].rate_limited;
-                dl           = Config::DEVICE_POLICY_TABLE[j].dl_mbps;
-                ul           = Config::DEVICE_POLICY_TABLE[j].ul_mbps;
+                dl           = Config::DEVICE_POLICY_TABLE[j].dl.value;
+                ul           = Config::DEVICE_POLICY_TABLE[j].ul.value;
                 break;
             }
         }
@@ -1536,8 +1536,8 @@ void DevicePage::on_apply_all() {
         std::memcpy(p.mac, r.mac.data(), 6);
         p.blocked      = !r.chk_allow->isChecked();
         p.rate_limited = r.chk_rate->isChecked();
-        p.dl_mbps      = r.val_dl;
-        p.ul_mbps      = r.val_ul;
+        p.dl           = Traffic::Mbps{r.val_dl};
+        p.ul           = Traffic::Mbps{r.val_ul};
         Config::upsert_device_policy(p);
     }
     Config::DEVICE_POLICY_DIRTY.store(true, std::memory_order_release);

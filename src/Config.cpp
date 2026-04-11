@@ -107,8 +107,7 @@ void load_config(const std::string& path) {
                     if (colon) {
                         *colon = '\0';
                         Net::IPv4Net ip = parse_ip_str(val);
-                        double limit = atof(colon + 1);
-                        add_ip_limit(ip, limit);
+                        add_ip_limit(ip, Traffic::Mbps{atof(colon + 1)});
                     }
                 }
             } catch (...) {
@@ -179,7 +178,7 @@ void save_config(const std::string& path) {
         uint32_t ip = IP_LIMIT_TABLE[i].ip.raw();
         dprintf(fd, "IP_LIMIT=%u.%u.%u.%u:%.6g\n",
             ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF,
-            IP_LIMIT_TABLE[i].rate_mbps);
+            IP_LIMIT_TABLE[i].rate.value);
     }
     dprintf(fd, "IFACE_GATEWAY=%s\n", IFACE_GATEWAY.c_str());
     for (size_t i = 0; i < IFACE_ROLES_COUNT; ++i) {

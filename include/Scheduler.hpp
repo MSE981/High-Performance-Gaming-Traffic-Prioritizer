@@ -9,14 +9,9 @@
 #include <print>
 #include "Headers.hpp"
 #include "Telemetry.hpp"
+#include "Units.hpp"
 
 namespace Scalpel::Traffic {
-
-    // Strong unit type for network rates — prevents passing bare doubles across API boundaries.
-    struct Mbps {
-        double value;
-        explicit constexpr Mbps(double v) noexcept : value(v) {}
-    };
 
     // Token bucket rate limiter — kept inline (hot path, called every packet)
     class TokenBucket {

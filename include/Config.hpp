@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "NetworkTypes.hpp"
+#include "Units.hpp"
 
 namespace Scalpel::Config {
     // Per-interface role assignment
@@ -146,8 +147,8 @@ namespace Scalpel::Config {
         uint8_t      mac[6]{};
         bool         blocked      = false;
         bool         rate_limited = false;
-        double       dl_mbps      = 100.0;
-        double       ul_mbps      = 10.0;
+        Traffic::Mbps dl{100.0};
+        Traffic::Mbps ul{10.0};
     };
     inline std::array<DevicePolicy, MAX_DEVICE_POLICIES> DEVICE_POLICY_TABLE{};
     inline size_t DEVICE_POLICY_COUNT = 0;
@@ -168,19 +169,19 @@ namespace Scalpel::Config {
     static constexpr size_t MAX_IP_LIMITS = 256;
     struct IpLimitEntry {
         Net::IPv4Net ip{};
-        double       rate_mbps = 0.0;
+        Traffic::Mbps rate{0.0};
     };
     inline std::array<IpLimitEntry, MAX_IP_LIMITS> IP_LIMIT_TABLE{};
     inline size_t IP_LIMIT_COUNT = 0;
     inline std::atomic<bool> IP_LIMIT_ACTIVE{false};
 
     inline void clear_ip_limits() { IP_LIMIT_COUNT = 0; }
-    inline void add_ip_limit(Net::IPv4Net ip, double rate_mbps) {
+    inline void add_ip_limit(Net::IPv4Net ip, Traffic::Mbps rate) {
         for (size_t i = 0; i < IP_LIMIT_COUNT; ++i) {
-            if (IP_LIMIT_TABLE[i].ip == ip) { IP_LIMIT_TABLE[i].rate_mbps = rate_mbps; return; }
+            if (IP_LIMIT_TABLE[i].ip == ip) { IP_LIMIT_TABLE[i].rate = rate; return; }
         }
         if (IP_LIMIT_COUNT < MAX_IP_LIMITS) {
-            IP_LIMIT_TABLE[IP_LIMIT_COUNT] = {ip, rate_mbps};
+            IP_LIMIT_TABLE[IP_LIMIT_COUNT] = {ip, rate};
             ++IP_LIMIT_COUNT;
         }
     }

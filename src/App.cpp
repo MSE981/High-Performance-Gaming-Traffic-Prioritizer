@@ -611,7 +611,7 @@ void App::watchdog_loop() {
                     if (p.rate_limited && p.ip.raw() != 0)
                         cfg_ptr->buffers[inactive].insert(
                             p.ip, std::make_shared<Traffic::Shaper>(
-                                use_dl ? p.dl_mbps : p.ul_mbps));
+                                use_dl ? p.dl : p.ul));
                 }
                 cfg_ptr->active_idx.store(inactive, std::memory_order_release);
             };
