@@ -376,4 +376,5 @@ _agents/
 
 #special files
 *.md
+!docs/FUTURE_PLAN.md
 *.pdf
