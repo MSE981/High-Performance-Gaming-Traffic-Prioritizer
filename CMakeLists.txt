@@ -49,11 +49,15 @@ add_library(engine_net       src/NetworkEngine.cpp)
 add_library(engine_probe     src/ProbeManager.cpp)
 add_library(engine_upnp      src/UpnpEngine.cpp)
 
+# ── Self-test component ───────────────────────────────────────────────────────
+add_library(selftest         src/SelfTest.cpp)
+
 # Apply compile options and _GNU_SOURCE to every library
 set(ALL_SCALPEL_LIBS
     utils_network utils_system config
     engine_nat engine_dns engine_dhcp engine_firewall engine_scheduler
     engine_net engine_probe engine_upnp
+    selftest
 )
 foreach(lib IN LISTS ALL_SCALPEL_LIBS)
     target_compile_options(${lib} PRIVATE ${SCALPEL_COMPILE_OPTIONS})
