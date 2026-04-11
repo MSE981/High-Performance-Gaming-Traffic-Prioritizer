@@ -27,4 +27,18 @@ void TxFrameOutput::send_best_effort(int tx_fd, std::span<const uint8_t> pkt,
             .fetch_add(1, std::memory_order_relaxed);
 }
 
+void TxFrameOutput::send_stream_blocking(int fd, std::span<const uint8_t> data) {
+    const uint8_t* p   = data.data();
+    size_t         left = data.size();
+    while (left > 0) {
+        ssize_t n = ::send(fd, p, left, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return;
+        }
+        p += static_cast<size_t>(n);
+        left -= static_cast<size_t>(n);
+    }
+}
+
 } // namespace Scalpel::DataPlane

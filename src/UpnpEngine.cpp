@@ -1,6 +1,8 @@
 #include "UpnpEngine.hpp"
+#include "DataPlane.hpp"
 #include "SystemOptimizer.hpp"
 #include "Config.hpp"
+#include <span>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -134,7 +136,10 @@ void UpnpEngine::run_soap_server() {
                     "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\n"
                     "Content-Length: %d\r\nConnection: close\r\n\r\n%s",
                     xml_len, xml_buf);
-                send(cfd, resp, resp_len, 0);
+                DataPlane::TxFrameOutput::send_stream_blocking(
+                    cfd,
+                    std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(resp),
+                                              static_cast<size_t>(resp_len)));
 
             } else if (req.find("POST /control") != std::string_view::npos) {
                 auto body_idx = req.find("\r\n\r\n");
@@ -188,7 +193,11 @@ void UpnpEngine::run_soap_server() {
                                 "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\n"
                                 "Content-Length: %zu\r\nConnection: close\r\n\r\n%s",
                                 std::strlen(resp_xml), resp_xml);
-                            send(cfd, resp_buf, resp_len, 0);
+                            DataPlane::TxFrameOutput::send_stream_blocking(
+                                cfd,
+                                std::span<const uint8_t>(
+                                    reinterpret_cast<const uint8_t*>(resp_buf),
+                                    static_cast<size_t>(resp_len)));
                         }
                     }
                 }

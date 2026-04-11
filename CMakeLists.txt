@@ -54,6 +54,8 @@ add_library(engine_net       src/NetworkEngine.cpp)
 add_library(engine_probe     src/ProbeManager.cpp)
 add_library(engine_upnp      src/UpnpEngine.cpp)
 
+target_link_libraries(engine_upnp PRIVATE dataplane)
+
 # ── Self-test component ───────────────────────────────────────────────────────
 add_library(selftest         src/SelfTest.cpp)
 
