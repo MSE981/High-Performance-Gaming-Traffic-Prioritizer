@@ -1,9 +1,7 @@
 #pragma once
-// §2.2.1  std::function functor callback
-// §2.2.3  Complex result delivered as struct, not multi-arg
-// §3.3.1  Worker runs inside std::thread
-// §3.3.2  Caller joins the thread after completion
-// §2.3.7  Hardware checks via raw fd (/sys, /proc) — implementations in SelfTest.cpp
+// Callback delivery uses std::function; structured types carry multi-field results.
+// The worker runs on a std::thread; the caller should join() after start().
+// Hardware checks use raw fds on /sys and /proc (implementations in SelfTest.cpp).
 //
 // POSIX headers (<netinet/in.h>, <sys/socket.h>, <fcntl.h>, <unistd.h>, <dirent.h>)
 // and engine headers are confined to SelfTest.cpp; this header exposes only the
@@ -19,7 +17,7 @@
 namespace Scalpel::SelfTest {
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §2.2.3: Complex callback data encapsulated in struct (not raw multi-arg)
+// Test case row: name, pass flag, and short human-readable detail.
 // ─────────────────────────────────────────────────────────────────────────────
 struct TestCase {
     std::array<char, 64>  name{};
@@ -43,23 +41,20 @@ struct Report {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SelfTest — publisher/subscriber pattern (§2.2.1)
-//   start()          → launches std::thread (§3.3.1)
-//   join()           → caller blocks until worker done (§3.3.2)
-//   registerCallback → accepts std::function functor (§2.2.1)
+// SelfTest — worker thread plus optional result callback.
+//   start()          -> launches std::thread running run()
+//   join()           -> blocks until the worker finishes
+//   registerCallback -> stores std::function<void(const Report&)>
 // ─────────────────────────────────────────────────────────────────────────────
 class SelfTest {
 public:
-    // §2.2.1: Register a std::function functor as result callback
     using ResultCallback = std::function<void(const Report&)>;
     void registerCallback(ResultCallback cb) { callback_ = std::move(cb); }
 
     ~SelfTest() { if (uthread_.joinable()) uthread_.join(); }
 
-    // §3.3.1: Spawn worker thread
     void start() { uthread_ = std::thread(&SelfTest::run, this); }
 
-    // §3.3.2: Join — caller blocks here until run() completes
     void join() { if (uthread_.joinable()) uthread_.join(); }
 
 private:

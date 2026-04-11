@@ -50,7 +50,7 @@ void SelfTest::run() {
     test_firewall(r);
     test_classifier(r);
     test_system(r);
-    if (callback_) callback_(r);  // §3.3.2: callback signals thread termination
+    if (callback_) callback_(r);  // After all cases; worker is about to exit.
 }
 
 // ── Packet builders ──────────────────────────────────────────────────────────
@@ -277,7 +277,7 @@ void SelfTest::test_dhcp(Report& r) {
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) == 0) {
         dhcp.process_background_tasks(sv[1]);
         uint8_t probe[1];
-        // Non-blocking check: §3.3.4 — no sleep; use MSG_DONTWAIT
+        // Non-blocking recv: no sleep, MSG_DONTWAIT only.
         ssize_t n = recv(sv[0], probe, 1, MSG_DONTWAIT);
         dhcp_pass = (n > 0);
         ::close(sv[0]);
@@ -368,7 +368,7 @@ void SelfTest::test_classifier(Report& r) {
     }
 }
 
-// §2.3.7: Hardware checks via raw fd — no ifstream, no heap
+// Hardware checks: open /sys and /proc nodes with raw fds (no ifstream, no path heap).
 void SelfTest::test_system(Report& r) {
     // SYS_Temp: /sys/class/thermal/thermal_zone0/temp
     {

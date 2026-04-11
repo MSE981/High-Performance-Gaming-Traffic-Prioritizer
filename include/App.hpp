@@ -97,7 +97,7 @@ struct QoSConfig {
     }
 };
 
-// Configuration bundle passed to each packet worker thread (§2.2.3).
+// Per-thread routing and engine handles passed into each packet worker.
 struct PacketWorkerConfig {
     int tx_fd;
     int core_id;
