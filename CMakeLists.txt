@@ -33,7 +33,7 @@ elseif(MSVC)
 endif()
 
 # ── Infrastructure utilities ──────────────────────────────────────────────────
-add_library(utils_network    src/NetworkUtils.cpp)
+add_library(utils_network    src/NetworkUtils.cpp src/NetworkTypes.cpp)
 add_library(dataplane        src/DataPlane.cpp)
 add_library(utils_system     src/SystemOptimizer.cpp)
 add_library(config           src/Config.cpp)
