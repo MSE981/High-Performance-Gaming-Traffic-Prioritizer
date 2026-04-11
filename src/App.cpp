@@ -1,4 +1,5 @@
 #include "App.hpp"
+#include "DataPlane.hpp"
 // POSIX C headers — visible only in this translation unit, hidden from all
 // clients that include App.hpp.
 #include <sys/socket.h>
@@ -21,6 +22,10 @@ namespace Scalpel {
 
 namespace {
 
+// Course model (Porr/Bailey userspace): blocking poll in RawSocketManager::do_poll
+// wakes this thread; on_packet_event is the short per-frame callback chain (PacketPipeline).
+// Egress frames go through DataPlane::TxFrameOutput (setter / actuator side).
+
 // ─── Packet routing context (internal to data plane) ─────────────────────────
 struct RouteContext {
     int tx_fd;
@@ -32,9 +37,7 @@ using RouteFunc = void (*)(const RouteContext&, std::span<uint8_t>, size_t, int)
 
 void fast_path_handler(const RouteContext& ctx, std::span<uint8_t> pkt,
                         size_t prio_idx, int core_id) {
-    if (send(ctx.tx_fd, pkt.data(), pkt.size(), MSG_DONTWAIT) < 0)
-        Telemetry::instance().core_metrics[core_id].dropped[prio_idx]
-            .fetch_add(1, std::memory_order_relaxed);
+    DataPlane::TxFrameOutput::send_best_effort(ctx.tx_fd, pkt, core_id, prio_idx);
 }
 
 void shaper_handler(const RouteContext& ctx, std::span<uint8_t> pkt,
@@ -65,7 +68,12 @@ public:
     std::array<std::array<RouteFunc, 3>, 2> routes;
 
     using PipelineStep = std::function<bool(PacketConsumer&, Net::ParsedPacket&)>;
-    std::array<PipelineStep, 10> pipeline;
+
+    // Explicit ordered stage list (course: structured callback pipeline, Ch.2.2).
+    struct PacketPipeline {
+        std::array<PipelineStep, 10> steps{};
+    };
+    PacketPipeline pipeline;
 
     PacketConsumer(int rx_fd_, const PacketWorkerConfig& cfg)
         : rx_fd(rx_fd_), tx_fd(cfg.tx_fd), core_id(cfg.core_id),
@@ -83,17 +91,22 @@ public:
         // Pipeline assembled at construction — eliminates all runtime if-else branching.
         if (core_id == 2) {
             // Core 2 WAN→LAN: DNAT first, then device block on real LAN IP
-            pipeline = { step_dhcp_interceptor, step_dns_interceptor,
-                         step_firewall_inbound, step_nat_downstream,
-                         step_block_device_downstream, step_device_shaper_downstream,
-                         step_ip_shaper_downstream, step_qos_routing };
+            pipeline.steps = {{
+                step_dhcp_interceptor, step_dns_interceptor,
+                step_firewall_inbound, step_nat_downstream,
+                step_block_device_downstream, step_device_shaper_downstream,
+                step_ip_shaper_downstream, step_qos_routing,
+                PipelineStep{}, PipelineStep{}
+            }};
         } else {
             // Core 3 LAN→WAN: block and SNAT before sending upstream
-            pipeline = { step_dhcp_interceptor, step_dns_interceptor,
-                         step_local_delivery_blocker, step_block_device_upstream,
-                         step_firewall_track_outbound, step_nat_downstream,
-                         step_nat_upstream, step_device_shaper_upstream,
-                         step_ip_shaper_upstream, step_qos_routing };
+            pipeline.steps = {{
+                step_dhcp_interceptor, step_dns_interceptor,
+                step_local_delivery_blocker, step_block_device_upstream,
+                step_firewall_track_outbound, step_nat_downstream,
+                step_nat_upstream, step_device_shaper_upstream,
+                step_ip_shaper_upstream, step_qos_routing
+            }};
         }
     }
 
@@ -230,7 +243,7 @@ public:
 
     // ── Packet entry point ────────────────────────────────────────────────────
     void on_packet_event(Net::ParsedPacket& pkt) {
-        for (auto& step : pipeline)
+        for (auto& step : pipeline.steps)
             if (step && step(*this, pkt)) break;
         // Batch-commit telemetry every 32 packets (& 31 avoids division)
         if ((stats.pkts & 31) == 0) {
@@ -354,6 +367,7 @@ void App::wait_for_shutdown() {
 }
 
 // ─── Worker event loop (Core 2 / Core 3) ─────────────────────────────────────
+// RawSocketManager::do_poll uses blocking poll(2); wakeups drive PacketConsumer::on_packet_event.
 
 void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
                              PacketWorkerConfig cfg) {
