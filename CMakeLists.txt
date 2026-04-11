@@ -88,6 +88,7 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/demo")
     foreach(demo_src IN ITEMS
         demo/nat_demo.cpp
         demo/dns_demo.cpp
+        demo/dhcp_demo.cpp
         demo/scheduler_demo.cpp
         demo/firewall_demo.cpp
         demo/probe_demo.cpp)

@@ -12,7 +12,7 @@ int main() {
 
     // ── 1. TokenBucket: verify token consumption and refund ──────────────────
     {
-        Scalpel::Traffic::TokenBucket bucket(10.0);  // 10 Mbps
+        Scalpel::Traffic::TokenBucket bucket(Scalpel::Traffic::Mbps{10.0});  // 10 Mbps
 
         // First consume should succeed (bucket starts full)
         bool first = bucket.try_consume(1000);
@@ -54,7 +54,7 @@ int main() {
 
     // ── 3. Shaper: enqueue then process_queue (tx_fd = -1, sends will fail) ───
     {
-        Scalpel::Traffic::Shaper shaper(1000.0);  // 1 Gbps — tokens never run out in demo
+        Scalpel::Traffic::Shaper shaper(Scalpel::Traffic::Mbps{1000.0});  // 1 Gbps — tokens never run out in demo
 
         std::array<uint8_t, 128> pkt{};
         shaper.enqueue_normal(std::span<const uint8_t>{pkt});
