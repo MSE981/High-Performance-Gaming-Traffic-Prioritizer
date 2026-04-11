@@ -64,23 +64,23 @@ int main(int argc, char* argv[]) {
             Scalpel::GUI::Dashboard gui;
             gui.showFullScreen();
 
-            // Async self-test: GUI shows immediately with overlay; callback fires on Qt main
-            // thread after test completes so app.start() is called only once path is clear.
-            // Prevents a burst of queued packets from flooding the engine on first tick.
-            // selftest outlives qapp.exec() so the destructor join() is a no-op (thread done).
+            // Async self-test: GUI shows with an overlay; when the test finishes the callback
+            // runs on the Qt main thread and calls app.start() once. selftest is destroyed after
+            // qapp.exec() returns, so its worker thread is already joined.
             Scalpel::SelfTest::SelfTest selftest;
             selftest.registerCallback([&app](const Scalpel::SelfTest::Report& r) {
                 Scalpel::SelfTest::LAST_REPORT = r;
-                std::println("\n╔══ 启动自检结果 ({}/{} 项通过) ══╗", r.passed, r.count);
+                std::println("\n=== Startup self-test: {} / {} passed ===", r.passed, r.count);
                 for (size_t i = 0; i < r.count; ++i) {
-                    std::println("  [{}] {}  —  {}",
+                    std::println("  [{}] {} : {}",
                         r.cases[i].pass ? "PASS" : "FAIL",
                         r.cases[i].name.data(),
                         r.cases[i].detail.data());
                 }
-                std::println("╚══════════════════════════════╝");
+                std::println("=== End self-test ===");
                 if (r.passed < r.count)
-                    std::println(stderr, "[Warning] {} 项自检失败，请检查硬件或配置",
+                    std::println(stderr,
+                        "[Warning] {} self-test case(s) failed; review hardware and configuration.",
                         r.count - r.passed);
 
                 // Post to Qt main thread (Core 0) — never call Qt from worker thread directly
@@ -113,16 +113,17 @@ int main(int argc, char* argv[]) {
                 Scalpel::SelfTest::SelfTest selftest;
                 selftest.registerCallback([](const Scalpel::SelfTest::Report& r) {
                     Scalpel::SelfTest::LAST_REPORT = r;
-                    std::println("\n╔══ 启动自检结果 ({}/{} 项通过) ══╗", r.passed, r.count);
+                    std::println("\n=== Startup self-test: {} / {} passed ===", r.passed, r.count);
                     for (size_t i = 0; i < r.count; ++i) {
-                        std::println("  [{}] {}  —  {}",
+                        std::println("  [{}] {} : {}",
                             r.cases[i].pass ? "PASS" : "FAIL",
                             r.cases[i].name.data(),
                             r.cases[i].detail.data());
                     }
-                    std::println("╚══════════════════════════════╝");
+                    std::println("=== End self-test ===");
                     if (r.passed < r.count)
-                        std::println(stderr, "[Warning] {} 项自检失败，请检查硬件或配置",
+                        std::println(stderr,
+                            "[Warning] {} self-test case(s) failed; review hardware and configuration.",
                             r.count - r.passed);
                 });
                 selftest.start();

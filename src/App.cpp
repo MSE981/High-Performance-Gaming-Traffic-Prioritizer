@@ -87,7 +87,7 @@ public:
             { fast_path_handler, fast_path_handler, fast_path_handler } // bridge
         }};
 
-        // Pipeline assembled at construction — eliminates all runtime if-else branching.
+        // Pipeline steps are fixed at construction (no per-packet branch to select a path).
         if (core_id == 2) {
             // Core 2 WAN→LAN: DNAT first, then device block on real LAN IP
             pipeline.steps = {{

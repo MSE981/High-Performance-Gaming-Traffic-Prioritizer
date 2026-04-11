@@ -269,9 +269,8 @@ void SelfTest::test_dhcp(Report& r) {
 
     dhcp.intercept_request(pkt); // enqueue into request_queue
 
-    // Use socketpair(AF_UNIX, SOCK_DGRAM) — no root required.
-    // DhcpEngine::handle_dhcp_request calls send(lan_fd, response, len, MSG_DONTWAIT).
-    // On a SOCK_DGRAM unix socket, this succeeds. We read from the other end to verify.
+    // socketpair(AF_UNIX, SOCK_DGRAM): DhcpEngine replies via TxFrameOutput::send_best_effort.
+    // recv on the peer socket confirms bytes were written.
     int sv[2] = {-1, -1};
     bool dhcp_pass = false;
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) == 0) {
