@@ -38,6 +38,10 @@ namespace Scalpel::Engine {
         std::expected<void, std::string> init();
         int get_fd() const { return fd; }
 
+        void poll_rx(int timeout_ms) { do_poll(timeout_ms); }
+        bool peek_rx_frame(std::span<uint8_t>& out) { return peek_frame(out); }
+        void finish_rx_frame() { advance_frame(); }
+
         // poll_and_dispatch must remain in the header — template instantiation
         // requires the full body to be visible at each call site.
         template<typename Callback>

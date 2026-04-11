@@ -17,14 +17,14 @@
 #include <functional>
 #include <print>
 #include <iostream>
+#include <sched.h>
+#include <chrono>
 
 namespace Scalpel {
 
 namespace {
 
-// Course model (Porr/Bailey userspace): blocking poll in RawSocketManager::do_poll
-// wakes this thread; on_packet_event is the short per-frame callback chain (PacketPipeline).
-// Egress frames go through DataPlane::TxFrameOutput (setter / actuator side).
+// RawSocketManager::poll_rx uses blocking poll(2). Egress uses DataPlane::TxFrameOutput.
 
 // ─── Packet routing context (internal to data plane) ─────────────────────────
 struct RouteContext {
@@ -69,7 +69,7 @@ public:
 
     using PipelineStep = std::function<bool(PacketConsumer&, Net::ParsedPacket&)>;
 
-    // Explicit ordered stage list (course: structured callback pipeline, Ch.2.2).
+    // Ordered pipeline stages; each step returns true if it handled the packet.
     struct PacketPipeline {
         std::array<PipelineStep, 10> steps{};
     };
@@ -253,6 +253,13 @@ public:
     }
 };
 
+// Fixed-size copy of one Ethernet frame for transfer from the RX thread to the
+// packet processing thread (single producer, single consumer ring).
+struct RxFrameCopy {
+    std::array<uint8_t, 2048> data{};
+    uint16_t                len = 0;
+};
+
 } // anonymous namespace
 
 // ─── App method definitions ───────────────────────────────────────────────────
@@ -367,36 +374,73 @@ void App::wait_for_shutdown() {
 }
 
 // ─── Worker event loop (Core 2 / Core 3) ─────────────────────────────────────
-// RawSocketManager::do_poll uses blocking poll(2); wakeups drive PacketConsumer::on_packet_event.
+// RX thread: blocking poll(2) on the AF_PACKET socket, copy each frame into an
+// SPSC ring. Processing thread: parse and run PacketConsumer::on_packet_event.
 
 void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
                              PacketWorkerConfig cfg) {
-    Scalpel::System::Optimizer::set_current_thread_affinity(cfg.core_id);
-    Scalpel::System::Optimizer::set_realtime_priority();
     std::println("[App] Core {} pipeline mounted and ready.", cfg.core_id);
 
-    int rx_fd = rx_mgr->get_fd();
-    PacketConsumer consumer(rx_fd, cfg);
+    const int rx_fd_saved = rx_mgr->get_fd();
+    PacketConsumer consumer(rx_fd_saved, cfg);
+    Net::SpscRingBuffer<RxFrameCopy, 1024> frame_q{};
 
-    while (running_workers.load(std::memory_order_relaxed)) {
-        rx_mgr->poll_and_dispatch([&consumer](std::span<uint8_t> raw_span) {
-            auto pkt = Net::ParsedPacket::parse(raw_span);
-            consumer.on_packet_event(pkt);
-        }, 1);
+    std::thread rx_thread(
+        [this, mgr = std::move(rx_mgr), &frame_q, core = cfg.core_id]() mutable {
+            Scalpel::System::Optimizer::set_current_thread_affinity(core);
+            Scalpel::System::Optimizer::set_realtime_priority();
+            while (this->running_workers.load(std::memory_order_relaxed)) {
+                mgr->poll_rx(1);
+                std::span<uint8_t> raw;
+                while (this->running_workers.load(std::memory_order_relaxed)
+                       && mgr->peek_rx_frame(raw)) {
+                    RxFrameCopy copy{};
+                    const size_t n =
+                        raw.size() < copy.data.size() ? raw.size() : copy.data.size();
+                    copy.len = static_cast<uint16_t>(n);
+                    std::memcpy(copy.data.data(), raw.data(), n);
 
-        if (cfg.global_shaper) cfg.global_shaper->process_queue(cfg.tx_fd);
+                    while (this->running_workers.load(std::memory_order_relaxed)) {
+                        if (frame_q.push(copy)) break;
+                        sched_yield();
+                    }
+                    mgr->finish_rx_frame();
+                }
+            }
+        });
 
-        if (consumer.qos_config &&
-            Config::IP_LIMIT_ACTIVE.load(std::memory_order_relaxed)) {
-            size_t ai = consumer.qos_config->active_idx.load(std::memory_order_relaxed);
-            consumer.qos_config->buffers[ai].for_each_occupied([&](auto& shaper) {
-                shaper->process_queue(cfg.tx_fd);
-            });
+    std::thread proc_thread([this, &consumer, &frame_q, cfg]() {
+        Scalpel::System::Optimizer::set_current_thread_affinity(cfg.core_id);
+        Scalpel::System::Optimizer::set_realtime_priority();
+        while (this->running_workers.load(std::memory_order_relaxed)) {
+            RxFrameCopy copy{};
+            const bool had_frame = frame_q.pop(copy);
+            if (had_frame) {
+                auto pkt = Net::ParsedPacket::parse(
+                    std::span<uint8_t>(copy.data.data(), copy.len));
+                consumer.on_packet_event(pkt);
+            } else {
+                std::this_thread::sleep_for(std::chrono::microseconds(20));
+            }
+
+            if (cfg.global_shaper) cfg.global_shaper->process_queue(cfg.tx_fd);
+
+            if (consumer.qos_config
+                && Config::IP_LIMIT_ACTIVE.load(std::memory_order_relaxed)) {
+                size_t ai =
+                    consumer.qos_config->active_idx.load(std::memory_order_relaxed);
+                consumer.qos_config->buffers[ai].for_each_occupied([&](auto& shaper) {
+                    shaper->process_queue(cfg.tx_fd);
+                });
+            }
+
+            Telemetry::instance().core_metrics[cfg.core_id].last_heartbeat.fetch_add(
+                1, std::memory_order_relaxed);
         }
+    });
 
-        Telemetry::instance().core_metrics[cfg.core_id].last_heartbeat
-            .fetch_add(1, std::memory_order_relaxed);
-    }
+    proc_thread.join();
+    rx_thread.join();
 }
 
 // ─── Watchdog loop (Core 1, 1 Hz timerfd) ────────────────────────────────────
