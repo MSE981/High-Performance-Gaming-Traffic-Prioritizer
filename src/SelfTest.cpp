@@ -241,8 +241,7 @@ void SelfTest::test_dns(Report& r) {
 
     // ── DNS_Redirect ──
     auto dns_redir = std::make_unique<Logic::DnsEngine>();
-    Net::IPv4Net upstream = Config::parse_ip_str("9.9.9.9");
-    dns_redir->set_upstream(upstream, Net::IPv4Net{});
+    dns_redir->set_upstream({Config::parse_ip_str("9.9.9.9"), Net::IPv4Net{}});
     dns_redir->set_redirect(true);
     size_t len3 = 0;
     auto redir_buf = make_dns_query(cli, srv, "redirect.test", len3);

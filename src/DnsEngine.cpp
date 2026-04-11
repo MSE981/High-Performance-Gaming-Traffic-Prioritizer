@@ -15,9 +15,9 @@ static uint32_t hash_qname(const uint8_t* qname, size_t max_len) {
 
 void DnsEngine::tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
 
-void DnsEngine::set_upstream(Net::IPv4Net primary, Net::IPv4Net secondary) {
-    upstream_primary_ip.store(primary,   std::memory_order_release);
-    upstream_secondary_ip.store(secondary, std::memory_order_release);
+void DnsEngine::set_upstream(DnsUpstreamConfig cfg) {
+    upstream_primary_ip.store(cfg.primary,   std::memory_order_release);
+    upstream_secondary_ip.store(cfg.secondary, std::memory_order_release);
 }
 
 void DnsEngine::set_redirect(bool enabled) {

@@ -23,6 +23,11 @@ namespace Scalpel::Logic {
         std::array<uint8_t, 512> data;
     };
 
+    struct DnsUpstreamConfig {
+        Net::IPv4Net primary{};
+        Net::IPv4Net secondary{};
+    };
+
     class DnsEngine {
         struct DnsCacheEntry {
             uint32_t     domain_hash  = 0;
@@ -55,7 +60,7 @@ namespace Scalpel::Logic {
 
     public:
         void tick();
-        void set_upstream(Net::IPv4Net primary, Net::IPv4Net secondary);
+        void set_upstream(DnsUpstreamConfig cfg);
         void set_redirect(bool enabled);
         void reload_static_records();
         bool process_query(Net::ParsedPacket& pkt, int bounce_fd);

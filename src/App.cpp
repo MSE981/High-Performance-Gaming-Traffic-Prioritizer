@@ -623,9 +623,9 @@ void App::watchdog_loop() {
 
         // DNS config sync
         if (dns_engine && tel.dns_config_dirty.exchange(false, std::memory_order_acq_rel)) {
-            Net::IPv4Net pri = Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY);
-            Net::IPv4Net sec = Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY);
-            dns_engine->set_upstream(pri, sec);
+            dns_engine->set_upstream({
+                Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY),
+                Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY)});
             dns_engine->set_redirect(
                 Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
             dns_engine->reload_static_records();
