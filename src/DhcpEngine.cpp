@@ -192,13 +192,10 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
 
 // ── public API ────────────────────────────────────────────────────────────────
 
-DhcpEngine::DhcpEngine(const std::string& lan_ip,
-                       Net::IPv4Net pool_start,
-                       Net::IPv4Net pool_end,
-                       std::chrono::seconds lease) {
+DhcpEngine::DhcpEngine(const std::string& lan_ip, DhcpPoolConfig cfg) {
     router_ip      = Net::parse_ipv4(lan_ip.c_str());
-    lease_duration = lease;
-    init_pool(pool_start, pool_end);
+    lease_duration = cfg.lease;
+    init_pool(cfg.pool_start, cfg.pool_end);
 }
 
 void DhcpEngine::reconfigure(DhcpPoolConfig cfg) {

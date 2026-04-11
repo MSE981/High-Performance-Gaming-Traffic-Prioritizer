@@ -254,9 +254,10 @@ App::App() {
     dns_engine      = std::make_shared<Logic::DnsEngine>();
     dhcp_engine     = std::make_shared<Logic::DhcpEngine>(
         Config::ROUTER_IP,
-        Net::parse_ipv4(Config::DHCP_POOL_START.c_str()),
-        Net::parse_ipv4(Config::DHCP_POOL_END.c_str()),
-        Config::DHCP_LEASE_DURATION);
+        Logic::DhcpPoolConfig{
+            Net::parse_ipv4(Config::DHCP_POOL_START.c_str()),
+            Net::parse_ipv4(Config::DHCP_POOL_END.c_str()),
+            Config::DHCP_LEASE_DURATION});
     firewall_engine = std::make_shared<Logic::FirewallEngine>();
     if (Config::global_state.enable_upnp.load(std::memory_order_relaxed))
         upnp_engine = std::make_shared<Logic::UpnpEngine>(nat_engine, Config::ROUTER_IP);

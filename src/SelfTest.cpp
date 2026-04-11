@@ -257,9 +257,10 @@ void SelfTest::test_dns(Report& r) {
 void SelfTest::test_dhcp(Report& r) {
     Logic::DhcpEngine dhcp(
         "192.168.1.1",
-        Net::parse_ipv4("192.168.1.100"),
-        Net::parse_ipv4("192.168.1.200"),
-        std::chrono::seconds{86400});
+        Logic::DhcpPoolConfig{
+            Net::parse_ipv4("192.168.1.100"),
+            Net::parse_ipv4("192.168.1.200"),
+            std::chrono::seconds{86400}});
 
     size_t pkt_len = 0;
     auto dhcp_buf = make_dhcp_discover(pkt_len);
