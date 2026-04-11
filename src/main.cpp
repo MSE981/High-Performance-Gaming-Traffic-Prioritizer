@@ -12,7 +12,7 @@ std::atomic<bool> signal_received{false};
 // Signal handler entry point
 extern "C" void signal_handler(int signal) {
     (void)signal;
-    if (signal_received.exchange(true)) return; // Intercept double shutdown
+    if (signal_received.exchange(true, std::memory_order_acq_rel)) return; // Intercept double shutdown
 
     // Note: don't execute heavy logic directly in async UNIX signal, just trigger shutdown
     if (global_app) {
@@ -101,7 +101,7 @@ int main(int argc, char* argv[]) {
             ret = qapp.exec(); // Block on main event loop
 
             // If user closed the window (no UNIX signal), notify underlying engine to stop
-            if (!signal_received.exchange(true)) {
+            if (!signal_received.exchange(true, std::memory_order_acq_rel)) {
                 app.stop();
             }
             watchdog_notify.join(); // qapp still in scope; thread is done on both exit paths
