@@ -309,8 +309,8 @@ void App::start() {
     constexpr double ul = 50.0;
     base_dl_mbps = dl;
     base_ul_mbps = ul;
-    shaper_dl = std::make_shared<Traffic::Shaper>(base_dl_mbps);
-    shaper_ul = std::make_shared<Traffic::Shaper>(base_ul_mbps);
+    shaper_dl = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_dl_mbps});
+    shaper_ul = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_ul_mbps});
 
     Net::IPv4Net gw_ip = Config::parse_ip_str(Config::ROUTER_IP);
     running_workers.store(true, std::memory_order_relaxed);
@@ -634,10 +634,10 @@ void App::watchdog_loop() {
         if (dhcp_engine && tel.dhcp_config_dirty.exchange(false, std::memory_order_acq_rel)) {
             Net::IPv4Net start = Config::parse_ip_str(Config::DHCP_POOL_START);
             Net::IPv4Net end   = Config::parse_ip_str(Config::DHCP_POOL_END);
-            dhcp_engine->reconfigure(start, end, Config::DHCP_LEASE_SECONDS);
+            dhcp_engine->reconfigure(start, end, Config::DHCP_LEASE_DURATION);
             std::println("[DHCP] Pool reconfigured: {} – {}, lease {}s",
                 Config::DHCP_POOL_START, Config::DHCP_POOL_END,
-                Config::DHCP_LEASE_SECONDS);
+                Config::DHCP_LEASE_DURATION.count());
         }
 
         // 1 Hz engine ticks
@@ -652,8 +652,8 @@ void App::watchdog_loop() {
             if (pct != last_throttle_pct) {
                 last_throttle_pct = pct;
                 double factor = pct / 100.0;
-                if (shaper_dl) shaper_dl->set_rate_limit(base_dl_mbps * factor);
-                if (shaper_ul) shaper_ul->set_rate_limit(base_ul_mbps * factor);
+                if (shaper_dl) shaper_dl->set_rate_limit(Traffic::Mbps{base_dl_mbps * factor});
+                if (shaper_ul) shaper_ul->set_rate_limit(Traffic::Mbps{base_ul_mbps * factor});
                 std::println("[QoS] Throttle {}% — DL {:.1f} Mbps / UL {:.1f} Mbps",
                     pct, base_dl_mbps * factor, base_ul_mbps * factor);
             }

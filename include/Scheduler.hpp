@@ -12,6 +12,12 @@
 
 namespace Scalpel::Traffic {
 
+    // Strong unit type for network rates — prevents passing bare doubles across API boundaries.
+    struct Mbps {
+        double value;
+        explicit constexpr Mbps(double v) noexcept : value(v) {}
+    };
+
     // Token bucket rate limiter — kept inline (hot path, called every packet)
     class TokenBucket {
         double tokens;
@@ -19,28 +25,29 @@ namespace Scalpel::Traffic {
         double rate_bytes_per_sec;
         std::chrono::time_point<std::chrono::steady_clock> last_refill;
 
+        // Internal pending-rate slot; -1.0 is the sentinel "no pending change".
         alignas(64) std::atomic<double> requested_limit{-1.0};
 
     public:
-        explicit TokenBucket(double limit_mbps) { apply_new_rate(limit_mbps); }
+        explicit TokenBucket(Mbps limit) { apply_new_rate(limit); }
 
     private:
-        void apply_new_rate(double limit_mbps) {
-            rate_bytes_per_sec = (limit_mbps * 1e6) / 8.0;
+        void apply_new_rate(Mbps limit) {
+            rate_bytes_per_sec = (limit.value * 1e6) / 8.0;
             capacity = std::max<double>(15000.0, rate_bytes_per_sec * 0.1);
             tokens = capacity;
             last_refill = std::chrono::steady_clock::now();
         }
 
     public:
-        void set_rate(double limit_mbps) {
-            requested_limit.store(limit_mbps, std::memory_order_release);
+        void set_rate(Mbps limit) {
+            requested_limit.store(limit.value, std::memory_order_release);
         }
 
         void refill() {
             double req_limit = requested_limit.load(std::memory_order_acquire);
             if (req_limit >= 0.0) {
-                apply_new_rate(req_limit);
+                apply_new_rate(Mbps{req_limit});
                 requested_limit.store(-1.0, std::memory_order_relaxed);
             }
             auto now = std::chrono::steady_clock::now();
@@ -129,9 +136,9 @@ namespace Scalpel::Traffic {
         };
 
     public:
-        explicit Shaper(double limit_mbps) : bucket(limit_mbps) {}
+        explicit Shaper(Mbps limit) : bucket(limit) {}
 
-        void set_rate_limit(double limit_mbps);
+        void set_rate_limit(Mbps limit);
         void enqueue_normal(std::span<const uint8_t> pkt);
         void process_queue(int tx_fd);
     };

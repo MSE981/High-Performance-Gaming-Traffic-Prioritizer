@@ -11,8 +11,8 @@ static TxResult try_hardware_send(int fd, std::span<const uint8_t> pkt) {
     return TxResult::Fatal;
 }
 
-void Shaper::set_rate_limit(double limit_mbps) {
-    bucket.set_rate(limit_mbps);
+void Shaper::set_rate_limit(Mbps limit) {
+    bucket.set_rate(limit);
 }
 
 void Shaper::enqueue_normal(std::span<const uint8_t> pkt) {

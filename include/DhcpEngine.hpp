@@ -28,8 +28,8 @@ namespace Scalpel::Logic {
         static constexpr size_t MAX_POOL_SIZE = 253;
         std::array<DhcpLease, MAX_POOL_SIZE> leases{};
         size_t       pool_count    = 0;
-        Net::IPv4Net router_ip{};
-        uint32_t     lease_seconds = 86400;
+        Net::IPv4Net        router_ip{};
+        std::chrono::seconds lease_duration{86400};
 
         void init_pool(Net::IPv4Net start_ip, Net::IPv4Net end_ip);
         void handle_dhcp_request(DhcpMessage& msg, int lan_fd);
@@ -38,7 +38,7 @@ namespace Scalpel::Logic {
 
     public:
         explicit DhcpEngine(const std::string& lan_ip);
-        void reconfigure(Net::IPv4Net start_ip, Net::IPv4Net end_ip, uint32_t lease_secs);
+        void reconfigure(Net::IPv4Net start_ip, Net::IPv4Net end_ip, std::chrono::seconds lease_duration);
         void intercept_request(const Net::ParsedPacket& pkt);
         void process_background_tasks(int lan_fd);
     };

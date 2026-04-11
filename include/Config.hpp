@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <atomic>
 #include <array>
+#include <chrono>
 #include <print>
 #include <format>
 #include <cstring>
@@ -73,7 +74,7 @@ namespace Scalpel::Config {
     // DHCP pool configuration
     inline std::string DHCP_POOL_START = "192.168.1.50";
     inline std::string DHCP_POOL_END   = "192.168.1.249";
-    inline uint32_t    DHCP_LEASE_SECONDS = 86400;
+    inline std::chrono::seconds DHCP_LEASE_DURATION{86400};
     // DNS upstream server and redirect configuration
     inline std::string DNS_UPSTREAM_PRIMARY   = "8.8.8.8";
     inline std::string DNS_UPSTREAM_SECONDARY = "8.8.4.4";

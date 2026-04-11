@@ -1050,11 +1050,11 @@ DhcpConfigDialog::DhcpConfigDialog(QWidget* parent) : QDialog(parent) {
 
     auto* lease_row = new QHBoxLayout();
     spin_days = new QSpinBox(); spin_days->setRange(0, 365); spin_days->setSuffix(" d");
-    spin_days->setValue(static_cast<int>(Config::DHCP_LEASE_SECONDS / 86400));
+    spin_days->setValue(static_cast<int>(Config::DHCP_LEASE_DURATION.count() / 86400));
     spin_hours = new QSpinBox(); spin_hours->setRange(0, 24); spin_hours->setSuffix(" h");
-    spin_hours->setValue(static_cast<int>((Config::DHCP_LEASE_SECONDS % 86400) / 3600));
+    spin_hours->setValue(static_cast<int>((Config::DHCP_LEASE_DURATION.count() % 86400) / 3600));
     spin_minutes = new QSpinBox(); spin_minutes->setRange(0, 60); spin_minutes->setSuffix(" min");
-    spin_minutes->setValue(static_cast<int>((Config::DHCP_LEASE_SECONDS % 3600) / 60));
+    spin_minutes->setValue(static_cast<int>((Config::DHCP_LEASE_DURATION.count() % 3600) / 60));
     lease_row->addWidget(spin_days);
     lease_row->addWidget(spin_hours);
     lease_row->addWidget(spin_minutes);
@@ -1095,7 +1095,7 @@ void DhcpConfigDialog::on_apply() {
 
     Config::DHCP_POOL_START    = edit_pool_start->text().toStdString();
     Config::DHCP_POOL_END      = edit_pool_end->text().toStdString();
-    Config::DHCP_LEASE_SECONDS = secs;
+    Config::DHCP_LEASE_DURATION = std::chrono::seconds{secs};
     Telemetry::instance().dhcp_config_dirty.store(true, std::memory_order_release);
     std::println("[GUI] DHCP pool updated: {} – {}, lease {}s",
         Config::DHCP_POOL_START, Config::DHCP_POOL_END, secs);

@@ -92,7 +92,7 @@ struct QoSConfig {
         buffers[inactive] = {};
         for (size_t i = 0; i < count; ++i)
             buffers[inactive].insert(
-                table[i].ip, std::make_shared<Traffic::Shaper>(table[i].rate_mbps));
+                table[i].ip, std::make_shared<Traffic::Shaper>(Traffic::Mbps{table[i].rate_mbps}));
         active_idx.store(inactive, std::memory_order_release);
     }
 };

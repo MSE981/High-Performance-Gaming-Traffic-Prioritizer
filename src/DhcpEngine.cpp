@@ -43,7 +43,7 @@ void DhcpEngine::init_pool(Net::IPv4Net start_ip, Net::IPv4Net end_ip) {
 
 Net::IPv4Net DhcpEngine::find_or_assign_lease(const uint8_t* mac) {
     auto now      = std::chrono::steady_clock::now();
-    auto duration = std::chrono::seconds(lease_seconds);
+    auto duration = lease_duration;
 
     for (size_t i = 0; i < pool_count; ++i)
         if (leases[i].active && std::memcmp(leases[i].mac, mac, 6) == 0) return leases[i].ip;
@@ -60,7 +60,7 @@ Net::IPv4Net DhcpEngine::find_or_assign_lease(const uint8_t* mac) {
 }
 
 void DhcpEngine::commit_lease(const uint8_t* mac, Net::IPv4Net ip) {
-    auto duration = std::chrono::seconds(lease_seconds);
+    auto duration = lease_duration;
     for (size_t i = 0; i < pool_count; ++i) {
         if (leases[i].ip == ip) {
             leases[i].active       = true;
@@ -146,7 +146,7 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
         *o++ = 1;  *o++ = 4; *o++ = 255; *o++ = 255; *o++ = 255; *o++ = 0;
         { uint32_t r = router_ip.raw(); *o++ = 3; *o++ = 4; std::memcpy(o, &r, 4); o += 4; }
         { uint32_t r = router_ip.raw(); *o++ = 6; *o++ = 4; std::memcpy(o, &r, 4); o += 4; }
-        { uint32_t lt = htonl(lease_seconds); *o++ = 51; *o++ = 4; std::memcpy(o, &lt, 4); o += 4; }
+        { uint32_t lt = htonl(static_cast<uint32_t>(lease_duration.count())); *o++ = 51; *o++ = 4; std::memcpy(o, &lt, 4); o += 4; }
         { uint32_t r = router_ip.raw(); *o++ = 54; *o++ = 4; std::memcpy(o, &r, 4); o += 4; }
         *o++ = 255;
 
@@ -196,12 +196,12 @@ DhcpEngine::DhcpEngine(const std::string& lan_ip) {
     router_ip             = Net::parse_ipv4(lan_ip.c_str());
     Net::IPv4Net start_ip = Net::parse_ipv4(Config::DHCP_POOL_START.c_str());
     Net::IPv4Net end_ip   = Net::parse_ipv4(Config::DHCP_POOL_END.c_str());
-    lease_seconds         = Config::DHCP_LEASE_SECONDS;
+    lease_duration        = Config::DHCP_LEASE_DURATION;
     init_pool(start_ip, end_ip);
 }
 
-void DhcpEngine::reconfigure(Net::IPv4Net start_ip, Net::IPv4Net end_ip, uint32_t lease_secs) {
-    lease_seconds = lease_secs;
+void DhcpEngine::reconfigure(Net::IPv4Net start_ip, Net::IPv4Net end_ip, std::chrono::seconds lease_secs) {
+    lease_duration = lease_secs;
     init_pool(start_ip, end_ip);
 }
 
