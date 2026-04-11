@@ -20,7 +20,8 @@ int main() {
         result.store(mbps, std::memory_order_relaxed);
     });
 
-    std::println("[RESULT] Measured capacity: {:.1f} Mbps", result.load());
+    std::println("[RESULT] Measured capacity: {:.1f} Mbps",
+        result.load(std::memory_order_relaxed));
     std::println("=== Done ===");
     return 0;
 }
