@@ -21,6 +21,12 @@ namespace Scalpel::Logic {
         std::chrono::steady_clock::time_point lease_expiry;
     };
 
+    struct DhcpPoolConfig {
+        Net::IPv4Net         pool_start{};
+        Net::IPv4Net         pool_end{};
+        std::chrono::seconds lease{86400};
+    };
+
     class DhcpEngine {
         Net::SpscRingBuffer<DhcpMessage, 512> request_queue{};
 
@@ -40,7 +46,7 @@ namespace Scalpel::Logic {
                             Net::IPv4Net pool_start,
                             Net::IPv4Net pool_end,
                             std::chrono::seconds lease);
-        void reconfigure(Net::IPv4Net start_ip, Net::IPv4Net end_ip, std::chrono::seconds lease_duration);
+        void reconfigure(DhcpPoolConfig cfg);
         void intercept_request(const Net::ParsedPacket& pkt);
         void process_background_tasks(int lan_fd);
     };

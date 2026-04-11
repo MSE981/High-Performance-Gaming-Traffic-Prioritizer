@@ -636,9 +636,10 @@ void App::watchdog_loop() {
 
         // DHCP config sync
         if (dhcp_engine && tel.dhcp_config_dirty.exchange(false, std::memory_order_acq_rel)) {
-            Net::IPv4Net start = Config::parse_ip_str(Config::DHCP_POOL_START);
-            Net::IPv4Net end   = Config::parse_ip_str(Config::DHCP_POOL_END);
-            dhcp_engine->reconfigure(start, end, Config::DHCP_LEASE_DURATION);
+            dhcp_engine->reconfigure({
+                Config::parse_ip_str(Config::DHCP_POOL_START),
+                Config::parse_ip_str(Config::DHCP_POOL_END),
+                Config::DHCP_LEASE_DURATION});
             std::println("[DHCP] Pool reconfigured: {} – {}, lease {}s",
                 Config::DHCP_POOL_START, Config::DHCP_POOL_END,
                 Config::DHCP_LEASE_DURATION.count());

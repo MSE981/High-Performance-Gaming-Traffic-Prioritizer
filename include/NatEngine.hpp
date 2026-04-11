@@ -39,9 +39,16 @@ namespace Scalpel::Logic {
         uint32_t hash_flow(const FlowKey& k) const;
 
     public:
+        struct UpnpRule {
+            uint16_t     ext_port  = 0;
+            Net::IPv4Net int_ip{};
+            uint16_t     int_port  = 0;
+            uint8_t      proto     = 0;
+        };
+
         explicit NatEngine();
         void set_wan_ip(Net::IPv4Net ip);
-        void add_upnp_rule(uint16_t ext_port, Net::IPv4Net int_ip, uint16_t int_port, uint8_t proto);
+        void add_upnp_rule(UpnpRule rule);
         void tick();
         bool process_outbound(Net::ParsedPacket& pkt);
         bool process_inbound(Net::ParsedPacket& pkt);

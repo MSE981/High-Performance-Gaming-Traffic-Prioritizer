@@ -201,9 +201,9 @@ DhcpEngine::DhcpEngine(const std::string& lan_ip,
     init_pool(pool_start, pool_end);
 }
 
-void DhcpEngine::reconfigure(Net::IPv4Net start_ip, Net::IPv4Net end_ip, std::chrono::seconds lease_secs) {
-    lease_duration = lease_secs;
-    init_pool(start_ip, end_ip);
+void DhcpEngine::reconfigure(DhcpPoolConfig cfg) {
+    lease_duration = cfg.lease;
+    init_pool(cfg.pool_start, cfg.pool_end);
 }
 
 void DhcpEngine::intercept_request(const Net::ParsedPacket& pkt) {

@@ -32,24 +32,24 @@ NatEngine::NatEngine() {
 
 void NatEngine::set_wan_ip(Net::IPv4Net ip) { wan_ip = ip; }
 
-void NatEngine::add_upnp_rule(uint16_t ext_port, Net::IPv4Net int_ip, uint16_t int_port, uint8_t proto) {
-    uint16_t net_ext_port = htons(ext_port);
-    uint16_t net_int_port = htons(int_port);
+void NatEngine::add_upnp_rule(UpnpRule rule) {
+    uint16_t net_ext_port = htons(rule.ext_port);
+    uint16_t net_int_port = htons(rule.int_port);
 
-    for (auto& rule : upnp_rules) {
-        if (rule.active.load(std::memory_order_relaxed)) {
-            if (rule.external_port == net_ext_port && rule.protocol == proto) {
-                rule.internal_ip   = int_ip;
-                rule.internal_port = net_int_port;
+    for (auto& r : upnp_rules) {
+        if (r.active.load(std::memory_order_relaxed)) {
+            if (r.external_port == net_ext_port && r.protocol == rule.proto) {
+                r.internal_ip   = rule.int_ip;
+                r.internal_port = net_int_port;
                 return;
             }
         }
     }
     size_t idx = upnp_cursor.fetch_add(1, std::memory_order_relaxed) % upnp_rules.size();
-    upnp_rules[idx].internal_ip   = int_ip;
+    upnp_rules[idx].internal_ip   = rule.int_ip;
     upnp_rules[idx].internal_port = net_int_port;
     upnp_rules[idx].external_port = net_ext_port;
-    upnp_rules[idx].protocol      = proto;
+    upnp_rules[idx].protocol      = rule.proto;
     upnp_rules[idx].active.store(true, std::memory_order_release);
 }
 
