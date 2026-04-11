@@ -14,7 +14,6 @@
 #include <ctime>
 #include <cstdio>
 #include <cstdlib>
-#include <functional>
 #include <print>
 #include <iostream>
 #include <sched.h>
@@ -67,7 +66,7 @@ public:
 
     std::array<std::array<RouteFunc, 3>, 2> routes;
 
-    using PipelineStep = std::function<bool(PacketConsumer&, Net::ParsedPacket&)>;
+    using PipelineStep = bool (*)(PacketConsumer&, Net::ParsedPacket&);
 
     // Ordered pipeline stages; each step returns true if it handled the packet.
     struct PacketPipeline {
@@ -96,7 +95,7 @@ public:
                 step_firewall_inbound, step_nat_downstream,
                 step_block_device_downstream, step_device_shaper_downstream,
                 step_ip_shaper_downstream, step_qos_routing,
-                PipelineStep{}, PipelineStep{}
+                nullptr, nullptr
             }};
         } else {
             // Core 3 LAN→WAN: block and SNAT before sending upstream
@@ -243,7 +242,7 @@ public:
 
     // ── Packet entry point ────────────────────────────────────────────────────
     void on_packet_event(Net::ParsedPacket& pkt) {
-        for (auto& step : pipeline.steps)
+        for (auto* step : pipeline.steps)
             if (step && step(*this, pkt)) break;
         // Batch-commit telemetry every 32 packets (& 31 avoids division)
         if ((stats.pkts & 31) == 0) {
