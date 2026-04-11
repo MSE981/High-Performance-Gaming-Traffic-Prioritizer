@@ -18,7 +18,7 @@
       }
       .graphs-container {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(3, 1fr);
         gap: 20px;
       }
       .graph-box {
@@ -103,6 +103,15 @@
         </div>
 
         <div class="graphs-container">
+          <div class="graph-box">
+            <div
+              class="font-semibold text-secondary"
+              style="font-size: 0.85rem; margin-bottom: 5px"
+            >
+              Live Download Speed
+            </div>
+            <div id="speed-gauge-chart" style="width: 100%; height: 210px; margin-top: -10px;"></div>
+          </div>
           <div class="graph-box">
             <div
               class="font-semibold text-secondary"
@@ -243,6 +252,52 @@
         ],
       };
 
+      let speedGaugeChart = echarts.init(document.getElementById("speed-gauge-chart"));
+      const gaugeOptions = {
+        series: [
+          {
+            type: 'gauge',
+            startAngle: 180,
+            endAngle: 0,
+            center: ['50%', '75%'],
+            radius: '110%',
+            min: 0,
+            max: 1000,
+            splitNumber: 5,
+            axisLine: {
+              lineStyle: {
+                width: 12,
+                color: [
+                  [0.3, '#059669'],
+                  [0.7, '#4f46e5'],
+                  [1, '#dc2626']
+                ]
+              }
+            },
+            pointer: {
+              icon: 'path://M12.8,0.7l12,40.1H0.7L12.8,0.7z',
+              length: '60%',
+              width: 8,
+              offsetCenter: [0, '-10%'],
+              itemStyle: { color: '#0f172a' }
+            },
+            axisTick: { show: false },
+            splitLine: { show: false },
+            axisLabel: { distance: -20, color: '#94a3b8', fontSize: 10 },
+            detail: {
+              valueAnimation: true,
+              formatter: '{value} Mbps',
+              color: '#0f172a',
+              fontSize: 18,
+              fontWeight: 700,
+              offsetCenter: [0, '25%']
+            },
+            data: [{ value: 0 }]
+          }
+        ]
+      };
+      speedGaugeChart.setOption(gaugeOptions);
+
       let ppsChart = echarts.init(document.getElementById("pps-chart"));
       let bwChart = echarts.init(document.getElementById("bw-chart"));
       ppsChart.setOption(chartOptions);
@@ -278,6 +333,12 @@
           let temp = (45 + Math.random() * 5).toFixed(1) + " °C";
           $("#cpu-temp").text(temp);
           $("#hdr-temp").text(temp);
+          
+          if (data.download_speed) {
+            speedGaugeChart.setOption({
+              series: [{ data: [{ value: data.download_speed }] }]
+            });
+          }
         });
       }, 2000);
     </script>
