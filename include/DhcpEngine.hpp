@@ -6,7 +6,6 @@
 #include <span>
 #include <string>
 #include "Headers.hpp"
-#include "Config.hpp"
 
 namespace Scalpel::Logic {
 
@@ -37,7 +36,10 @@ namespace Scalpel::Logic {
         void commit_lease(const uint8_t* mac, Net::IPv4Net ip);
 
     public:
-        explicit DhcpEngine(const std::string& lan_ip);
+        explicit DhcpEngine(const std::string& lan_ip,
+                            Net::IPv4Net pool_start,
+                            Net::IPv4Net pool_end,
+                            std::chrono::seconds lease);
         void reconfigure(Net::IPv4Net start_ip, Net::IPv4Net end_ip, std::chrono::seconds lease_duration);
         void intercept_request(const Net::ParsedPacket& pkt);
         void process_background_tasks(int lan_fd);
