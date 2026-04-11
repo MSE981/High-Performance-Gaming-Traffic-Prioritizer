@@ -152,6 +152,9 @@ public:
     void stop() {
         stress_cancel_.store(true, std::memory_order_relaxed);
         if (stress_thread_.joinable()) stress_thread_.join();
+        running_workers.store(false, std::memory_order_relaxed);
+        if (worker_downstream.joinable()) worker_downstream.join();
+        if (worker_upstream.joinable()) worker_upstream.join();
         shutdown_promise.set_value();
     }
     void wait_for_shutdown();
