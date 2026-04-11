@@ -9,6 +9,8 @@
 #include <net/if.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <poll.h>
+#include <linux/if_packet.h>
 
 namespace Scalpel::Engine {
 
@@ -61,6 +63,39 @@ std::expected<void, std::string> RawSocketManager::init() {
         return std::unexpected("Bind failed");
 
     return {};
+}
+
+void RawSocketManager::do_poll(int timeout_ms) {
+    struct pollfd pfd{};
+    pfd.fd     = fd;
+    pfd.events = POLLIN;
+    poll(&pfd, 1, timeout_ms);
+}
+
+bool RawSocketManager::peek_frame(std::span<uint8_t>& out) {
+    while (true) {
+        auto* hdr = reinterpret_cast<tpacket_hdr*>(ring + (rx_idx * FRAME_SIZE));
+        if (!(hdr->tp_status & TP_STATUS_USER)) return false;
+
+        auto* sll = reinterpret_cast<sockaddr_ll*>(
+            reinterpret_cast<uint8_t*>(hdr) + TPACKET_ALIGN(sizeof(tpacket_hdr)));
+
+        if (sll->sll_pkttype != PACKET_OUTGOING) {
+            out = std::span<uint8_t>{
+                reinterpret_cast<uint8_t*>(hdr) + hdr->tp_mac, hdr->tp_len };
+            return true;
+        }
+
+        // PACKET_OUTGOING: release silently and check next frame
+        hdr->tp_status = TP_STATUS_KERNEL;
+        rx_idx = (rx_idx + 1) % FRAME_NR;
+    }
+}
+
+void RawSocketManager::advance_frame() {
+    auto* hdr = reinterpret_cast<tpacket_hdr*>(ring + (rx_idx * FRAME_SIZE));
+    hdr->tp_status = TP_STATUS_KERNEL;
+    rx_idx = (rx_idx + 1) % FRAME_NR;
 }
 
 } // namespace Scalpel::Engine

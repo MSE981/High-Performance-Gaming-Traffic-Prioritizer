@@ -1,7 +1,15 @@
 #include "Scheduler.hpp"
 #include <print>
+#include <sys/socket.h>
+#include <cerrno>
 
 namespace Scalpel::Traffic {
+
+static TxResult try_hardware_send(int fd, std::span<const uint8_t> pkt) {
+    if (send(fd, pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) return TxResult::Success;
+    if (errno == ENOBUFS || errno == EAGAIN) return TxResult::Congested;
+    return TxResult::Fatal;
+}
 
 void Shaper::set_rate_limit(double limit_mbps) {
     bucket.set_rate(limit_mbps);

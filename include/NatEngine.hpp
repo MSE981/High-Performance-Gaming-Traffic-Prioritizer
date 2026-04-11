@@ -3,24 +3,10 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
-#include <netinet/in.h>
 #include "Headers.hpp"
 #include "Processor.hpp"
 
 namespace Scalpel::Logic {
-    // Incremental checksum update (RFC 1624): HC' = ~(~HC + ~m + m')
-    // Kept inline — called on every forwarded packet (hot path).
-    static inline void update_checksum_16(uint16_t& check, uint16_t old_val, uint16_t new_val) {
-        uint32_t sum = (~ntohs(check) & 0xFFFF) + (~ntohs(old_val) & 0xFFFF) + ntohs(new_val);
-        sum = (sum & 0xFFFF) + (sum >> 16);
-        check = htons(~(sum + (sum >> 16)));
-    }
-
-    static inline void update_checksum_32(uint16_t& check, Net::IPv4Net old_val, Net::IPv4Net new_val) {
-        update_checksum_16(check, old_val.raw() & 0xFFFF, new_val.raw() & 0xFFFF);
-        update_checksum_16(check, old_val.raw() >> 16,    new_val.raw() >> 16);
-    }
-
     // True zero-copy user-space NAT engine
     class NatEngine {
         struct NatSession {

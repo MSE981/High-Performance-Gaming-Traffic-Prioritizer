@@ -1,7 +1,20 @@
 #include "NatEngine.hpp"
 #include <cstring>
+#include <netinet/in.h>
 
 namespace Scalpel::Logic {
+
+// Incremental checksum update (RFC 1624): HC' = ~(~HC + ~m + m')
+static void update_checksum_16(uint16_t& check, uint16_t old_val, uint16_t new_val) {
+    uint32_t sum = (~ntohs(check) & 0xFFFF) + (~ntohs(old_val) & 0xFFFF) + ntohs(new_val);
+    sum = (sum & 0xFFFF) + (sum >> 16);
+    check = htons(~(sum + (sum >> 16)));
+}
+
+static void update_checksum_32(uint16_t& check, Net::IPv4Net old_val, Net::IPv4Net new_val) {
+    update_checksum_16(check, old_val.raw() & 0xFFFF, new_val.raw() & 0xFFFF);
+    update_checksum_16(check, old_val.raw() >> 16,    new_val.raw() >> 16);
+}
 
 uint32_t NatEngine::hash_flow(const FlowKey& k) const {
     uint32_t h = 2166136261U;

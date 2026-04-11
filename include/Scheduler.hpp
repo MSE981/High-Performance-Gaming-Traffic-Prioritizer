@@ -5,8 +5,6 @@
 #include <span>
 #include <cstring>
 #include <algorithm>
-#include <sys/socket.h>
-#include <cerrno>
 #include <thread>
 #include <print>
 #include "Headers.hpp"
@@ -107,13 +105,6 @@ namespace Scalpel::Traffic {
 
     // Low-level hardware send result
     enum class TxResult : size_t { Success = 0, Congested = 1, Fatal = 2 };
-
-    // Hardware send retry abstraction (zero-blocking intercept) — kept inline (hot path)
-    inline TxResult try_hardware_send(int fd, std::span<const uint8_t> pkt) {
-        if (send(fd, pkt.data(), pkt.size(), MSG_DONTWAIT) >= 0) return TxResult::Success;
-        if (errno == ENOBUFS || errno == EAGAIN) return TxResult::Congested;
-        return TxResult::Fatal;
-    }
 
     // Traffic shaper — non-trivial methods defined in Scheduler.cpp
     class Shaper {
