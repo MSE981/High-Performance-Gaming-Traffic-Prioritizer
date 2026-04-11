@@ -86,9 +86,11 @@ int main(int argc, char* argv[]) {
                 if (global_app) global_app->stop();
             });
 
-            // Async self-test: GUI shows with an overlay; when the test finishes the callback
-            // runs on the Qt main thread and calls app.start() once. selftest is destroyed after
-            // qapp.exec() returns, so its worker thread is already joined.
+            // Async self-test: GUI shows with an overlay. When the worker finishes it invokes the
+            // callback on its own thread; the callback queues app.start() onto the Qt main thread.
+            // SelfTest::~SelfTest() joins the worker (see SelfTest.hpp); that runs when `selftest`
+            // goes out of scope at the end of this block, after qapp.exec() and watchdog_notify.join(),
+            // not when exec() first returns. Until then the std::thread may still be joinable even if run() has completed.
             Scalpel::SelfTest::SelfTest selftest;
             selftest.registerCallback([&app](const Scalpel::SelfTest::Report& r) {
                 Scalpel::SelfTest::LAST_REPORT = r;
@@ -111,7 +113,7 @@ int main(int argc, char* argv[]) {
                     Scalpel::GUI::Dashboard::on_selftest_done(r);
                 }, Qt::QueuedConnection);
             });
-            selftest.start(); // worker thread launched; event loop handles callback
+            selftest.start();
 
             // Watchdog thread: when underlying engine receives Ctrl+C (stop set),
             // safely notify Qt to exit GUI. Fixes bug where signal_handler alone couldn't
