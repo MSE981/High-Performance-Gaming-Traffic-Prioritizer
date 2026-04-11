@@ -8,7 +8,8 @@
 
 namespace Scalpel::Probe {
 
-void Manager::run_internal_stress(std::function<void(double)> on_complete) {
+void Manager::run_internal_stress(std::function<void(double)> on_complete,
+                                    std::atomic<bool>* cancel_requested) {
     auto& tel = Telemetry::instance();
     tel.is_probing.store(true, std::memory_order_relaxed);
     std::println("[Probe A] Benchmarking internal logic...");
@@ -21,6 +22,9 @@ void Manager::run_internal_stress(std::function<void(double)> on_complete) {
     uint64_t count = 0;
 
     while (std::chrono::steady_clock::now() - start < std::chrono::seconds(5)) {
+        if (cancel_requested &&
+            cancel_requested->load(std::memory_order_relaxed))
+            break;
         auto pkt_ctx = Net::ParsedPacket::parse(std::span<uint8_t>{dummy_data});
         temp_proc.process(pkt_ctx);
         count++;

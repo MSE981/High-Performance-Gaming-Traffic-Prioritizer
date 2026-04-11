@@ -2,13 +2,17 @@
 #include <span>
 #include <cstdint>
 #include <cstddef>
-#include <netinet/in.h>
 #include <array>
 #include <functional>
 #include "Headers.hpp"
 #include "Config.hpp"
 
 namespace Scalpel::Logic {
+
+    // Big-endian wire uint16 → host (Pi 5 is little-endian). Avoids public <netinet/in.h> in this header.
+    constexpr inline uint16_t net16_to_host(uint16_t be) noexcept {
+        return static_cast<uint16_t>((be << 8) | (be >> 8));
+    }
 
     // 5-tuple flow identifier
     struct FlowKey {
@@ -93,8 +97,8 @@ namespace Scalpel::Logic {
             auto udp = parsed.udp();
             if (!udp) return Net::Priority::Normal;
 
-            uint16_t dport = ntohs(udp->dest);
-            uint16_t sport = ntohs(udp->source);
+            uint16_t dport = net16_to_host(udp->dest);
+            uint16_t sport = net16_to_host(udp->source);
 
             // DNS priority pass
             if (dport == 53 || sport == 53) return Net::Priority::Critical;
@@ -131,8 +135,8 @@ namespace Scalpel::Logic {
             if (parsed.raw_span.size() < 74) return Net::Priority::Critical; // Prioritize small packets (SYN/ACK)
             auto tcp = parsed.tcp();
             if (tcp) {
-                uint16_t dport = ntohs(tcp->dest);
-                uint16_t sport = ntohs(tcp->source);
+                uint16_t dport = net16_to_host(tcp->dest);
+                uint16_t sport = net16_to_host(tcp->source);
                 if (Config::is_game_port(dport) || Config::is_game_port(sport)) return Net::Priority::High;
             }
             return Net::Priority::Normal;

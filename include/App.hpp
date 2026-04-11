@@ -136,6 +136,8 @@ class App {
     std::thread       worker_downstream;
     std::thread       worker_upstream;
     std::thread       watchdog;
+    std::thread       stress_thread_{};
+    std::atomic<bool> stress_cancel_{false};
     std::atomic<bool> running_workers{false};
     std::atomic<bool> running_watchdog{false};
     std::promise<void> shutdown_promise;
@@ -147,7 +149,11 @@ public:
 
     std::expected<void, std::string> init();
     void start();
-    void stop() { shutdown_promise.set_value(); }
+    void stop() {
+        stress_cancel_.store(true, std::memory_order_relaxed);
+        if (stress_thread_.joinable()) stress_thread_.join();
+        shutdown_promise.set_value();
+    }
     void wait_for_shutdown();
 
 private:

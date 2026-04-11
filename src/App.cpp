@@ -246,7 +246,7 @@ public:
 
 App::App() {
     shutdown_future = shutdown_promise.get_future();
-    global_shaper   = std::make_shared<Traffic::Shaper>(100.0);
+    global_shaper   = std::make_shared<Traffic::Shaper>(Traffic::Mbps{100.0});
 
     // Service flags are loaded from config.txt before App is constructed;
     // do not override them here.
@@ -269,6 +269,8 @@ App::App() {
 }
 
 App::~App() {
+    stress_cancel_.store(true, std::memory_order_relaxed);
+    if (stress_thread_.joinable()) stress_thread_.join();
     // Stop data-plane workers (Cores 2/3) before watchdog (Core 1) so
     // the watchdog does not read stale shaper state after workers exit.
     running_workers.store(false, std::memory_order_relaxed);
@@ -300,13 +302,16 @@ void App::start() {
 
     Utils::Network::force_arp_resolution(Utils::Network::get_gateway_ip());
 
-    std::thread([] {
+    stress_cancel_.store(false, std::memory_order_relaxed);
+    stress_thread_ = std::thread([this]() {
         Scalpel::System::Optimizer::set_current_thread_affinity(1);
-        Probe::Manager::run_internal_stress([](double mbps) {
-            Telemetry::instance().internal_limit_mbps.store(
-                mbps, std::memory_order_relaxed);
-        });
-    }).detach();
+        Probe::Manager::run_internal_stress(
+            [](double mbps) {
+                Telemetry::instance().internal_limit_mbps.store(
+                    mbps, std::memory_order_relaxed);
+            },
+            &stress_cancel_);
+    });
 
     int fd_wan = iface_wan->get_fd();
     int fd_lan = iface_lan->get_fd();
