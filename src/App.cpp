@@ -291,7 +291,8 @@ std::expected<void, std::string> App::init() {
 void App::start() {
     std::println("=== Scalpel High-Performance Software Router ===");
     Telemetry::instance().bridge_mode.store(
-        !Config::ENABLE_ACCELERATION, std::memory_order_relaxed);
+        !Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
     Scalpel::System::Optimizer::lock_cpu_frequency();
 
     running_watchdog.store(true, std::memory_order_relaxed);
