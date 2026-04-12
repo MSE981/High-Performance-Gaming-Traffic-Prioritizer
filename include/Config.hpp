@@ -231,6 +231,6 @@ namespace Scalpel::Config {
     }
 
     // Load / save — implementations in Config.cpp (hide POSIX fd I/O from clients)
-    void load_config(const std::string& path = "config.txt");
-    void save_config(const std::string& path = "config.txt");
+    void load_config(const std::string& path = "config/config.txt");
+    void save_config(const std::string& path = "config/config.txt");
 }
