@@ -53,6 +53,14 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    int gui_stop_efd = ::eventfd(0, EFD_CLOEXEC);
+    if (gui_stop_efd < 0) {
+        std::println(stderr, "[Fatal] gui shutdown chain eventfd: {}", std::strerror(errno));
+        ::close(shutdown_signal_efd);
+        shutdown_signal_efd = -1;
+        return 1;
+    }
+
     Scalpel::App app;
     global_app = &app;
 
@@ -63,6 +71,8 @@ int main(int argc, char* argv[]) {
     // 3. Low-level system initialization
     if (auto res = app.init(); !res) {
         std::println(stderr, "[Fatal Error] Initialization failed: {}", res.error());
+        ::close(gui_stop_efd);
+        gui_stop_efd = -1;
         ::close(shutdown_signal_efd);
         shutdown_signal_efd = -1;
         global_app = nullptr;
@@ -75,16 +85,32 @@ int main(int argc, char* argv[]) {
             // Core 0: UI/Graphics — must be set before QApplication construction
             Scalpel::System::Optimizer::set_current_thread_affinity(0);
 
+            std::atomic<bool> gui_shutdown_runner_quit{false};
+            std::thread gui_shutdown_runner([&app, gui_stop_efd, &gui_shutdown_runner_quit]() {
+                Scalpel::System::Optimizer::set_current_thread_affinity(1);
+                for (;;) {
+                    uint64_t v;
+                    int rr = ::eventfd_read(gui_stop_efd, &v);
+                    if (rr < 0) {
+                        if (errno == EINTR) continue;
+                        break;
+                    }
+                    if (gui_shutdown_runner_quit.load(std::memory_order_relaxed)) break;
+                    if (global_app) global_app->stop();
+                }
+            });
+
             QApplication qapp(argc, argv);
             Scalpel::GUI::Dashboard gui;
             gui.showFullScreen();
 
             QSocketNotifier shutdown_sn(shutdown_signal_efd, QSocketNotifier::Read, &qapp);
-            QObject::connect(&shutdown_sn, &QSocketNotifier::activated, &qapp, [](int) {
-                uint64_t v;
-                (void)::eventfd_read(shutdown_signal_efd, &v);
-                if (global_app) global_app->stop();
-            });
+            QObject::connect(&shutdown_sn, &QSocketNotifier::activated, &qapp,
+                [gui_stop_efd](int) {
+                    uint64_t v;
+                    (void)::eventfd_read(shutdown_signal_efd, &v);
+                    (void)::eventfd_write(gui_stop_efd, 1);
+                });
 
             // Async self-test: GUI shows with an overlay. When the worker finishes it invokes the
             // callback on its own thread; the callback queues app.start() onto the Qt main thread.
@@ -126,15 +152,20 @@ int main(int argc, char* argv[]) {
 
             ret = qapp.exec(); // Block on main event loop
 
-            // If user closed the window (no UNIX signal), notify underlying engine to stop
-            if (!signal_received.exchange(true, std::memory_order_acq_rel)) {
-                app.stop();
-            }
+            // If user closed the window (no UNIX signal), request stop on Core 1 runner
+            if (!signal_received.exchange(true, std::memory_order_acq_rel))
+                (void)::eventfd_write(gui_stop_efd, 1);
+
+            gui_shutdown_runner_quit.store(true, std::memory_order_relaxed);
+            (void)::eventfd_write(gui_stop_efd, 1);
+            gui_shutdown_runner.join();
+
             watchdog_notify.join(); // qapp still in scope; thread is done on both exit paths
         } else {
             // Pure CLI mode: dedicated thread reads shutdown eventfd and calls App::stop().
             std::atomic<bool> cli_listener_run{true};
             std::thread cli_shutdown_listener([&cli_listener_run] {
+                Scalpel::System::Optimizer::set_current_thread_affinity(1);
                 while (cli_listener_run.load(std::memory_order_relaxed)) {
                     uint64_t v;
                     int      r = ::eventfd_read(shutdown_signal_efd, &v);
@@ -175,6 +206,10 @@ int main(int argc, char* argv[]) {
         }
     } catch (const std::exception& e) {
         std::println(stderr, "[Fatal Error] Uncaught exception: {}", e.what());
+        if (gui_stop_efd >= 0) {
+            ::close(gui_stop_efd);
+            gui_stop_efd = -1;
+        }
         if (shutdown_signal_efd >= 0) {
             ::close(shutdown_signal_efd);
             shutdown_signal_efd = -1;
@@ -184,6 +219,10 @@ int main(int argc, char* argv[]) {
     }
 
     global_app = nullptr;
+    if (gui_stop_efd >= 0) {
+        ::close(gui_stop_efd);
+        gui_stop_efd = -1;
+    }
     if (shutdown_signal_efd >= 0) {
         ::close(shutdown_signal_efd);
         shutdown_signal_efd = -1;
