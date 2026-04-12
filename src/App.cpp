@@ -16,8 +16,7 @@
 #include <cstdlib>
 #include <print>
 #include <iostream>
-#include <sched.h>
-#include <chrono>
+#include <cerrno>
 
 namespace Scalpel {
 
@@ -267,7 +266,7 @@ App::App() {
     shutdown_future = shutdown_promise.get_future();
     global_shaper   = std::make_shared<Traffic::Shaper>(Traffic::Mbps{100.0});
 
-    // Service flags are loaded from config.txt before App is constructed;
+    // Service flags are loaded from config/config.txt before App is constructed;
     // do not override them here.
     nat_engine      = std::make_shared<Logic::NatEngine>();
     dns_engine      = std::make_shared<Logic::DnsEngine>();
@@ -293,10 +292,58 @@ App::~App() {
     // Stop data-plane workers (Cores 2/3) before watchdog (Core 1) so
     // the watchdog does not read stale shaper state after workers exit.
     running_workers.store(false, std::memory_order_relaxed);
+    wake_proc_threads_for_shutdown();
     if (worker_downstream.joinable()) worker_downstream.join();
     if (worker_upstream.joinable())   worker_upstream.join();
+    close_worker_poll_fds();
     running_watchdog.store(false, std::memory_order_relaxed);
     if (watchdog.joinable()) watchdog.join();
+}
+
+void App::open_worker_poll_fds_for_start() {
+    close_worker_poll_fds();
+    for (auto& w : worker_poll_) {
+        w.frame_efd = ::eventfd(0, EFD_CLOEXEC);
+        w.stop_efd  = ::eventfd(0, EFD_CLOEXEC);
+        if (w.frame_efd < 0 || w.stop_efd < 0) {
+            std::println(stderr, "[App] eventfd for worker poll sync failed: {}",
+                std::strerror(errno));
+            close_worker_poll_fds();
+            return;
+        }
+    }
+}
+
+void App::close_worker_poll_fds() {
+    for (auto& w : worker_poll_) {
+        if (w.frame_efd >= 0) {
+            ::close(w.frame_efd);
+            w.frame_efd = -1;
+        }
+        if (w.stop_efd >= 0) {
+            ::close(w.stop_efd);
+            w.stop_efd = -1;
+        }
+    }
+}
+
+void App::wake_proc_threads_for_shutdown() {
+    for (auto& w : worker_poll_) {
+        if (w.stop_efd >= 0)
+            (void)::eventfd_write(w.stop_efd, 1);
+    }
+}
+
+void App::stop() {
+    if (shutdown_sequence_started_.exchange(true, std::memory_order_acq_rel)) return;
+    stress_cancel_.store(true, std::memory_order_relaxed);
+    if (stress_thread_.joinable()) stress_thread_.join();
+    running_workers.store(false, std::memory_order_relaxed);
+    wake_proc_threads_for_shutdown();
+    if (worker_downstream.joinable()) worker_downstream.join();
+    if (worker_upstream.joinable()) worker_upstream.join();
+    close_worker_poll_fds();
+    shutdown_promise.set_value();
 }
 
 std::expected<void, std::string> App::init() {
@@ -344,11 +391,13 @@ void App::start() {
     shaper_ul = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_ul_mbps});
 
     Net::IPv4Net gw_ip = Config::parse_ip_str(Config::ROUTER_IP);
+    open_worker_poll_fds_for_start();
     running_workers.store(true, std::memory_order_relaxed);
 
     worker_downstream = std::thread(
-        [this](std::unique_ptr<Engine::RawSocketManager> iface, PacketWorkerConfig cfg) {
-            worker_event_loop(std::move(iface), std::move(cfg));
+        [this, ps = &worker_poll_[0]](std::unique_ptr<Engine::RawSocketManager> iface,
+                                       PacketWorkerConfig cfg) {
+            worker_event_loop(std::move(iface), std::move(cfg), *ps);
         },
         std::move(iface_wan),
         PacketWorkerConfig{ fd_lan, 2, shaper_dl, nat_engine, dns_engine,
@@ -356,8 +405,9 @@ void App::start() {
                             firewall_engine, gw_ip });
 
     worker_upstream = std::thread(
-        [this](std::unique_ptr<Engine::RawSocketManager> iface, PacketWorkerConfig cfg) {
-            worker_event_loop(std::move(iface), std::move(cfg));
+        [this, ps = &worker_poll_[1]](std::unique_ptr<Engine::RawSocketManager> iface,
+                                       PacketWorkerConfig cfg) {
+            worker_event_loop(std::move(iface), std::move(cfg), *ps);
         },
         std::move(iface_lan),
         PacketWorkerConfig{ fd_wan, 3, shaper_ul, nat_engine, dns_engine,
@@ -377,7 +427,8 @@ void App::wait_for_shutdown() {
 // SPSC ring. Processing thread: parse and run PacketConsumer::on_packet_event.
 
 void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
-                             PacketWorkerConfig cfg) {
+                             PacketWorkerConfig cfg,
+                             WorkerPollSync& poll_sync) {
     std::println("[App] Core {} pipeline mounted and ready.", cfg.core_id);
 
     const int rx_fd_saved = rx_mgr->get_fd();
@@ -385,7 +436,7 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
     Net::SpscRingBuffer<RxFrameCopy, 1024> frame_q{};
 
     std::thread rx_thread(
-        [this, mgr = std::move(rx_mgr), &frame_q, core = cfg.core_id]() mutable {
+        [this, mgr = std::move(rx_mgr), &frame_q, &poll_sync, core = cfg.core_id]() mutable {
             Scalpel::System::Optimizer::set_current_thread_affinity(core);
             Scalpel::System::Optimizer::set_realtime_priority();
             while (this->running_workers.load(std::memory_order_relaxed)) {
@@ -399,27 +450,28 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
                     copy.len = static_cast<uint16_t>(n);
                     std::memcpy(copy.data.data(), raw.data(), n);
 
-                    while (this->running_workers.load(std::memory_order_relaxed)) {
-                        if (frame_q.push(copy)) break;
-                        sched_yield();
+                    if (frame_q.push(copy)) {
+                        if (poll_sync.frame_efd >= 0)
+                            (void)::eventfd_write(poll_sync.frame_efd, 1);
+                        mgr->finish_rx_frame();
+                    } else {
+                        Telemetry::instance().core_metrics[core].dropped[0].fetch_add(
+                            1, std::memory_order_relaxed);
+                        mgr->finish_rx_frame();
                     }
-                    mgr->finish_rx_frame();
                 }
             }
         });
 
-    std::thread proc_thread([this, &consumer, &frame_q, cfg]() {
+    std::thread proc_thread([this, &consumer, &frame_q, &poll_sync, cfg]() {
         Scalpel::System::Optimizer::set_current_thread_affinity(cfg.core_id);
         Scalpel::System::Optimizer::set_realtime_priority();
         while (this->running_workers.load(std::memory_order_relaxed)) {
             RxFrameCopy copy{};
-            const bool had_frame = frame_q.pop(copy);
-            if (had_frame) {
+            while (frame_q.pop(copy)) {
                 auto pkt = Net::ParsedPacket::parse(
                     std::span<uint8_t>(copy.data.data(), copy.len));
                 consumer.on_packet_event(pkt);
-            } else {
-                std::this_thread::sleep_for(std::chrono::microseconds(20));
             }
 
             if (cfg.global_shaper) cfg.global_shaper->process_queue(cfg.tx_fd);
@@ -435,6 +487,26 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
 
             Telemetry::instance().core_metrics[cfg.core_id].last_heartbeat.fetch_add(
                 1, std::memory_order_relaxed);
+
+            if (poll_sync.frame_efd < 0 || poll_sync.stop_efd < 0) break;
+
+            struct pollfd pfds[2]{};
+            pfds[0] = { poll_sync.frame_efd, POLLIN, 0 };
+            pfds[1] = { poll_sync.stop_efd,  POLLIN, 0 };
+            int pr = ::poll(pfds, 2, 1);
+            if (pr < 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
+            if ((pfds[1].revents & POLLIN) != 0) {
+                uint64_t v;
+                (void)::eventfd_read(poll_sync.stop_efd, &v);
+                break;
+            }
+            if ((pfds[0].revents & POLLIN) != 0) {
+                uint64_t v;
+                (void)::eventfd_read(poll_sync.frame_efd, &v);
+            }
         }
     });
 

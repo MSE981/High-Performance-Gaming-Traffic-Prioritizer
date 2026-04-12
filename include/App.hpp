@@ -144,26 +144,29 @@ class App {
     std::future<void>  shutdown_future;
     std::atomic<bool>   shutdown_sequence_started_{false};
 
+    struct WorkerPollSync {
+        int frame_efd{-1};
+        int stop_efd{-1};
+    };
+    std::array<WorkerPollSync, 2> worker_poll_{};
+
+    void open_worker_poll_fds_for_start();
+    void close_worker_poll_fds();
+    void wake_proc_threads_for_shutdown();
+
 public:
     App();
     ~App();
 
     std::expected<void, std::string> init();
     void start();
-    void stop() {
-        if (shutdown_sequence_started_.exchange(true, std::memory_order_acq_rel)) return;
-        stress_cancel_.store(true, std::memory_order_relaxed);
-        if (stress_thread_.joinable()) stress_thread_.join();
-        running_workers.store(false, std::memory_order_relaxed);
-        if (worker_downstream.joinable()) worker_downstream.join();
-        if (worker_upstream.joinable()) worker_upstream.join();
-        shutdown_promise.set_value();
-    }
+    void stop();
     void wait_for_shutdown();
 
 private:
     void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
-                           PacketWorkerConfig cfg);
+                           PacketWorkerConfig cfg,
+                           WorkerPollSync& poll_sync);
     void watchdog_loop();
 };
 
