@@ -86,6 +86,8 @@ int main(int argc, char* argv[]) {
             Scalpel::System::Optimizer::set_current_thread_affinity(0);
 
             std::atomic<bool> gui_shutdown_runner_quit{false};
+            QApplication qapp(argc, argv);
+
             std::thread gui_shutdown_runner([&app, gui_stop_efd, &gui_shutdown_runner_quit]() {
                 Scalpel::System::Optimizer::set_current_thread_affinity(1);
                 for (;;) {
@@ -100,7 +102,6 @@ int main(int argc, char* argv[]) {
                 }
             });
 
-            QApplication qapp(argc, argv);
             Scalpel::GUI::Dashboard gui;
             gui.showFullScreen();
 
