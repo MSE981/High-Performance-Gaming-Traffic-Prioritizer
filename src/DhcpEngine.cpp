@@ -1,9 +1,11 @@
 #include "DhcpEngine.hpp"
 #include "DataPlane.hpp"
+#include <expected>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <print>
 #include <algorithm>
+#include <string>
 
 namespace Scalpel::Logic {
 
@@ -30,15 +32,23 @@ struct DhcpHeader {
 
 // ── private helpers ──────────────────────────────────────────────────────────
 
-void DhcpEngine::init_pool(Net::IPv4Net start_ip, Net::IPv4Net end_ip) {
+std::expected<void, std::string> DhcpEngine::init_pool(Net::IPv4Net start_ip, Net::IPv4Net end_ip) {
     uint32_t start_h = start_ip.to_host().raw();
     uint32_t end_h   = end_ip.to_host().raw();
-    if (end_h < start_h) end_h = start_h;
-    pool_count = std::min(static_cast<size_t>(end_h - start_h + 1), MAX_POOL_SIZE);
+    if (end_h < start_h)
+        return std::unexpected(std::string("DHCP pool_end is before pool_start"));
+    const uint64_t span =
+        static_cast<uint64_t>(end_h) - static_cast<uint64_t>(start_h) + 1ULL;
+    if (span == 0ULL)
+        return std::unexpected(std::string("DHCP pool range overflow"));
+    pool_count = std::min(static_cast<size_t>(span), MAX_POOL_SIZE);
+    if (pool_count == 0)
+        return std::unexpected(std::string("DHCP pool is empty"));
     for (size_t i = 0; i < pool_count; ++i) {
         leases[i].ip     = Net::pool_advance(start_ip, static_cast<uint32_t>(i));
         leases[i].active = false;
     }
+    return {};
 }
 
 Net::IPv4Net DhcpEngine::find_or_assign_lease(const uint8_t* mac) {
@@ -199,12 +209,13 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
 DhcpEngine::DhcpEngine(const std::string& lan_ip, DhcpPoolConfig cfg) {
     router_ip      = Net::parse_ipv4(lan_ip.c_str());
     lease_duration = cfg.lease;
-    init_pool(cfg.pool_start, cfg.pool_end);
+    if (auto r = init_pool(cfg.pool_start, cfg.pool_end); !r)
+        std::println(stderr, "[DHCP] init_pool: {}", r.error());
 }
 
-void DhcpEngine::reconfigure(DhcpPoolConfig cfg) {
+std::expected<void, std::string> DhcpEngine::reconfigure(DhcpPoolConfig cfg) {
     lease_duration = cfg.lease;
-    init_pool(cfg.pool_start, cfg.pool_end);
+    return init_pool(cfg.pool_start, cfg.pool_end);
 }
 
 void DhcpEngine::intercept_request(const Net::ParsedPacket& pkt) {

@@ -123,10 +123,14 @@ int main() {
     }
 
     // ── 6. Reconfigure pool and verify engine accepts the new config ──────────
-    engine.reconfigure(Scalpel::Logic::DhcpPoolConfig{
-        Net::parse_ipv4("10.0.0.100"),
-        Net::parse_ipv4("10.0.0.200"),
-        std::chrono::seconds{7200}});
+    if (auto rr = engine.reconfigure(Scalpel::Logic::DhcpPoolConfig{
+            Net::parse_ipv4("10.0.0.100"),
+            Net::parse_ipv4("10.0.0.200"),
+            std::chrono::seconds{7200}});
+        !rr) {
+        std::println(stderr, "[FAIL] reconfigure: {}", rr.error());
+        return 1;
+    }
     std::println("[PASS] reconfigure() accepted new pool without crash.");
 
     std::println("=== Done ===");

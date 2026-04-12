@@ -773,13 +773,17 @@ void App::watchdog_loop() {
 
         // DHCP config sync
         if (dhcp_engine && tel.dhcp_config_dirty.exchange(false, std::memory_order_acq_rel)) {
-            dhcp_engine->reconfigure({
-                Config::parse_ip_str(Config::DHCP_POOL_START),
-                Config::parse_ip_str(Config::DHCP_POOL_END),
-                Config::DHCP_LEASE_DURATION});
-            std::println("[DHCP] Pool reconfigured: {} – {}, lease {}s",
-                Config::DHCP_POOL_START, Config::DHCP_POOL_END,
-                Config::DHCP_LEASE_DURATION.count());
+            if (auto dr = dhcp_engine->reconfigure({
+                    Config::parse_ip_str(Config::DHCP_POOL_START),
+                    Config::parse_ip_str(Config::DHCP_POOL_END),
+                    Config::DHCP_LEASE_DURATION});
+                !dr) {
+                std::println(stderr, "[DHCP] reconfigure failed: {}", dr.error());
+            } else {
+                std::println("[DHCP] Pool reconfigured: {} – {}, lease {}s",
+                    Config::DHCP_POOL_START, Config::DHCP_POOL_END,
+                    Config::DHCP_LEASE_DURATION.count());
+            }
         }
 
         // 1 Hz engine ticks
