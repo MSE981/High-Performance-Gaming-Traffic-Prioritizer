@@ -81,7 +81,7 @@ int main(int argc, char* argv[]) {
 
     int ret = 0;
     try {
-        if (Scalpel::Config::global_state.enable_gui) {
+        if (Scalpel::Config::global_state.enable_gui.load(std::memory_order_relaxed)) {
             // Core 0: UI/Graphics — must be set before QApplication construction
             Scalpel::System::Optimizer::set_current_thread_affinity(0);
 
