@@ -18,20 +18,17 @@ namespace Scalpel::Logic {
 
 UpnpEngine::UpnpEngine(std::shared_ptr<NatEngine> nat, const std::string& ip)
     : nat_engine(nat), router_ip_str(ip) {
-    soap_job_notify_efd = -1;
-    for (int attempt = 0; attempt < 3; ++attempt) {
-        soap_job_notify_efd = ::eventfd(0, EFD_CLOEXEC);
-        if (soap_job_notify_efd >= 0) break;
-    }
-    if (soap_job_notify_efd < 0)
+    soap_job_notify_efd = ::eventfd(0, EFD_CLOEXEC);
+    if (soap_job_notify_efd < 0) {
         std::println(stderr,
-            "[UPnP] soap job eventfd failed after retries ({}); SOAP runs on accept thread only.",
+            "[UPnP] soap job eventfd failed ({}); UPnP disabled.",
             std::strerror(errno));
+        return;
+    }
     running.store(true, std::memory_order_relaxed);
-    ssdp_thread = std::thread([this]() { run_ssdp_server(); });
-    if (soap_job_notify_efd >= 0)
-        soap_worker_thread = std::thread([this]() { run_soap_worker(); });
-    soap_thread = std::thread([this]() { run_soap_server(); });
+    ssdp_thread        = std::thread([this]() { run_ssdp_server(); });
+    soap_worker_thread = std::thread([this]() { run_soap_worker(); });
+    soap_thread        = std::thread([this]() { run_soap_server(); });
     std::println("[UPnP Engine] Startup complete. Listening for LAN SSDP broadcasts.");
 }
 
@@ -254,11 +251,6 @@ void UpnpEngine::run_soap_server() {
         int n = recv(cfd, buf, sizeof(buf) - 1, 0);
         if (n <= 0) {
             ::close(cfd);
-            continue;
-        }
-
-        if (soap_job_notify_efd < 0) {
-            dispatch_soap_http(cfd, std::string_view(buf, static_cast<size_t>(n)));
             continue;
         }
 
