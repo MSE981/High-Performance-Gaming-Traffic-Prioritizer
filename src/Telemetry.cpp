@@ -1,14 +1,24 @@
 #include "Telemetry.hpp"
 #include <sys/eventfd.h>
-#include <cstdio>
+#include <unistd.h>
+#include <cerrno>
+#include <cstring>
+#include <string>
 
 namespace Scalpel {
 
-void Telemetry::SystemInfo::init_event_fds() {
+std::expected<void, std::string> Telemetry::SystemInfo::init_event_fds() {
     rescan_fd_ = ::eventfd(0, EFD_CLOEXEC);
-    done_fd_   = ::eventfd(0, EFD_CLOEXEC);
-    if (rescan_fd_ < 0 || done_fd_ < 0)
-        std::fprintf(stderr, "[Warn] eventfd creation failed — iface refresh button disabled\n");
+    if (rescan_fd_ < 0)
+        return std::unexpected(std::string("eventfd (rescan): ") + std::strerror(errno));
+    done_fd_ = ::eventfd(0, EFD_CLOEXEC);
+    if (done_fd_ < 0) {
+        const int e = errno;
+        ::close(rescan_fd_);
+        rescan_fd_ = -1;
+        return std::unexpected(std::string("eventfd (done): ") + std::strerror(e));
+    }
+    return {};
 }
 
 void Telemetry::SystemInfo::request_rescan() {

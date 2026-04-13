@@ -3,7 +3,9 @@
 # start.sh — Scalpel Gaming Traffic Prioritizer
 # One-shot setup and launch for Raspberry Pi 5 + DSI 800×1280 portrait display
 #
-# Usage:  sudo ./start.sh
+# Usage:  chmod +x start.sh && sudo ./start.sh
+#         Optional: use a user-owned build tree (e.g. after fixing root-owned build/):
+#           sudo env HPGTP_BUILD_DIR=build-user ./start.sh
 # =============================================================================
 set -euo pipefail
 
@@ -15,6 +17,10 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"   # binary loads config/config.txt relative to CWD
+
+# Build output directory (default: build). Override if build/ is root-owned or you use a side dir:
+#   sudo env HPGTP_BUILD_DIR=build-user ./start.sh
+BUILD_DIR="${HPGTP_BUILD_DIR:-build}"
 
 # Notification log — read by GUI on startup (format: TITLE|BODY)
 NOTIFY_LOG="/tmp/hpgtp_startup.log"
@@ -84,25 +90,26 @@ notify "[1/4] Dependencies" "eglfs: $(basename "$EGLFS_SO") | All packages OK"
 echo ""
 echo "[2/4] Build check..."
 
-BINARY="$SCRIPT_DIR/build/GamingTrafficPrioritizer"
+BINARY="$SCRIPT_DIR/$BUILD_DIR/GamingTrafficPrioritizer"
 
 # Trigger rebuild if binary is absent or any source/header is newer than it
 NEEDS_BUILD=false
 if [[ ! -x "$BINARY" ]]; then
     NEEDS_BUILD=true
-elif [[ -n "$(find "$SCRIPT_DIR/src" "$SCRIPT_DIR/include" -name "*.cpp" -o -name "*.hpp" \
+elif [[ -n "$(find "$SCRIPT_DIR/src" "$SCRIPT_DIR/include" "$SCRIPT_DIR/demo" \
+             \( -name "*.cpp" -o -name "*.hpp" -o -name "*.c" \) \
              -newer "$BINARY" 2>/dev/null | head -1)" ]]; then
     echo "    Source modified — rebuilding."
     NEEDS_BUILD=true
 fi
 
 if $NEEDS_BUILD; then
-    mkdir -p "$SCRIPT_DIR/build"
-    cmake -S "$SCRIPT_DIR" -B "$SCRIPT_DIR/build" \
+    mkdir -p "$SCRIPT_DIR/$BUILD_DIR"
+    cmake -S "$SCRIPT_DIR" -B "$SCRIPT_DIR/$BUILD_DIR" \
           -DCMAKE_BUILD_TYPE=Release \
           -Wno-dev \
           --log-level=WARNING
-    cmake --build "$SCRIPT_DIR/build" -j"$(nproc)"
+    cmake --build "$SCRIPT_DIR/$BUILD_DIR" -j"$(nproc)"
     echo "    Build : OK  ($BINARY)"
     notify "[2/4] Build" "Rebuilt OK | $(basename "$BINARY")"
 else

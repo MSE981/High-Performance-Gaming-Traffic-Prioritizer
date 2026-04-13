@@ -92,12 +92,12 @@ struct QoSConfig {
         buffers[inactive] = {};
         for (size_t i = 0; i < count; ++i)
             buffers[inactive].insert(
-                table[i].ip, std::make_shared<Traffic::Shaper>(table[i].rate_mbps));
+                table[i].ip, std::make_shared<Traffic::Shaper>(table[i].rate));
         active_idx.store(inactive, std::memory_order_release);
     }
 };
 
-// Configuration bundle passed to each packet worker thread (§2.2.3).
+// Per-thread routing and engine handles passed into each packet worker.
 struct PacketWorkerConfig {
     int tx_fd;
     int core_id;
@@ -136,10 +136,23 @@ class App {
     std::thread       worker_downstream;
     std::thread       worker_upstream;
     std::thread       watchdog;
+    std::thread       stress_thread_{};
+    std::atomic<bool> stress_cancel_{false};
     std::atomic<bool> running_workers{false};
     std::atomic<bool> running_watchdog{false};
     std::promise<void> shutdown_promise;
     std::future<void>  shutdown_future;
+    std::atomic<bool>   shutdown_sequence_started_{false};
+
+    struct WorkerPollSync {
+        int frame_efd{-1};
+        int stop_efd{-1};
+    };
+    std::array<WorkerPollSync, 2> worker_poll_{};
+
+    void open_worker_poll_fds_for_start();
+    void close_worker_poll_fds();
+    void wake_proc_threads_for_shutdown();
 
 public:
     App();
@@ -147,12 +160,13 @@ public:
 
     std::expected<void, std::string> init();
     void start();
-    void stop() { shutdown_promise.set_value(); }
+    void stop();
     void wait_for_shutdown();
 
 private:
     void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
-                           PacketWorkerConfig cfg);
+                           PacketWorkerConfig cfg,
+                           WorkerPollSync& poll_sync);
     void watchdog_loop();
 };
 

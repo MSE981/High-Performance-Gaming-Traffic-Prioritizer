@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <array>
 #include <cstring>
+#include <expected>
+#include <string>
 #include "NetworkTypes.hpp"
 
 namespace Scalpel {
@@ -33,6 +35,11 @@ namespace Scalpel {
         std::atomic<int> qos_throttle_pct{ 85 };     // 0–100, written by GUI slider (Core 0), applied by Core 1 watchdog
         std::atomic<bool> dhcp_config_dirty{ false }; // set by GUI (Core 0), consumed by Core 1 watchdog
         std::atomic<bool> dns_config_dirty{ false };  // set by GUI (Core 0), consumed by Core 1 watchdog
+
+        // Traffic shaper: data plane fetch_add only; watchdog prints 1 Hz deltas.
+        std::atomic<uint64_t> shaper_normal_tx_complete{0};
+        std::atomic<uint64_t> shaper_queue_overflow_drops{0};
+        std::atomic<uint64_t> shaper_oversized_drops{0};
 
         // Device table: scanned from /proc/net/arp by Core 1 watchdog every 5s.
         // Plain char arrays — torn reads acceptable for display-only data.
@@ -65,7 +72,7 @@ namespace Scalpel {
 
             // On-demand rescan signalling via eventfd pair.
             // Initialised once before any thread starts; thereafter accessed only through methods.
-            void init_event_fds();           // creates both fds (call from main before threads)
+            std::expected<void, std::string> init_event_fds();
 
             // UI (Core 0) interface — no raw fd values exposed
             void request_rescan();           // signal watchdog to re-scan immediately

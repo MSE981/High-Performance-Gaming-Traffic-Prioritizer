@@ -1,4 +1,5 @@
 #include "App.hpp"
+#include "DataPlane.hpp"
 // POSIX C headers — visible only in this translation unit, hidden from all
 // clients that include App.hpp.
 #include <sys/socket.h>
@@ -13,13 +14,15 @@
 #include <ctime>
 #include <cstdio>
 #include <cstdlib>
-#include <functional>
 #include <print>
 #include <iostream>
+#include <cerrno>
 
 namespace Scalpel {
 
 namespace {
+
+// RX thread uses poll(2) on the raw socket plus stop_efd (-1 timeout). Egress uses DataPlane::TxFrameOutput.
 
 // ─── Packet routing context (internal to data plane) ─────────────────────────
 struct RouteContext {
@@ -32,9 +35,7 @@ using RouteFunc = void (*)(const RouteContext&, std::span<uint8_t>, size_t, int)
 
 void fast_path_handler(const RouteContext& ctx, std::span<uint8_t> pkt,
                         size_t prio_idx, int core_id) {
-    if (send(ctx.tx_fd, pkt.data(), pkt.size(), MSG_DONTWAIT) < 0)
-        Telemetry::instance().core_metrics[core_id].dropped[prio_idx]
-            .fetch_add(1, std::memory_order_relaxed);
+    DataPlane::TxFrameOutput::send_best_effort(ctx.tx_fd, pkt, core_id, prio_idx);
 }
 
 void shaper_handler(const RouteContext& ctx, std::span<uint8_t> pkt,
@@ -64,8 +65,13 @@ public:
 
     std::array<std::array<RouteFunc, 3>, 2> routes;
 
-    using PipelineStep = std::function<bool(PacketConsumer&, Net::ParsedPacket&)>;
-    std::array<PipelineStep, 10> pipeline;
+    using PipelineStep = bool (*)(PacketConsumer&, Net::ParsedPacket&);
+
+    // Ordered pipeline stages; each step returns true if it handled the packet.
+    struct PacketPipeline {
+        std::array<PipelineStep, 10> steps{};
+    };
+    PacketPipeline pipeline;
 
     PacketConsumer(int rx_fd_, const PacketWorkerConfig& cfg)
         : rx_fd(rx_fd_), tx_fd(cfg.tx_fd), core_id(cfg.core_id),
@@ -80,20 +86,25 @@ public:
             { fast_path_handler, fast_path_handler, fast_path_handler } // bridge
         }};
 
-        // Pipeline assembled at construction — eliminates all runtime if-else branching.
+        // Pipeline steps are fixed at construction (no per-packet branch to select a path).
         if (core_id == 2) {
             // Core 2 WAN→LAN: DNAT first, then device block on real LAN IP
-            pipeline = { step_dhcp_interceptor, step_dns_interceptor,
-                         step_firewall_inbound, step_nat_downstream,
-                         step_block_device_downstream, step_device_shaper_downstream,
-                         step_ip_shaper_downstream, step_qos_routing };
+            pipeline.steps = {{
+                step_dhcp_interceptor, step_dns_interceptor,
+                step_firewall_inbound, step_nat_downstream,
+                step_block_device_downstream, step_device_shaper_downstream,
+                step_ip_shaper_downstream, step_qos_routing,
+                nullptr, nullptr
+            }};
         } else {
             // Core 3 LAN→WAN: block and SNAT before sending upstream
-            pipeline = { step_dhcp_interceptor, step_dns_interceptor,
-                         step_local_delivery_blocker, step_block_device_upstream,
-                         step_firewall_track_outbound, step_nat_downstream,
-                         step_nat_upstream, step_device_shaper_upstream,
-                         step_ip_shaper_upstream, step_qos_routing };
+            pipeline.steps = {{
+                step_dhcp_interceptor, step_dns_interceptor,
+                step_local_delivery_blocker, step_block_device_upstream,
+                step_firewall_track_outbound, step_nat_downstream,
+                step_nat_upstream, step_device_shaper_upstream,
+                step_ip_shaper_upstream, step_qos_routing
+            }};
         }
     }
 
@@ -230,7 +241,7 @@ public:
 
     // ── Packet entry point ────────────────────────────────────────────────────
     void on_packet_event(Net::ParsedPacket& pkt) {
-        for (auto& step : pipeline)
+        for (auto* step : pipeline.steps)
             if (step && step(*this, pkt)) break;
         // Batch-commit telemetry every 32 packets (& 31 avoids division)
         if ((stats.pkts & 31) == 0) {
@@ -240,19 +251,31 @@ public:
     }
 };
 
+// Fixed-size copy of one Ethernet frame for transfer from the RX thread to the
+// packet processing thread (single producer, single consumer ring).
+struct RxFrameCopy {
+    std::array<uint8_t, 2048> data{};
+    uint16_t                len = 0;
+};
+
 } // anonymous namespace
 
 // ─── App method definitions ───────────────────────────────────────────────────
 
 App::App() {
     shutdown_future = shutdown_promise.get_future();
-    global_shaper   = std::make_shared<Traffic::Shaper>(100.0);
+    global_shaper   = std::make_shared<Traffic::Shaper>(Traffic::Mbps{100.0});
 
-    // Service flags are loaded from config.txt before App is constructed;
+    // Service flags are loaded from config/config.txt before App is constructed;
     // do not override them here.
     nat_engine      = std::make_shared<Logic::NatEngine>();
     dns_engine      = std::make_shared<Logic::DnsEngine>();
-    dhcp_engine     = std::make_shared<Logic::DhcpEngine>(Config::ROUTER_IP);
+    dhcp_engine     = std::make_shared<Logic::DhcpEngine>(
+        Config::ROUTER_IP,
+        Logic::DhcpPoolConfig{
+            Net::parse_ipv4(Config::DHCP_POOL_START.c_str()),
+            Net::parse_ipv4(Config::DHCP_POOL_END.c_str()),
+            Config::DHCP_LEASE_DURATION});
     firewall_engine = std::make_shared<Logic::FirewallEngine>();
     if (Config::global_state.enable_upnp.load(std::memory_order_relaxed))
         upnp_engine = std::make_shared<Logic::UpnpEngine>(nat_engine, Config::ROUTER_IP);
@@ -264,13 +287,63 @@ App::App() {
 }
 
 App::~App() {
+    stress_cancel_.store(true, std::memory_order_relaxed);
+    if (stress_thread_.joinable()) stress_thread_.join();
     // Stop data-plane workers (Cores 2/3) before watchdog (Core 1) so
     // the watchdog does not read stale shaper state after workers exit.
     running_workers.store(false, std::memory_order_relaxed);
+    wake_proc_threads_for_shutdown();
     if (worker_downstream.joinable()) worker_downstream.join();
     if (worker_upstream.joinable())   worker_upstream.join();
+    close_worker_poll_fds();
     running_watchdog.store(false, std::memory_order_relaxed);
     if (watchdog.joinable()) watchdog.join();
+}
+
+void App::open_worker_poll_fds_for_start() {
+    close_worker_poll_fds();
+    for (auto& w : worker_poll_) {
+        w.frame_efd = ::eventfd(0, EFD_CLOEXEC);
+        w.stop_efd  = ::eventfd(0, EFD_CLOEXEC);
+        if (w.frame_efd < 0 || w.stop_efd < 0) {
+            std::println(stderr, "[App] eventfd for worker poll sync failed: {}",
+                std::strerror(errno));
+            close_worker_poll_fds();
+            return;
+        }
+    }
+}
+
+void App::close_worker_poll_fds() {
+    for (auto& w : worker_poll_) {
+        if (w.frame_efd >= 0) {
+            ::close(w.frame_efd);
+            w.frame_efd = -1;
+        }
+        if (w.stop_efd >= 0) {
+            ::close(w.stop_efd);
+            w.stop_efd = -1;
+        }
+    }
+}
+
+void App::wake_proc_threads_for_shutdown() {
+    for (auto& w : worker_poll_) {
+        if (w.stop_efd >= 0)
+            (void)::eventfd_write(w.stop_efd, 1);
+    }
+}
+
+void App::stop() {
+    if (shutdown_sequence_started_.exchange(true, std::memory_order_acq_rel)) return;
+    stress_cancel_.store(true, std::memory_order_relaxed);
+    if (stress_thread_.joinable()) stress_thread_.join();
+    running_workers.store(false, std::memory_order_relaxed);
+    wake_proc_threads_for_shutdown();
+    if (worker_downstream.joinable()) worker_downstream.join();
+    if (worker_upstream.joinable()) worker_upstream.join();
+    close_worker_poll_fds();
+    shutdown_promise.set_value();
 }
 
 std::expected<void, std::string> App::init() {
@@ -286,7 +359,8 @@ std::expected<void, std::string> App::init() {
 void App::start() {
     std::println("=== Scalpel High-Performance Software Router ===");
     Telemetry::instance().bridge_mode.store(
-        !Config::ENABLE_ACCELERATION, std::memory_order_relaxed);
+        !Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
     Scalpel::System::Optimizer::lock_cpu_frequency();
 
     running_watchdog.store(true, std::memory_order_relaxed);
@@ -294,12 +368,16 @@ void App::start() {
 
     Utils::Network::force_arp_resolution(Utils::Network::get_gateway_ip());
 
-    std::thread([] {
-        Probe::Manager::run_internal_stress([](double mbps) {
-            Telemetry::instance().internal_limit_mbps.store(
-                mbps, std::memory_order_relaxed);
-        });
-    }).detach();
+    stress_cancel_.store(false, std::memory_order_relaxed);
+    stress_thread_ = std::thread([this]() {
+        Scalpel::System::Optimizer::set_current_thread_affinity(1);
+        Probe::Manager::run_internal_stress(
+            [](double mbps) {
+                Telemetry::instance().internal_limit_mbps.store(
+                    mbps, std::memory_order_relaxed);
+            },
+            &stress_cancel_);
+    });
 
     int fd_wan = iface_wan->get_fd();
     int fd_lan = iface_lan->get_fd();
@@ -309,15 +387,17 @@ void App::start() {
     constexpr double ul = 50.0;
     base_dl_mbps = dl;
     base_ul_mbps = ul;
-    shaper_dl = std::make_shared<Traffic::Shaper>(base_dl_mbps);
-    shaper_ul = std::make_shared<Traffic::Shaper>(base_ul_mbps);
+    shaper_dl = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_dl_mbps});
+    shaper_ul = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_ul_mbps});
 
     Net::IPv4Net gw_ip = Config::parse_ip_str(Config::ROUTER_IP);
+    open_worker_poll_fds_for_start();
     running_workers.store(true, std::memory_order_relaxed);
 
     worker_downstream = std::thread(
-        [this](std::unique_ptr<Engine::RawSocketManager> iface, PacketWorkerConfig cfg) {
-            worker_event_loop(std::move(iface), std::move(cfg));
+        [this, ps = &worker_poll_[0]](std::unique_ptr<Engine::RawSocketManager> iface,
+                                       PacketWorkerConfig cfg) {
+            worker_event_loop(std::move(iface), std::move(cfg), *ps);
         },
         std::move(iface_wan),
         PacketWorkerConfig{ fd_lan, 2, shaper_dl, nat_engine, dns_engine,
@@ -325,8 +405,9 @@ void App::start() {
                             firewall_engine, gw_ip });
 
     worker_upstream = std::thread(
-        [this](std::unique_ptr<Engine::RawSocketManager> iface, PacketWorkerConfig cfg) {
-            worker_event_loop(std::move(iface), std::move(cfg));
+        [this, ps = &worker_poll_[1]](std::unique_ptr<Engine::RawSocketManager> iface,
+                                       PacketWorkerConfig cfg) {
+            worker_event_loop(std::move(iface), std::move(cfg), *ps);
         },
         std::move(iface_lan),
         PacketWorkerConfig{ fd_wan, 3, shaper_ul, nat_engine, dns_engine,
@@ -342,35 +423,111 @@ void App::wait_for_shutdown() {
 }
 
 // ─── Worker event loop (Core 2 / Core 3) ─────────────────────────────────────
+// RX thread: blocking poll(2) on AF_PACKET and stop_efd; copy each frame into an
+// SPSC ring. Processing thread: parse and run PacketConsumer::on_packet_event;
+// waits on frame_efd/stop_efd with no periodic timeout.
 
 void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
-                             PacketWorkerConfig cfg) {
-    Scalpel::System::Optimizer::set_current_thread_affinity(cfg.core_id);
-    Scalpel::System::Optimizer::set_realtime_priority();
+                             PacketWorkerConfig cfg,
+                             WorkerPollSync& poll_sync) {
     std::println("[App] Core {} pipeline mounted and ready.", cfg.core_id);
 
-    int rx_fd = rx_mgr->get_fd();
-    PacketConsumer consumer(rx_fd, cfg);
+    const int rx_fd_saved = rx_mgr->get_fd();
+    PacketConsumer consumer(rx_fd_saved, cfg);
+    Net::SpscRingBuffer<RxFrameCopy, 1024> frame_q{};
 
-    while (running_workers.load(std::memory_order_relaxed)) {
-        rx_mgr->poll_and_dispatch([&consumer](std::span<uint8_t> raw_span) {
-            auto pkt = Net::ParsedPacket::parse(raw_span);
-            consumer.on_packet_event(pkt);
-        }, 1);
+    std::thread rx_thread(
+        [this, mgr = std::move(rx_mgr), &frame_q, &poll_sync, core = cfg.core_id]() mutable {
+            Scalpel::System::Optimizer::set_current_thread_affinity(core);
+            Scalpel::System::Optimizer::set_realtime_priority();
+            const int sock_fd = mgr->get_fd();
+            while (this->running_workers.load(std::memory_order_relaxed)) {
+                struct pollfd pfds_rx[2]{};
+                pfds_rx[0] = { sock_fd, POLLIN, 0 };
+                pfds_rx[1] = { poll_sync.stop_efd, POLLIN, 0 };
+                int prx = ::poll(pfds_rx, 2, -1);
+                if (prx < 0) {
+                    if (errno == EINTR) continue;
+                    break;
+                }
+                if ((pfds_rx[1].revents & POLLIN) != 0) {
+                    uint64_t v;
+                    (void)::eventfd_read(poll_sync.stop_efd, &v);
+                    break;
+                }
+                if ((pfds_rx[0].revents & POLLIN) == 0) continue;
 
-        if (cfg.global_shaper) cfg.global_shaper->process_queue(cfg.tx_fd);
+                std::span<uint8_t> raw;
+                while (this->running_workers.load(std::memory_order_relaxed)
+                       && mgr->peek_rx_frame(raw)) {
+                    RxFrameCopy copy{};
+                    const size_t n =
+                        raw.size() < copy.data.size() ? raw.size() : copy.data.size();
+                    copy.len = static_cast<uint16_t>(n);
+                    std::memcpy(copy.data.data(), raw.data(), n);
 
-        if (consumer.qos_config &&
-            Config::IP_LIMIT_ACTIVE.load(std::memory_order_relaxed)) {
-            size_t ai = consumer.qos_config->active_idx.load(std::memory_order_relaxed);
-            consumer.qos_config->buffers[ai].for_each_occupied([&](auto& shaper) {
-                shaper->process_queue(cfg.tx_fd);
-            });
+                    if (frame_q.push(copy)) {
+                        if (poll_sync.frame_efd >= 0)
+                            (void)::eventfd_write(poll_sync.frame_efd, 1);
+                        mgr->finish_rx_frame();
+                    } else {
+                        Telemetry::instance().core_metrics[core].dropped[0].fetch_add(
+                            1, std::memory_order_relaxed);
+                        mgr->finish_rx_frame();
+                    }
+                }
+            }
+        });
+
+    std::thread proc_thread([this, &consumer, &frame_q, &poll_sync, cfg]() {
+        Scalpel::System::Optimizer::set_current_thread_affinity(cfg.core_id);
+        Scalpel::System::Optimizer::set_realtime_priority();
+        while (this->running_workers.load(std::memory_order_relaxed)) {
+            RxFrameCopy copy{};
+            while (frame_q.pop(copy)) {
+                auto pkt = Net::ParsedPacket::parse(
+                    std::span<uint8_t>(copy.data.data(), copy.len));
+                consumer.on_packet_event(pkt);
+            }
+
+            if (cfg.global_shaper) cfg.global_shaper->process_queue(cfg.tx_fd);
+
+            if (consumer.qos_config
+                && Config::IP_LIMIT_ACTIVE.load(std::memory_order_relaxed)) {
+                size_t ai =
+                    consumer.qos_config->active_idx.load(std::memory_order_relaxed);
+                consumer.qos_config->buffers[ai].for_each_occupied([&](auto& shaper) {
+                    shaper->process_queue(cfg.tx_fd);
+                });
+            }
+
+            Telemetry::instance().core_metrics[cfg.core_id].last_heartbeat.fetch_add(
+                1, std::memory_order_relaxed);
+
+            if (poll_sync.frame_efd < 0 || poll_sync.stop_efd < 0) break;
+
+            struct pollfd pfds[2]{};
+            pfds[0] = { poll_sync.frame_efd, POLLIN, 0 };
+            pfds[1] = { poll_sync.stop_efd,  POLLIN, 0 };
+            int pr = ::poll(pfds, 2, -1);
+            if (pr < 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
+            if ((pfds[1].revents & POLLIN) != 0) {
+                uint64_t v;
+                (void)::eventfd_read(poll_sync.stop_efd, &v);
+                break;
+            }
+            if ((pfds[0].revents & POLLIN) != 0) {
+                uint64_t v;
+                (void)::eventfd_read(poll_sync.frame_efd, &v);
+            }
         }
+    });
 
-        Telemetry::instance().core_metrics[cfg.core_id].last_heartbeat
-            .fetch_add(1, std::memory_order_relaxed);
-    }
+    proc_thread.join();
+    rx_thread.join();
 }
 
 // ─── Watchdog loop (Core 1, 1 Hz timerfd) ────────────────────────────────────
@@ -514,6 +671,25 @@ void App::watchdog_loop() {
             }
         }
 
+        // Shaper stats: hot path only increments atomics; log here at 1 Hz.
+        {
+            static uint64_t prev_ok = 0, prev_ovf = 0, prev_big = 0;
+            uint64_t ok   = tel.shaper_normal_tx_complete.load(std::memory_order_relaxed);
+            uint64_t ovf  = tel.shaper_queue_overflow_drops.load(std::memory_order_relaxed);
+            uint64_t big  = tel.shaper_oversized_drops.load(std::memory_order_relaxed);
+            uint64_t dok  = ok - prev_ok;
+            uint64_t dovf = ovf - prev_ovf;
+            uint64_t dbig = big - prev_big;
+            if (dok != 0 || dovf != 0 || dbig != 0) {
+                std::println(
+                    "[Shaper] last 1s: normal_tx_ok +{}, queue_overflow_drops +{}, oversized_drops +{}",
+                    dok, dovf, dbig);
+            }
+            prev_ok  = ok;
+            prev_ovf = ovf;
+            prev_big = big;
+        }
+
         // System info refresh every 5 ticks (5 s)
         bool did_iface_scan = false;
         ++watchdog_tick;
@@ -607,7 +783,7 @@ void App::watchdog_loop() {
                     if (p.rate_limited && p.ip.raw() != 0)
                         cfg_ptr->buffers[inactive].insert(
                             p.ip, std::make_shared<Traffic::Shaper>(
-                                use_dl ? p.dl_mbps : p.ul_mbps));
+                                use_dl ? p.dl : p.ul));
                 }
                 cfg_ptr->active_idx.store(inactive, std::memory_order_release);
             };
@@ -618,9 +794,9 @@ void App::watchdog_loop() {
 
         // DNS config sync
         if (dns_engine && tel.dns_config_dirty.exchange(false, std::memory_order_acq_rel)) {
-            Net::IPv4Net pri = Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY);
-            Net::IPv4Net sec = Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY);
-            dns_engine->set_upstream(pri, sec);
+            dns_engine->set_upstream({
+                Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY),
+                Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY)});
             dns_engine->set_redirect(
                 Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
             dns_engine->reload_static_records();
@@ -632,12 +808,17 @@ void App::watchdog_loop() {
 
         // DHCP config sync
         if (dhcp_engine && tel.dhcp_config_dirty.exchange(false, std::memory_order_acq_rel)) {
-            Net::IPv4Net start = Config::parse_ip_str(Config::DHCP_POOL_START);
-            Net::IPv4Net end   = Config::parse_ip_str(Config::DHCP_POOL_END);
-            dhcp_engine->reconfigure(start, end, Config::DHCP_LEASE_SECONDS);
-            std::println("[DHCP] Pool reconfigured: {} – {}, lease {}s",
-                Config::DHCP_POOL_START, Config::DHCP_POOL_END,
-                Config::DHCP_LEASE_SECONDS);
+            if (auto dr = dhcp_engine->reconfigure({
+                    Config::parse_ip_str(Config::DHCP_POOL_START),
+                    Config::parse_ip_str(Config::DHCP_POOL_END),
+                    Config::DHCP_LEASE_DURATION});
+                !dr) {
+                std::println(stderr, "[DHCP] reconfigure failed: {}", dr.error());
+            } else {
+                std::println("[DHCP] Pool reconfigured: {} – {}, lease {}s",
+                    Config::DHCP_POOL_START, Config::DHCP_POOL_END,
+                    Config::DHCP_LEASE_DURATION.count());
+            }
         }
 
         // 1 Hz engine ticks
@@ -652,8 +833,8 @@ void App::watchdog_loop() {
             if (pct != last_throttle_pct) {
                 last_throttle_pct = pct;
                 double factor = pct / 100.0;
-                if (shaper_dl) shaper_dl->set_rate_limit(base_dl_mbps * factor);
-                if (shaper_ul) shaper_ul->set_rate_limit(base_ul_mbps * factor);
+                if (shaper_dl) shaper_dl->set_rate_limit(Traffic::Mbps{base_dl_mbps * factor});
+                if (shaper_ul) shaper_ul->set_rate_limit(Traffic::Mbps{base_ul_mbps * factor});
                 std::println("[QoS] Throttle {}% — DL {:.1f} Mbps / UL {:.1f} Mbps",
                     pct, base_dl_mbps * factor, base_ul_mbps * factor);
             }

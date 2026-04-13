@@ -35,6 +35,7 @@
 #include <vector>
 #include "Telemetry.hpp"
 #include "ProbeManager.hpp"
+#include "SelfTest.hpp"
 
 namespace Scalpel::GUI {
 
@@ -293,7 +294,7 @@ public:
     // Thread-safe: callable from any thread (engine cores, network threads)
     static void post_notification(const QString& title, const QString& body);
     // Called on Qt main thread after async self-test completes
-    static void on_selftest_done(const SelfTest::Report& r);
+    static void on_selftest_done(const Scalpel::SelfTest::Report& r);
 protected:
     void timerEvent(QTimerEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;

@@ -1050,11 +1050,11 @@ DhcpConfigDialog::DhcpConfigDialog(QWidget* parent) : QDialog(parent) {
 
     auto* lease_row = new QHBoxLayout();
     spin_days = new QSpinBox(); spin_days->setRange(0, 365); spin_days->setSuffix(" d");
-    spin_days->setValue(static_cast<int>(Config::DHCP_LEASE_SECONDS / 86400));
+    spin_days->setValue(static_cast<int>(Config::DHCP_LEASE_DURATION.count() / 86400));
     spin_hours = new QSpinBox(); spin_hours->setRange(0, 24); spin_hours->setSuffix(" h");
-    spin_hours->setValue(static_cast<int>((Config::DHCP_LEASE_SECONDS % 86400) / 3600));
+    spin_hours->setValue(static_cast<int>((Config::DHCP_LEASE_DURATION.count() % 86400) / 3600));
     spin_minutes = new QSpinBox(); spin_minutes->setRange(0, 60); spin_minutes->setSuffix(" min");
-    spin_minutes->setValue(static_cast<int>((Config::DHCP_LEASE_SECONDS % 3600) / 60));
+    spin_minutes->setValue(static_cast<int>((Config::DHCP_LEASE_DURATION.count() % 3600) / 60));
     lease_row->addWidget(spin_days);
     lease_row->addWidget(spin_hours);
     lease_row->addWidget(spin_minutes);
@@ -1080,9 +1080,9 @@ void DhcpConfigDialog::on_apply() {
     edit_pool_start->setStyleSheet("");
     edit_pool_end->setStyleSheet("");
 
-    uint32_t start_ip = Config::parse_ip_str(edit_pool_start->text().toStdString());
-    uint32_t end_ip   = Config::parse_ip_str(edit_pool_end->text().toStdString());
-    if (ntohl(start_ip) >= ntohl(end_ip)) {
+    Net::IPv4Net start_ip = Config::parse_ip_str(edit_pool_start->text().toStdString());
+    Net::IPv4Net end_ip   = Config::parse_ip_str(edit_pool_end->text().toStdString());
+    if (ntohl(start_ip.raw()) >= ntohl(end_ip.raw())) {
         edit_pool_start->setStyleSheet("border: 1px solid #cc3333;");
         edit_pool_end->setStyleSheet("border: 1px solid #cc3333;");
         return;
@@ -1095,7 +1095,7 @@ void DhcpConfigDialog::on_apply() {
 
     Config::DHCP_POOL_START    = edit_pool_start->text().toStdString();
     Config::DHCP_POOL_END      = edit_pool_end->text().toStdString();
-    Config::DHCP_LEASE_SECONDS = secs;
+    Config::DHCP_LEASE_DURATION = std::chrono::seconds{secs};
     Telemetry::instance().dhcp_config_dirty.store(true, std::memory_order_release);
     std::println("[GUI] DHCP pool updated: {} – {}, lease {}s",
         Config::DHCP_POOL_START, Config::DHCP_POOL_END, secs);
@@ -1155,10 +1155,11 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
         static_dns_table->setItem(row, 0, new QTableWidgetItem(
             QString::fromLatin1(Config::STATIC_DNS_TABLE[i].hostname.data())));
         Net::IPv4Net ip = Config::STATIC_DNS_TABLE[i].ip;
+        const uint32_t r = ip.raw();
         static_dns_table->setItem(row, 1, new QTableWidgetItem(
             QString("%1.%2.%3.%4")
-                .arg(ip & 0xFF).arg((ip >> 8) & 0xFF)
-                .arg((ip >> 16) & 0xFF).arg((ip >> 24) & 0xFF)));
+                .arg((r >> 24) & 0xFF).arg((r >> 16) & 0xFF)
+                .arg((r >> 8) & 0xFF).arg(r & 0xFF)));
     }
     form->addRow(static_dns_table);
 
@@ -1419,8 +1420,8 @@ void DevicePage::refresh() {
             if (Config::DEVICE_POLICY_TABLE[j].ip == ip) {
                 blocked      = Config::DEVICE_POLICY_TABLE[j].blocked;
                 rate_limited = Config::DEVICE_POLICY_TABLE[j].rate_limited;
-                dl           = Config::DEVICE_POLICY_TABLE[j].dl_mbps;
-                ul           = Config::DEVICE_POLICY_TABLE[j].ul_mbps;
+                dl           = Config::DEVICE_POLICY_TABLE[j].dl.value;
+                ul           = Config::DEVICE_POLICY_TABLE[j].ul.value;
                 break;
             }
         }
@@ -1536,8 +1537,8 @@ void DevicePage::on_apply_all() {
         std::memcpy(p.mac, r.mac.data(), 6);
         p.blocked      = !r.chk_allow->isChecked();
         p.rate_limited = r.chk_rate->isChecked();
-        p.dl_mbps      = r.val_dl;
-        p.ul_mbps      = r.val_ul;
+        p.dl           = Traffic::Mbps{r.val_dl};
+        p.ul           = Traffic::Mbps{r.val_ul};
         Config::upsert_device_policy(p);
     }
     Config::DEVICE_POLICY_DIRTY.store(true, std::memory_order_release);
@@ -1571,7 +1572,7 @@ void Dashboard::post_notification(const QString& title, const QString& body) {
     }, Qt::QueuedConnection);
 }
 
-void Dashboard::on_selftest_done(const SelfTest::Report& r) {
+void Dashboard::on_selftest_done(const Scalpel::SelfTest::Report& r) {
     if (!instance_) return;
     // Hide overlay
     if (instance_->testing_overlay_)
