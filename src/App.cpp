@@ -22,7 +22,7 @@ namespace Scalpel {
 
 namespace {
 
-// RawSocketManager::poll_rx uses blocking poll(2). Egress uses DataPlane::TxFrameOutput.
+// RX thread uses poll(2) on the raw socket plus stop_efd (-1 timeout). Egress uses DataPlane::TxFrameOutput.
 
 // ─── Packet routing context (internal to data plane) ─────────────────────────
 struct RouteContext {
@@ -423,8 +423,9 @@ void App::wait_for_shutdown() {
 }
 
 // ─── Worker event loop (Core 2 / Core 3) ─────────────────────────────────────
-// RX thread: blocking poll(2) on the AF_PACKET socket, copy each frame into an
-// SPSC ring. Processing thread: parse and run PacketConsumer::on_packet_event.
+// RX thread: blocking poll(2) on AF_PACKET and stop_efd; copy each frame into an
+// SPSC ring. Processing thread: parse and run PacketConsumer::on_packet_event;
+// waits on frame_efd/stop_efd with no periodic timeout.
 
 void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
                              PacketWorkerConfig cfg,
@@ -439,8 +440,23 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
         [this, mgr = std::move(rx_mgr), &frame_q, &poll_sync, core = cfg.core_id]() mutable {
             Scalpel::System::Optimizer::set_current_thread_affinity(core);
             Scalpel::System::Optimizer::set_realtime_priority();
+            const int sock_fd = mgr->get_fd();
             while (this->running_workers.load(std::memory_order_relaxed)) {
-                mgr->poll_rx(1);
+                struct pollfd pfds_rx[2]{};
+                pfds_rx[0] = { sock_fd, POLLIN, 0 };
+                pfds_rx[1] = { poll_sync.stop_efd, POLLIN, 0 };
+                int prx = ::poll(pfds_rx, 2, -1);
+                if (prx < 0) {
+                    if (errno == EINTR) continue;
+                    break;
+                }
+                if ((pfds_rx[1].revents & POLLIN) != 0) {
+                    uint64_t v;
+                    (void)::eventfd_read(poll_sync.stop_efd, &v);
+                    break;
+                }
+                if ((pfds_rx[0].revents & POLLIN) == 0) continue;
+
                 std::span<uint8_t> raw;
                 while (this->running_workers.load(std::memory_order_relaxed)
                        && mgr->peek_rx_frame(raw)) {
@@ -493,7 +509,7 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
             struct pollfd pfds[2]{};
             pfds[0] = { poll_sync.frame_efd, POLLIN, 0 };
             pfds[1] = { poll_sync.stop_efd,  POLLIN, 0 };
-            int pr = ::poll(pfds, 2, 1);
+            int pr = ::poll(pfds, 2, -1);
             if (pr < 0) {
                 if (errno == EINTR) continue;
                 break;
