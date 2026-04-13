@@ -130,8 +130,8 @@
     <div class="app-container">
       <div class="top-status-bar">
         <div>
-          <span class="text-danger font-semibold" style="cursor: pointer"
-            >Shutdown</span
+          <span class="text-danger font-semibold sys-reboot-btn" style="cursor: pointer"
+            >Reboot</span
           >
           <span
             class="font-semibold"
@@ -175,7 +175,7 @@
           </div>
         </div>
         <div class="service-actions">
-          <button class="btn btn-secondary">Set DHCP</button>
+          <button class="btn btn-secondary" id="set-dhcp-btn">Set DHCP</button>
           <div class="status-badge running">● Running</div>
         </div>
       </div>
@@ -191,7 +191,7 @@
           </div>
         </div>
         <div class="service-actions">
-          <button class="btn btn-secondary">Set DNS</button>
+          <button class="btn btn-secondary" id="set-dns-btn">Set DNS</button>
           <div class="status-badge running">● Running</div>
         </div>
       </div>
@@ -226,5 +226,81 @@
     </div>
 
     <%- include('partials/sidebar_nav', { activeTab: 'services' }) %>
+
+    <script>
+      $(document).ready(function() {
+        // Toggle interaction
+        $('.service-toggle').on('click', function() {
+          const $toggle = $(this);
+          const isOn = $toggle.hasClass('on');
+          const $badge = $toggle.closest('.service-row').find('.status-badge');
+          
+          if (isOn) {
+            $toggle.removeClass('on');
+            $toggle.css('background-color', '#e2e8f0'); // off gray
+            $badge.removeClass('running').addClass('stopped').html('○ Stopped');
+            Swal.fire({ toast: true, position: 'top-end', icon: 'info', title: 'Service Stopped', showConfirmButton: false, timer: 2000 });
+          } else {
+            $toggle.addClass('on');
+            $toggle.css('background-color', '#059669'); // emerald
+            $badge.removeClass('stopped').addClass('running').html('● Running');
+            Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: 'Service Started', showConfirmButton: false, timer: 2000 });
+          }
+        });
+
+        // Add proper toggle sliding logic
+        $('<style>').text('.service-toggle:not(.on)::after { left: 2px !important; } .service-toggle.on::after { left: 22px !important; }').appendTo('head');
+
+        // DHCP Modal
+        $('#set-dhcp-btn').on('click', function() {
+          Swal.fire({
+            title: 'Configure DHCP Range',
+            html: '<input id="swal-dhcp-start" class="swal2-input" placeholder="Start (e.g. 192.168.1.10)"><input id="swal-dhcp-end" class="swal2-input" placeholder="End (e.g. 192.168.1.200)">',
+            focusConfirm: false,
+            showCancelButton: true,
+            confirmButtonColor: '#4f46e5',
+            confirmButtonText: 'Save Settings',
+          }).then((result) => {
+            if (result.isConfirmed) {
+              Swal.fire('Saved!', 'LAN client IPs will now be assigned from the new range.', 'success');
+            }
+          });
+        });
+
+        // DNS Modal
+        $('#set-dns-btn').on('click', function() {
+          Swal.fire({
+            title: 'Upstream DNS Servers',
+            html: '<input id="swal-dns1" class="swal2-input" placeholder="Primary DNS (e.g. 8.8.8.8)"><input id="swal-dns2" class="swal2-input" placeholder="Secondary DNS (e.g. 1.1.1.1)">',
+            focusConfirm: false,
+            showCancelButton: true,
+            confirmButtonColor: '#4f46e5',
+            confirmButtonText: 'Update DNS',
+          }).then((result) => {
+            if (result.isConfirmed) {
+              Swal.fire('Updated!', 'DNS requests will now route strictly through selected upstream servers.', 'success');
+            }
+          });
+        });
+
+        // Reboot Action (Globally applicable to sys-reboot-btn)
+        $('.sys-reboot-btn').on('click', function() {
+          Swal.fire({
+            title: 'Execute Reboot?',
+            text: 'Are you sure you want to reboot the system? All active sessions will be dropped.',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#dc2626',
+            cancelButtonColor: '#94a3b8',
+            confirmButtonText: 'Yes, reboot now'
+          }).then((result) => {
+            if (result.isConfirmed) {
+              Swal.fire({ title: 'Rebooting Kernel...', html: 'System going down immediately.', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); }});
+              setTimeout(() => { location.reload(); }, 3000);
+            }
+          });
+        });
+      });
+    </script>
   </body>
 </html>

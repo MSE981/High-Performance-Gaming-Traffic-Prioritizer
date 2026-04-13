@@ -104,8 +104,8 @@
     <div class="app-container">
       <div class="top-status-bar">
         <div>
-          <span class="text-danger font-semibold" style="cursor: pointer"
-            >Shutdown</span
+          <span class="text-danger font-semibold sys-reboot-btn" style="cursor: pointer"
+            >Reboot</span
           >
           <span
             class="font-semibold"
@@ -214,5 +214,66 @@
     </div>
 
     <%- include('partials/sidebar_nav', { activeTab: 'interfaces' }) %>
+
+    <script>
+      $(document).ready(function() {
+        // Role Selection
+        $('.role-btn').on('click', function() {
+          $(this).siblings().removeClass('active');
+          $(this).addClass('active');
+          
+          let roleName = $(this).text();
+          let $status = $(this).closest('.interface-card').find('.interface-status');
+          
+          if (roleName === 'Disabled') {
+             $status.html('<span style="color: #cbd5e1">○</span> Down');
+          } else {
+             $status.html('<span style="color: #059669">●</span> Up (1Gbps)');
+          }
+        });
+
+        // Advanced Options Checkboxes
+        $('.custom-checkbox').on('click', function() {
+          let isOn = $(this).css('background-color') === 'rgb(79, 70, 229)';
+          if (isOn) {
+            $(this).css('background-color', '#ffffff');
+          } else {
+            $(this).css('background-color', '#4f46e5');
+          }
+        });
+
+        // Bottom Actions
+        $('button.btn-secondary:contains("Refresh")').on('click', function() {
+          Swal.fire({ title: 'Probing Hardware...', text: 'Scanning for network interfaces.', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); }});
+          setTimeout(() => { Swal.fire('Complete', 'Interface scan finished.', 'info'); }, 800);
+        });
+
+        $('button.btn-secondary:contains("Reset")').on('click', function() {
+          $('.role-btn:contains("Disabled")').click();
+          Swal.fire({ toast: true, position: 'top-end', icon: 'info', title: 'Roles Reset', showConfirmButton: false, timer: 2000 });
+        });
+
+        $('button.btn:contains("Save / Apply")').on('click', function() {
+          Swal.fire({ title: 'Applying Port Configurations...', text: 'Writing hardware offload paths...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); }});
+          setTimeout(() => { Swal.fire('Applied Successfully', 'Network interfaces have been successfully reconfigured.', 'success'); }, 1200);
+        });
+        
+        // Reboot Global
+        $('.sys-reboot-btn').on('click', function() {
+          Swal.fire({
+            title: 'Execute Reboot?',
+            text: 'System will restart. Active streams will drop.',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#dc2626',
+            confirmButtonText: 'Reboot'
+          }).then((result) => {
+            if (result.isConfirmed) {
+              Swal.fire({ title: 'Rebooting...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); }});
+            }
+          });
+        });
+      });
+    </script>
   </body>
 </html>

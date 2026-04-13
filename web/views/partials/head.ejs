@@ -208,3 +208,30 @@
     }
   }
 </style>
+
+<script>
+  // Global System Actions
+  $(document).ready(function() {
+    $(document).on('click', '.sys-reboot-btn', function() {
+      Swal.fire({
+        title: 'Execute Reboot?',
+        text: 'The entire hardware routing engine will reboot. All active gaming sessions will be dropped immediately.',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#dc2626',
+        cancelButtonColor: '#94a3b8',
+        confirmButtonText: 'Yes, reboot system'
+      }).then((result) => {
+        if (result.isConfirmed) {
+          Swal.fire({ 
+            title: 'Rebooting Hardware...', 
+            html: 'System is shutting down and restarting...', 
+            allowOutsideClick: false, 
+            didOpen: () => { Swal.showLoading(); }
+          });
+          setTimeout(() => { location.reload(); }, 3500);
+        }
+      });
+    });
+  });
+</script>
