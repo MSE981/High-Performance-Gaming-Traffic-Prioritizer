@@ -68,6 +68,36 @@
         border-radius: 8px;
         border: 1px solid #e2e8f0;
       }
+
+      .core-sublabel {
+        font-size: 0.75rem;
+        font-weight: normal;
+        display: block;
+        margin-top: -2px;
+        margin-bottom: 2px;
+        color: #94a3b8;
+      }
+      
+      .core-box.active .core-sublabel {
+        color: inherit;
+      }
+
+      .architecture-note {
+        font-size: 0.85rem;
+        color: #64748b;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 12px;
+        margin-top: 16px;
+        line-height: 1.5;
+      }
+
+      .architecture-note-title {
+        color: #4f46e5;
+        font-weight: 600;
+        margin-right: 4px;
+      }
     </style>
   </head>
   <body>
@@ -133,38 +163,51 @@
         </div>
 
         <div class="cores-container">
-          <div class="core-box active">
-            Core 0<br /><span
+          <div class="core-box active" aria-label="Dedicated Fast-Path Core">
+            Core 0
+            <span class="core-sublabel">(Fast-Path)</span>
+            <span
               id="core0"
               class="font-mono font-semibold"
               style="font-size: 1.1rem"
               >0%</span
             >
           </div>
-          <div class="core-box">
-            Core 1<br /><span
+          <div class="core-box" aria-label="Standard OS Core">
+            Core 1
+            <span class="core-sublabel">(OS/Ctrl)</span>
+            <span
               id="core1"
               class="font-mono font-semibold"
               style="font-size: 1.1rem"
               >0%</span
             >
           </div>
-          <div class="core-box">
-            Core 2<br /><span
+          <div class="core-box" aria-label="Standard OS Core">
+            Core 2
+            <span class="core-sublabel">(OS/Ctrl)</span>
+            <span
               id="core2"
               class="font-mono font-semibold"
               style="font-size: 1.1rem"
               >0%</span
             >
           </div>
-          <div class="core-box">
-            Core 3<br /><span
+          <div class="core-box" aria-label="Standard OS Core">
+            Core 3
+            <span class="core-sublabel">(OS/Ctrl)</span>
+            <span
               id="core3"
               class="font-mono font-semibold"
               style="font-size: 1.1rem"
               >0%</span
             >
           </div>
+        </div>
+
+        <div class="architecture-note">
+          <span class="architecture-note-title">System Architecture:</span>
+          Core 0 is strictly isolated as the <strong>Dedicated Fast-Path Core (Data Plane)</strong>. By pinning the high-performance packet processing engine to a single physical core, the system eliminates Context Switching and CPU Cache misses. This localized execution approach ensures deterministic, ultra-low latency for critical gaming traffic, while delegating the remaining kernels to handle system background tasks and control plane protocols.
         </div>
       </div>
 
