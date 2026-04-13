@@ -102,6 +102,28 @@
       .status-badge.stopped {
         color: #dc2626;
       }
+
+      @media (max-width: 768px) {
+        .top-status-bar {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 12px;
+        }
+        .service-row {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 16px;
+        }
+        .service-info {
+          width: 100%;
+        }
+        .service-actions {
+          width: 100%;
+          justify-content: flex-end;
+          border-top: 1px solid #f1f5f9;
+          padding-top: 12px;
+        }
+      }
     </style>
   </head>
   <body>

@@ -169,4 +169,41 @@
     border-bottom: 1px solid #f1f5f9;
     color: #334155;
   }
+
+  /* Responsive Global Rules */
+  @media (max-width: 1024px) {
+    .app-container {
+      margin-left: 0;
+      padding: 24px;
+      padding-bottom: 90px;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .app-container {
+      padding: 16px;
+      padding-bottom: 90px;
+    }
+    
+    .panel {
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .page-title {
+      font-size: 1.3rem; 
+      margin-bottom: 16px !important;
+    }
+
+    /* Wrap flex inputs */
+    .form-row {
+      flex-direction: column !important;
+      align-items: flex-start !important;
+      gap: 8px;
+    }
+    .form-row > label {
+      width: 100% !important;
+      margin-bottom: 4px !important;
+    }
+  }
 </style>
