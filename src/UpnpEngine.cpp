@@ -2,8 +2,6 @@
 #include "DataPlane.hpp"
 #include "SystemOptimizer.hpp"
 #include <span>
-#include <chrono>
-#include <thread>
 #include <poll.h>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
@@ -20,12 +18,19 @@ namespace Scalpel::Logic {
 
 UpnpEngine::UpnpEngine(std::shared_ptr<NatEngine> nat, const std::string& ip)
     : nat_engine(nat), router_ip_str(ip) {
-    soap_job_notify_efd = ::eventfd(0, EFD_CLOEXEC);
+    soap_job_notify_efd = -1;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        soap_job_notify_efd = ::eventfd(0, EFD_CLOEXEC);
+        if (soap_job_notify_efd >= 0) break;
+    }
     if (soap_job_notify_efd < 0)
-        std::println(stderr, "[UPnP] soap job eventfd: {}", std::strerror(errno));
+        std::println(stderr,
+            "[UPnP] soap job eventfd failed after retries ({}); SOAP runs on accept thread only.",
+            std::strerror(errno));
     running.store(true, std::memory_order_relaxed);
     ssdp_thread = std::thread([this]() { run_ssdp_server(); });
-    soap_worker_thread = std::thread([this]() { run_soap_worker(); });
+    if (soap_job_notify_efd >= 0)
+        soap_worker_thread = std::thread([this]() { run_soap_worker(); });
     soap_thread = std::thread([this]() { run_soap_server(); });
     std::println("[UPnP Engine] Startup complete. Listening for LAN SSDP broadcasts.");
 }
@@ -106,11 +111,6 @@ void UpnpEngine::run_soap_worker() {
 
         if (!running.load(std::memory_order_relaxed))
             break;
-
-        if (soap_job_notify_efd < 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            continue;
-        }
 
         struct pollfd pfd{};
         pfd.fd     = soap_job_notify_efd;
@@ -257,6 +257,11 @@ void UpnpEngine::run_soap_server() {
             continue;
         }
 
+        if (soap_job_notify_efd < 0) {
+            dispatch_soap_http(cfd, std::string_view(buf, static_cast<size_t>(n)));
+            continue;
+        }
+
         SoapRequestJob job{};
         job.cfd = cfd;
         job.len = static_cast<uint16_t>(n);
@@ -266,7 +271,7 @@ void UpnpEngine::run_soap_server() {
                 "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n";
             (void)::send(cfd, busy, sizeof(busy) - 1, MSG_NOSIGNAL);
             ::close(cfd);
-        } else if (soap_job_notify_efd >= 0) {
+        } else {
             (void)::eventfd_write(soap_job_notify_efd, 1);
         }
     }
