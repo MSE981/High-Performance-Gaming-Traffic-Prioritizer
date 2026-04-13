@@ -9,7 +9,7 @@
 namespace Scalpel::Logic {
     // True zero-copy user-space NAT engine
     class NatEngine {
-        struct NatSession {
+        struct alignas(64) NatSession {
             FlowKey internal_key;
             uint16_t external_port = 0;
             std::atomic<uint32_t> last_active_tick{0};

@@ -29,7 +29,7 @@ namespace Scalpel::Logic {
     };
 
     class DnsEngine {
-        struct DnsCacheEntry {
+        struct alignas(64) DnsCacheEntry {
             uint32_t     domain_hash  = 0;
             Net::IPv4Net ipv4_address{};
             uint32_t     expire_tick  = 0;

@@ -15,7 +15,7 @@ namespace Scalpel::Logic {
     };
 
     class FirewallEngine {
-        struct ConnTrackEntry {
+        struct alignas(64) ConnTrackEntry {
             uint32_t  remote_ip   = 0;
             uint16_t  remote_port = 0;
             uint32_t  lan_ip      = 0;
