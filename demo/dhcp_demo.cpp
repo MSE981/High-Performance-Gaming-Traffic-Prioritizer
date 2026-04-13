@@ -4,6 +4,9 @@
 // Run:   ./dhcp_demo   (no root required — uses socketpair(AF_UNIX))
 #include "DhcpEngine.hpp"
 #include "Headers.hpp"
+
+namespace Net = Scalpel::Net;
+
 #include <print>
 #include <cassert>
 #include <cstring>

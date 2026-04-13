@@ -6,6 +6,9 @@
 //   ./nat_demo
 #include "NatEngine.hpp"
 #include "Headers.hpp"
+
+namespace Net = Scalpel::Net;
+
 #include <cstring>
 #include <print>
 #include <netinet/in.h>
@@ -58,7 +61,7 @@ int main() {
     const uint32_t ext_raw = htonl(0x08080808);  // 8.8.8.8
 
     auto frame = make_udp_frame(lan_raw, ext_raw, 54321, 53);
-    auto pkt   = Net::ParsedPacket::parse(std::span<uint8_t>{frame});
+    auto pkt   = Net::ParsedPacket::parse(std::span<uint8_t>(frame));
 
     std::println("Before SNAT: src={:#010x} sport={}",
                  pkt.ipv4->saddr.raw(), ntohs(pkt.udp()->source));
@@ -77,7 +80,7 @@ int main() {
     // Simulate inbound reply — build reversed frame
     auto reply = make_udp_frame(ext_raw, wan_raw,
                                 53, ntohs(pkt.udp()->source));
-    auto rpkt  = Net::ParsedPacket::parse(std::span<uint8_t>{reply});
+    auto rpkt  = Net::ParsedPacket::parse(std::span<uint8_t>(reply));
     bool rok   = nat.process_inbound(rpkt);
     assert(rok && "process_inbound should match the session");
     assert(rpkt.ipv4->daddr == Net::IPv4Net{lan_raw} && "daddr must be restored to LAN IP");

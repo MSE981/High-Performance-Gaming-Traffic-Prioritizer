@@ -4,6 +4,9 @@
 // Run:   ./firewall_demo   (no root required)
 #include "FirewallEngine.hpp"
 #include "Headers.hpp"
+
+namespace Net = Scalpel::Net;
+
 #include <print>
 #include <cassert>
 #include <cstring>
