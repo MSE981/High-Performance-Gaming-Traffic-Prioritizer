@@ -287,8 +287,6 @@ App::App() {
 }
 
 App::~App() {
-    stress_cancel_.store(true, std::memory_order_relaxed);
-    if (stress_thread_.joinable()) stress_thread_.join();
     // Stop data-plane workers (Cores 2/3) before watchdog (Core 1) so
     // the watchdog does not read stale shaper state after workers exit.
     running_workers.store(false, std::memory_order_relaxed);
@@ -336,8 +334,6 @@ void App::wake_proc_threads_for_shutdown() {
 
 void App::stop() {
     if (shutdown_sequence_started_.exchange(true, std::memory_order_acq_rel)) return;
-    stress_cancel_.store(true, std::memory_order_relaxed);
-    if (stress_thread_.joinable()) stress_thread_.join();
     running_workers.store(false, std::memory_order_relaxed);
     wake_proc_threads_for_shutdown();
     if (worker_downstream.joinable()) worker_downstream.join();
@@ -367,17 +363,6 @@ void App::start() {
     watchdog = std::thread([this]() { watchdog_loop(); });
 
     Utils::Network::force_arp_resolution(Utils::Network::get_gateway_ip());
-
-    stress_cancel_.store(false, std::memory_order_relaxed);
-    stress_thread_ = std::thread([this]() {
-        Scalpel::System::Optimizer::set_current_thread_affinity(1);
-        Probe::Manager::run_internal_stress(
-            [](double mbps) {
-                Telemetry::instance().internal_limit_mbps.store(
-                    mbps, std::memory_order_relaxed);
-            },
-            &stress_cancel_);
-    });
 
     int fd_wan = iface_wan->get_fd();
     int fd_lan = iface_lan->get_fd();

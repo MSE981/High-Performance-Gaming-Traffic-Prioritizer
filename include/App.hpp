@@ -17,7 +17,6 @@
 #include "UpnpEngine.hpp"
 #include "SystemOptimizer.hpp"
 #include "Telemetry.hpp"
-#include "ProbeManager.hpp"
 #include "Scheduler.hpp"
 #include "FirewallEngine.hpp"
 
@@ -136,8 +135,6 @@ class App {
     std::thread       worker_downstream;
     std::thread       worker_upstream;
     std::thread       watchdog;
-    std::thread       stress_thread_{};
-    std::atomic<bool> stress_cancel_{false};
     std::atomic<bool> running_workers{false};
     std::atomic<bool> running_watchdog{false};
     std::promise<void> shutdown_promise;
