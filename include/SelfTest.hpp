@@ -7,6 +7,7 @@
 // and engine headers are confined to SelfTest.cpp; this header exposes only the
 // public interface types Report, TestCase, and SelfTest.
 #include <array>
+#include <atomic>
 #include <cstring>
 #include <functional>
 #include <thread>
@@ -53,9 +54,27 @@ public:
 
     ~SelfTest() { if (uthread_.joinable()) uthread_.join(); }
 
-    void start() { uthread_ = std::thread(&SelfTest::run, this); }
+    // Ignores duplicate start while a worker is still joinable (call join() first).
+    void start() {
+        if (uthread_.joinable()) return;
+        uthread_ = std::thread([this] {
+            struct Active {
+                std::atomic<bool>& a;
+                explicit Active(std::atomic<bool>& x) : a(x) {
+                    a.store(true, std::memory_order_relaxed);
+                }
+                ~Active() { a.store(false, std::memory_order_relaxed); }
+            } active{worker_running_};
+            (void)active;
+            run();
+        });
+    }
 
     void join() { if (uthread_.joinable()) uthread_.join(); }
+
+    bool worker_running() const {
+        return worker_running_.load(std::memory_order_relaxed);
+    }
 
 private:
     void run();
@@ -81,6 +100,7 @@ private:
 
     ResultCallback callback_;
     std::thread    uthread_;
+    std::atomic<bool> worker_running_{false};
 };
 
 // Last self-test report — written once before GUI starts, read by Dashboard on init
