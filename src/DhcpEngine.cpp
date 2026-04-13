@@ -227,7 +227,9 @@ void DhcpEngine::intercept_request(const Net::ParsedPacket& pkt) {
 
 void DhcpEngine::process_background_tasks(int lan_fd) {
     DhcpMessage msg;
-    while (request_queue.pop(msg))
+    for (unsigned n = 0;
+         n < kBackgroundTaskBudget && request_queue.pop(msg);
+         ++n)
         handle_dhcp_request(msg, lan_fd);
 }
 

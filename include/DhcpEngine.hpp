@@ -31,6 +31,9 @@ namespace Scalpel::Logic {
     class DhcpEngine {
         Net::SpscRingBuffer<DhcpMessage, 512> request_queue{};
 
+        // Watchdog calls process_background_tasks; cap work per tick for fast return.
+        static constexpr unsigned kBackgroundTaskBudget = 32;
+
         static constexpr size_t MAX_POOL_SIZE = 253;
         std::array<DhcpLease, MAX_POOL_SIZE> leases{};
         size_t       pool_count    = 0;
