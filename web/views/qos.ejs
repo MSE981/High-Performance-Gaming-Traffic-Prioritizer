@@ -109,7 +109,7 @@
               style="flex: 1"
             />
           </div>
-          <div class="form-row" style="display: flex; align-items: center">
+          <div class="form-row" style="display: flex; align-items: center; margin-bottom: 12px">
             <label class="form-label" style="width: 200px; margin: 0"
               >Upload Limit (Mbps):</label
             >
@@ -121,6 +121,7 @@
               style="flex: 1"
             />
           </div>
+          <button type="button" id="apply-qos-btn" class="btn" style="margin-top: 8px;">Apply Restrictions</button>
         </form>
       </div>
 
@@ -198,10 +199,119 @@
             </tbody>
           </table>
         </div>
-        <button class="btn btn-secondary">Edit Whitelist...</button>
+        <button class="btn btn-secondary" id="edit-whitelist-btn">Edit Whitelist...</button>
       </div>
     </div>
 
     <%- include('partials/sidebar_nav', { activeTab: 'qos' }) %>
+
+    <script>
+      $(document).ready(function() {
+        // Toggle Switch Interactive Logic
+        $('.toggle-row').on('click', function() {
+          const toggle = $(this).find('.custom-toggle');
+          const isOn = toggle.data('state') === 'on';
+          
+          if (!isOn) {
+            toggle.css('background-color', '#059669'); // Emerald
+            toggle.find('*').css('right', '2px'); // default CSS state but lets hack it with inline styles if needed
+            // The exact CSS for toggle::after requires adding a class
+            toggle.addClass('on');
+            toggle.data('state', 'on');
+            
+            Swal.fire({
+              toast: true,
+              position: 'top-end',
+              icon: 'success',
+              title: 'Gaming Acceleration Enabled',
+              text: 'Heuristic queueing strategy is now active.',
+              showConfirmButton: false,
+              timer: 3000,
+              timerProgressBar: true
+            });
+          } else {
+            toggle.css('background-color', '#4f46e5'); // Reset to default
+            toggle.removeClass('on');
+            toggle.data('state', 'off');
+            
+            Swal.fire({
+              toast: true,
+              position: 'top-end',
+              icon: 'info',
+              title: 'Gaming Acceleration Disabled',
+              text: 'Reverted to standard traffic routing.',
+              showConfirmButton: false,
+              timer: 3000,
+              timerProgressBar: true
+            });
+          }
+        });
+
+        // Add explicit CSS for the .on class we just dynamically added
+        $('<style>')
+          .text('.custom-toggle.on::after { right: 22px !important; }')
+          .appendTo('head');
+
+        // Apply Bandwidth Limits Button
+        $('#apply-qos-btn').on('click', function() {
+          Swal.fire({
+            title: 'Applying Limits...',
+            text: 'Reconfiguring global queues.',
+            allowOutsideClick: false,
+            didOpen: () => {
+              Swal.showLoading();
+            }
+          });
+          
+          // Simulate AJAX post or form submission
+          setTimeout(() => {
+            Swal.fire({
+              title: 'Success!',
+              text: 'Global bandwidth limits applied instantly.',
+              icon: 'success',
+              confirmButtonColor: '#4f46e5'
+            });
+          }, 800);
+        });
+
+        // Edit Whitelist Modal
+        $('#edit-whitelist-btn').on('click', function() {
+          Swal.fire({
+            title: 'Add Whitelist Rule',
+            html: `
+              <input id="swal-input-port" class="swal2-input" placeholder="Port or Range (e.g. 27015)">
+              <select id="swal-input-proto" class="swal2-select" style="width: 70%; max-width: 100%; display: flex;">
+                <option value="UDP">UDP</option>
+                <option value="TCP">TCP</option>
+                <option value="TCP/UDP">TCP/UDP</option>
+              </select>
+              <input id="swal-input-desc" class="swal2-input" placeholder="Game Description">
+            `,
+            focusConfirm: false,
+            showCancelButton: true,
+            confirmButtonColor: '#4f46e5',
+            confirmButtonText: 'Add Rule',
+            preConfirm: () => {
+              const port = document.getElementById('swal-input-port').value;
+              const proto = document.getElementById('swal-input-proto').value;
+              const desc = document.getElementById('swal-input-desc').value;
+              if (!port || !desc) {
+                Swal.showValidationMessage('Port and Description are required');
+              }
+              return { port: port, proto: proto, desc: desc };
+            }
+          }).then((result) => {
+            if (result.isConfirmed) {
+              const r = result.value;
+              // Fake adding to table
+              const newRow = \`<tr><td class="font-mono">\${r.port}</td><td>\${r.proto}</td><td>\${r.desc}</td></tr>\`;
+              $('.data-table tbody').append(newRow);
+              
+              Swal.fire('Added!', \`Rule for \${r.desc} (\${r.port}) added to hardware whitelist.\`, 'success');
+            }
+          });
+        });
+      });
+    </script>
   </body>
 </html>
