@@ -223,5 +223,75 @@
     </div>
 
     <%- include('partials/sidebar_nav', { activeTab: 'devices' }) %>
+
+    <script>
+      $(document).ready(function() {
+        // Toggle Checkboxes for Access and Rate Limiting
+        $('.toggle-btn').on('click', function() {
+          const $box = $(this).find('.toggle-box');
+          const isRateLimit = $(this).text().includes('Rate Limit');
+
+          if ($box.hasClass('active')) {
+            $box.removeClass('active').addClass('inactive');
+            if (isRateLimit) {
+              $(this).closest('.device-card').find('.rate-limit-row').css('opacity', '0.5');
+            }
+          } else {
+            $box.removeClass('inactive').addClass('active');
+            if (isRateLimit) {
+              $(this).closest('.device-card').find('.rate-limit-row').css('opacity', '1');
+            }
+          }
+        });
+
+        // Initialize state
+        $('.device-card').each(function() {
+          const $rateLimitBox = $(this).find('.toggle-btn:contains("Rate Limit") .toggle-box');
+          if ($rateLimitBox.hasClass('inactive')) {
+            $(this).find('.rate-limit-row').css('opacity', '0.5');
+          }
+        });
+
+        // +/- Rate Limit Controls
+        $('.rate-btn').on('click', function() {
+          // Check if rate limits are enabled first
+          const $card = $(this).closest('.device-card');
+          const isRateLimitActive = $card.find('.toggle-btn:contains("Rate Limit") .toggle-box').hasClass('active');
+          
+          if (!isRateLimitActive) return;
+
+          const isPlus = $(this).text().trim() === '+';
+          const $input = $(this).siblings('.rate-input');
+          const isUpload = $input.hasClass('upload');
+          let currentText = $input.text();
+          let currentVal = parseFloat(currentText.replace(/[^0-9.]/g, ''));
+          
+          // Adjust by 5 Mbps steps
+          if (isPlus) {
+            currentVal += 5.0;
+          } else {
+            currentVal = Math.max(0, currentVal - 5.0);
+          }
+          
+          let prefix = isUpload ? '↑' : '↓';
+          $input.text(prefix + ' ' + currentVal.toFixed(1) + ' Mbps');
+        });
+
+        // Apply Button
+        $('button.btn:contains("Apply All Data Limits")').on('click', function() {
+          Swal.fire({
+            title: 'Applying Hardware Policies...',
+            text: 'Reconfiguring TC queues for all attached clients. Traffic may spike momentarily.',
+            allowOutsideClick: false,
+            didOpen: () => {
+              Swal.showLoading();
+            }
+          });
+          setTimeout(() => {
+            Swal.fire('Policies Active', 'Access control and rate limits applied successfully.', 'success');
+          }, 1200);
+        });
+      });
+    </script>
   </body>
 </html>

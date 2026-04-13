@@ -25,7 +25,7 @@
       .custom-toggle {
         width: 44px;
         height: 24px;
-        background-color: #4f46e5;
+        background-color: #cbd5e1; /* Off color */
         border-radius: 12px;
         margin-right: 16px;
         position: relative;
@@ -35,12 +35,19 @@
         content: "";
         position: absolute;
         top: 2px;
-        right: 2px;
+        left: 2px;
         width: 20px;
         height: 20px;
         background: #ffffff;
         border-radius: 50%;
-        transition: right 0.2s;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+        transition: left 0.2s;
+      }
+      .custom-toggle.on {
+        background-color: #059669; /* Emerald Green for Active */
+      }
+      .custom-toggle.on::after {
+        left: 22px;
       }
 
       .slider-container {
@@ -88,7 +95,7 @@
       </div>
 
       <div class="toggle-row">
-        <div class="custom-toggle"></div>
+        <div class="custom-toggle on"></div>
         <div class="font-semibold" style="color: #0f172a">
           Enable Gaming Traffic Acceleration (Heuristic Priority Scheduling)
         </div>
@@ -209,16 +216,11 @@
       $(document).ready(function() {
         // Toggle Switch Interactive Logic
         $('.toggle-row').on('click', function() {
-          const toggle = $(this).find('.custom-toggle');
-          const isOn = toggle.data('state') === 'on';
+          const $toggle = $(this).find('.custom-toggle');
+          const isOn = $toggle.hasClass('on');
           
           if (!isOn) {
-            toggle.css('background-color', '#059669'); // Emerald
-            toggle.find('*').css('right', '2px'); // default CSS state but lets hack it with inline styles if needed
-            // The exact CSS for toggle::after requires adding a class
-            toggle.addClass('on');
-            toggle.data('state', 'on');
-            
+            $toggle.addClass('on');
             Swal.fire({
               toast: true,
               position: 'top-end',
@@ -230,10 +232,7 @@
               timerProgressBar: true
             });
           } else {
-            toggle.css('background-color', '#4f46e5'); // Reset to default
-            toggle.removeClass('on');
-            toggle.data('state', 'off');
-            
+            $toggle.removeClass('on');
             Swal.fire({
               toast: true,
               position: 'top-end',
@@ -246,11 +245,6 @@
             });
           }
         });
-
-        // Add explicit CSS for the .on class we just dynamically added
-        $('<style>')
-          .text('.custom-toggle.on::after { right: 22px !important; }')
-          .appendTo('head');
 
         // Apply Bandwidth Limits Button
         $('#apply-qos-btn').on('click', function() {
