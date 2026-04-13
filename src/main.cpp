@@ -32,6 +32,25 @@ extern "C" void signal_handler(int signal) {
 #include "GUI/Dashboard.hpp"
 #include "SystemOptimizer.hpp"
 
+namespace {
+
+void print_selftest_report(const Scalpel::SelfTest::Report& r) {
+    std::println("\n=== Startup self-test: {} / {} passed ===", r.passed, r.count);
+    for (size_t i = 0; i < r.count; ++i) {
+        std::println("  [{}] {} : {}",
+            r.cases[i].pass ? "PASS" : "FAIL",
+            r.cases[i].name.data(),
+            r.cases[i].detail.data());
+    }
+    std::println("=== End self-test ===");
+    if (r.passed < r.count)
+        std::println(stderr,
+            "[Warning] {} self-test case(s) failed; review hardware and configuration.",
+            r.count - r.passed);
+}
+
+} // namespace
+
 int main(int argc, char* argv[]) {
     // Ignore SIGPIPE
     std::signal(SIGPIPE, SIG_IGN);
@@ -113,29 +132,17 @@ int main(int argc, char* argv[]) {
                     (void)::eventfd_write(gui_stop_efd, 1);
                 });
 
-            // Async self-test: GUI shows with an overlay. When the worker finishes it invokes the
-            // callback on its own thread; the callback queues app.start() onto the Qt main thread.
+            // Async self-test: GUI shows with an overlay. The worker callback only queues work onto
+            // the Qt main thread (logging, LAST_REPORT, app.start(), Dashboard).
             // SelfTest::~SelfTest() joins the worker (see SelfTest.hpp); that runs when `selftest`
             // goes out of scope at the end of this block, after qapp.exec() and watchdog_notify.join(),
             // not when exec() first returns. Until then the std::thread may still be joinable even if run() has completed.
             Scalpel::SelfTest::SelfTest selftest;
             selftest.registerCallback([&app](const Scalpel::SelfTest::Report& r) {
-                Scalpel::SelfTest::LAST_REPORT = r;
-                std::println("\n=== Startup self-test: {} / {} passed ===", r.passed, r.count);
-                for (size_t i = 0; i < r.count; ++i) {
-                    std::println("  [{}] {} : {}",
-                        r.cases[i].pass ? "PASS" : "FAIL",
-                        r.cases[i].name.data(),
-                        r.cases[i].detail.data());
-                }
-                std::println("=== End self-test ===");
-                if (r.passed < r.count)
-                    std::println(stderr,
-                        "[Warning] {} self-test case(s) failed; review hardware and configuration.",
-                        r.count - r.passed);
-
-                // Post to Qt main thread (Core 0) — never call Qt from worker thread directly
+                // Worker thread: queue only — logging, app.start(), and Qt UI on Core 0.
                 QMetaObject::invokeMethod(QCoreApplication::instance(), [&app, r]() {
+                    Scalpel::SelfTest::LAST_REPORT = r;
+                    print_selftest_report(r);
                     app.start();
                     Scalpel::GUI::Dashboard::on_selftest_done(r);
                 }, Qt::QueuedConnection);
@@ -183,21 +190,10 @@ int main(int argc, char* argv[]) {
                 Scalpel::SelfTest::SelfTest selftest;
                 selftest.registerCallback([](const Scalpel::SelfTest::Report& r) {
                     Scalpel::SelfTest::LAST_REPORT = r;
-                    std::println("\n=== Startup self-test: {} / {} passed ===", r.passed, r.count);
-                    for (size_t i = 0; i < r.count; ++i) {
-                        std::println("  [{}] {} : {}",
-                            r.cases[i].pass ? "PASS" : "FAIL",
-                            r.cases[i].name.data(),
-                            r.cases[i].detail.data());
-                    }
-                    std::println("=== End self-test ===");
-                    if (r.passed < r.count)
-                        std::println(stderr,
-                            "[Warning] {} self-test case(s) failed; review hardware and configuration.",
-                            r.count - r.passed);
                 });
                 selftest.start();
                 selftest.join();
+                print_selftest_report(Scalpel::SelfTest::LAST_REPORT);
             }
             app.start();
             app.wait_for_shutdown();
