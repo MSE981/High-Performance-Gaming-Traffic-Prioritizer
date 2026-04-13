@@ -1,6 +1,5 @@
 #include "Scheduler.hpp"
 #include "DataPlane.hpp"
-#include <print>
 
 namespace Scalpel::Traffic {
 
@@ -20,14 +19,11 @@ void Shaper::set_rate_limit(Mbps limit) {
 
 void Shaper::enqueue_normal(std::span<const uint8_t> pkt) {
     if (!normal_queue.push(pkt)) {
-        static std::atomic<uint64_t> drop_count{0};
-        uint64_t c = drop_count.fetch_add(1, std::memory_order_relaxed);
-        if (c % 1000 == 0) {
-            if (pkt.size() > 2048)
-                std::println(stderr, "[Alert] Drop: oversized packet ({} bytes), hw offload may be active.", pkt.size());
-            else
-                std::println(stderr, "[Alert] Drop: queue overflow (capacity 8192), total drops: {}.", c);
-        }
+        auto& tel = Telemetry::instance();
+        if (pkt.size() > 2048)
+            tel.shaper_oversized_drops.fetch_add(1, std::memory_order_relaxed);
+        else
+            tel.shaper_queue_overflow_drops.fetch_add(1, std::memory_order_relaxed);
     }
 }
 

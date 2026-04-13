@@ -6,7 +6,6 @@
 #include <cstring>
 #include <algorithm>
 #include <thread>
-#include <print>
 #include "Headers.hpp"
 #include "Telemetry.hpp"
 #include "Units.hpp"
@@ -40,11 +39,10 @@ namespace Scalpel::Traffic {
         }
 
         void refill() {
-            double req_limit = requested_limit.load(std::memory_order_acquire);
-            if (req_limit >= 0.0) {
+            double req_limit =
+                requested_limit.exchange(-1.0, std::memory_order_acq_rel);
+            if (req_limit >= 0.0)
                 apply_new_rate(Mbps{req_limit});
-                requested_limit.store(-1.0, std::memory_order_relaxed);
-            }
             auto now = std::chrono::steady_clock::now();
             std::chrono::duration<double> dt = now - last_refill;
             double new_tokens = dt.count() * rate_bytes_per_sec;
@@ -112,14 +110,13 @@ namespace Scalpel::Traffic {
     class Shaper {
         ZeroAllocRingBuffer<8192> normal_queue;
         TokenBucket               bucket;
-        uint64_t                  trace_counter = 0;
 
         using ResultHandler = void (*)(Shaper*, size_t);
         static constexpr std::array<ResultHandler, 3> result_handlers = {
             [](Shaper* s, size_t) {
                 s->normal_queue.pop();
-                if (++s->trace_counter % 5000 == 0)
-                    std::println("[Shaper] Stably forwarded 5000 normal packets.");
+                Telemetry::instance().shaper_normal_tx_complete.fetch_add(
+                    1, std::memory_order_relaxed);
             },
             [](Shaper* s, size_t bytes) {
                 s->bucket.refund(bytes);

@@ -671,6 +671,25 @@ void App::watchdog_loop() {
             }
         }
 
+        // Shaper stats: hot path only increments atomics; log here at 1 Hz.
+        {
+            static uint64_t prev_ok = 0, prev_ovf = 0, prev_big = 0;
+            uint64_t ok   = tel.shaper_normal_tx_complete.load(std::memory_order_relaxed);
+            uint64_t ovf  = tel.shaper_queue_overflow_drops.load(std::memory_order_relaxed);
+            uint64_t big  = tel.shaper_oversized_drops.load(std::memory_order_relaxed);
+            uint64_t dok  = ok - prev_ok;
+            uint64_t dovf = ovf - prev_ovf;
+            uint64_t dbig = big - prev_big;
+            if (dok != 0 || dovf != 0 || dbig != 0) {
+                std::println(
+                    "[Shaper] last 1s: normal_tx_ok +{}, queue_overflow_drops +{}, oversized_drops +{}",
+                    dok, dovf, dbig);
+            }
+            prev_ok  = ok;
+            prev_ovf = ovf;
+            prev_big = big;
+        }
+
         // System info refresh every 5 ticks (5 s)
         bool did_iface_scan = false;
         ++watchdog_tick;

@@ -36,6 +36,11 @@ namespace Scalpel {
         std::atomic<bool> dhcp_config_dirty{ false }; // set by GUI (Core 0), consumed by Core 1 watchdog
         std::atomic<bool> dns_config_dirty{ false };  // set by GUI (Core 0), consumed by Core 1 watchdog
 
+        // Traffic shaper: data plane fetch_add only; watchdog prints 1 Hz deltas.
+        std::atomic<uint64_t> shaper_normal_tx_complete{0};
+        std::atomic<uint64_t> shaper_queue_overflow_drops{0};
+        std::atomic<uint64_t> shaper_oversized_drops{0};
+
         // Device table: scanned from /proc/net/arp by Core 1 watchdog every 5s.
         // Plain char arrays — torn reads acceptable for display-only data.
         static constexpr uint8_t MAX_TRACKED_DEVICES = 64;
