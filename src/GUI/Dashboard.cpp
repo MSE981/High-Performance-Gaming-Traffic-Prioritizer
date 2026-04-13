@@ -1080,9 +1080,9 @@ void DhcpConfigDialog::on_apply() {
     edit_pool_start->setStyleSheet("");
     edit_pool_end->setStyleSheet("");
 
-    uint32_t start_ip = Config::parse_ip_str(edit_pool_start->text().toStdString());
-    uint32_t end_ip   = Config::parse_ip_str(edit_pool_end->text().toStdString());
-    if (ntohl(start_ip) >= ntohl(end_ip)) {
+    Net::IPv4Net start_ip = Config::parse_ip_str(edit_pool_start->text().toStdString());
+    Net::IPv4Net end_ip   = Config::parse_ip_str(edit_pool_end->text().toStdString());
+    if (ntohl(start_ip.raw()) >= ntohl(end_ip.raw())) {
         edit_pool_start->setStyleSheet("border: 1px solid #cc3333;");
         edit_pool_end->setStyleSheet("border: 1px solid #cc3333;");
         return;
@@ -1155,10 +1155,11 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
         static_dns_table->setItem(row, 0, new QTableWidgetItem(
             QString::fromLatin1(Config::STATIC_DNS_TABLE[i].hostname.data())));
         Net::IPv4Net ip = Config::STATIC_DNS_TABLE[i].ip;
+        const uint32_t r = ip.raw();
         static_dns_table->setItem(row, 1, new QTableWidgetItem(
             QString("%1.%2.%3.%4")
-                .arg(ip & 0xFF).arg((ip >> 8) & 0xFF)
-                .arg((ip >> 16) & 0xFF).arg((ip >> 24) & 0xFF)));
+                .arg((r >> 24) & 0xFF).arg((r >> 16) & 0xFF)
+                .arg((r >> 8) & 0xFF).arg(r & 0xFF)));
     }
     form->addRow(static_dns_table);
 
@@ -1571,7 +1572,7 @@ void Dashboard::post_notification(const QString& title, const QString& body) {
     }, Qt::QueuedConnection);
 }
 
-void Dashboard::on_selftest_done(const SelfTest::Report& r) {
+void Dashboard::on_selftest_done(const Scalpel::SelfTest::Report& r) {
     if (!instance_) return;
     // Hide overlay
     if (instance_->testing_overlay_)
