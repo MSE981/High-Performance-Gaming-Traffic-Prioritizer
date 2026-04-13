@@ -2,7 +2,6 @@
 #include <span>
 #include <array>
 #include <cstdint>
-#include <cstring>
 #include <atomic>
 #include "Headers.hpp"
 #include "Telemetry.hpp"

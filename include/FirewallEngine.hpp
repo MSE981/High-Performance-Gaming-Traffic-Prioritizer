@@ -2,7 +2,6 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
-#include <cstring>
 #include "Headers.hpp"
 #include "Config.hpp"
 
