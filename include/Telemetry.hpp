@@ -26,10 +26,6 @@ namespace Scalpel {
         std::array<CoreMetrics, 4> core_metrics{};
 
         // Diagnostics and control data (low-frequency read/write, no need for separation)
-        std::atomic<double> internal_limit_mbps{ 0.0 };
-        std::atomic<double> internal_pps{ 0.0 };
-        std::atomic<double> isp_pps{ 0.0 };
-        std::atomic<bool> is_probing{ false };
         std::atomic<bool> bridge_mode{ false };
         std::atomic<double> cpu_temp_celsius{ 0.0 };  // updated by Core 1 watchdog via timerfd, read by Qt UI
         std::atomic<int> qos_throttle_pct{ 85 };     // 0–100, written by GUI slider (Core 0), applied by Core 1 watchdog
