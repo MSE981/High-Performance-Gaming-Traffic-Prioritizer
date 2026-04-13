@@ -3,6 +3,9 @@
 #include "SystemOptimizer.hpp"
 #include <span>
 #include <chrono>
+#include <thread>
+#include <poll.h>
+#include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -17,6 +20,9 @@ namespace Scalpel::Logic {
 
 UpnpEngine::UpnpEngine(std::shared_ptr<NatEngine> nat, const std::string& ip)
     : nat_engine(nat), router_ip_str(ip) {
+    soap_job_notify_efd = ::eventfd(0, EFD_CLOEXEC);
+    if (soap_job_notify_efd < 0)
+        std::println(stderr, "[UPnP] soap job eventfd: {}", std::strerror(errno));
     running.store(true, std::memory_order_relaxed);
     ssdp_thread = std::thread([this]() { run_ssdp_server(); });
     soap_worker_thread = std::thread([this]() { run_soap_worker(); });
@@ -26,10 +32,16 @@ UpnpEngine::UpnpEngine(std::shared_ptr<NatEngine> nat, const std::string& ip)
 
 UpnpEngine::~UpnpEngine() {
     running.store(false, std::memory_order_relaxed);
+    if (soap_job_notify_efd >= 0)
+        (void)::eventfd_write(soap_job_notify_efd, 1);
     if (soap_listen_fd >= 0)
         (void)::shutdown(soap_listen_fd, SHUT_RDWR);
     if (soap_thread.joinable()) soap_thread.join();
     if (soap_worker_thread.joinable()) soap_worker_thread.join();
+    if (soap_job_notify_efd >= 0) {
+        ::close(soap_job_notify_efd);
+        soap_job_notify_efd = -1;
+    }
     if (ssdp_thread.joinable()) ssdp_thread.join();
 }
 
@@ -89,13 +101,29 @@ void UpnpEngine::run_soap_worker() {
     System::Optimizer::set_current_thread_affinity(1);
     for (;;) {
         SoapRequestJob job;
-        if (soap_jobs.pop(job)) {
+        while (soap_jobs.pop(job))
             dispatch_soap_http(job.cfd, std::string_view(job.buf.data(), job.len));
-            continue;
-        }
+
         if (!running.load(std::memory_order_relaxed))
             break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+        if (soap_job_notify_efd < 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+
+        struct pollfd pfd{};
+        pfd.fd     = soap_job_notify_efd;
+        pfd.events = POLLIN;
+        int pr     = ::poll(&pfd, 1, -1);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if ((pfd.revents & POLLIN) != 0) {
+            uint64_t v;
+            (void)::eventfd_read(soap_job_notify_efd, &v);
+        }
     }
 }
 
@@ -238,6 +266,8 @@ void UpnpEngine::run_soap_server() {
                 "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n";
             (void)::send(cfd, busy, sizeof(busy) - 1, MSG_NOSIGNAL);
             ::close(cfd);
+        } else if (soap_job_notify_efd >= 0) {
+            (void)::eventfd_write(soap_job_notify_efd, 1);
         }
     }
     if (soap_listen_fd >= 0) {
