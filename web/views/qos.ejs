@@ -298,10 +298,10 @@
             if (result.isConfirmed) {
               const r = result.value;
               // Fake adding to table
-              const newRow = \`<tr><td class="font-mono">\${r.port}</td><td>\${r.proto}</td><td>\${r.desc}</td></tr>\`;
+              const newRow = `<tr><td class="font-mono">${r.port}</td><td>${r.proto}</td><td>${r.desc}</td></tr>`;
               $('.data-table tbody').append(newRow);
               
-              Swal.fire('Added!', \`Rule for \${r.desc} (\${r.port}) added to hardware whitelist.\`, 'success');
+              Swal.fire('Added!', `Rule for ${r.desc} (${r.port}) added to hardware whitelist.`, 'success');
             }
           });
         });
