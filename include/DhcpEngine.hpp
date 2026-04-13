@@ -2,7 +2,6 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
-#include <cstring>
 #include <expected>
 #include <span>
 #include <string>
@@ -16,7 +15,7 @@ namespace Scalpel::Logic {
     };
 
     struct DhcpLease {
-        uint8_t      mac[6]{};
+        std::array<uint8_t, 6> mac{};
         Net::IPv4Net ip{};
         bool         active = false;
         std::chrono::steady_clock::time_point lease_expiry;
@@ -42,8 +41,8 @@ namespace Scalpel::Logic {
 
         std::expected<void, std::string> init_pool(Net::IPv4Net start_ip, Net::IPv4Net end_ip);
         void handle_dhcp_request(DhcpMessage& msg, int lan_fd);
-        Net::IPv4Net find_or_assign_lease(const uint8_t* mac);
-        void commit_lease(const uint8_t* mac, Net::IPv4Net ip);
+        Net::IPv4Net find_or_assign_lease(std::span<const uint8_t, 6> mac);
+        void commit_lease(Net::IPv4Net ip);
 
     public:
         explicit DhcpEngine(const std::string& lan_ip, DhcpPoolConfig cfg);
