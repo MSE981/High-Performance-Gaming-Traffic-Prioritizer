@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <cstring>
 #include <print>
+#include <optional>
 #include <thread>
 #include <atomic>
 #include <sys/eventfd.h>
@@ -107,6 +108,13 @@ int main(int argc, char* argv[]) {
             std::atomic<bool> gui_shutdown_runner_quit{false};
             QApplication qapp(argc, argv);
 
+            int selftest_done_efd = ::eventfd(0, EFD_CLOEXEC);
+            const bool selftest_wake_use_eventfd = (selftest_done_efd >= 0);
+            if (!selftest_wake_use_eventfd)
+                std::println(stderr,
+                    "[Warning] selftest done eventfd: {} (using Qt queued fallback).",
+                    std::strerror(errno));
+
             std::thread gui_shutdown_runner([&app, gui_stop_efd, &gui_shutdown_runner_quit]() {
                 Scalpel::System::Optimizer::set_current_thread_affinity(1);
                 for (;;) {
@@ -132,20 +140,37 @@ int main(int argc, char* argv[]) {
                     (void)::eventfd_write(gui_stop_efd, 1);
                 });
 
-            // Async self-test: GUI shows with an overlay. The worker callback only queues work onto
-            // the Qt main thread (logging, LAST_REPORT, app.start(), Dashboard).
+            std::optional<QSocketNotifier> selftest_done_sn;
+            if (selftest_wake_use_eventfd) {
+                selftest_done_sn.emplace(selftest_done_efd, QSocketNotifier::Read, &qapp);
+                QObject::connect(&*selftest_done_sn, &QSocketNotifier::activated, &qapp,
+                    [&app, selftest_done_efd](int) {
+                        uint64_t v;
+                        (void)::eventfd_read(selftest_done_efd, &v);
+                        const Scalpel::SelfTest::Report r = Scalpel::SelfTest::LAST_REPORT;
+                        print_selftest_report(r);
+                        app.start();
+                        Scalpel::GUI::Dashboard::on_selftest_done(r);
+                    });
+            }
+
+            // Async self-test: worker sets LAST_REPORT then eventfd_write(selftest_done_efd); Core 0
+            // handles read + print + app.start() + Dashboard in the QSocketNotifier slot.
             // SelfTest::~SelfTest() joins the worker (see SelfTest.hpp); that runs when `selftest`
             // goes out of scope at the end of this block, after qapp.exec() and watchdog_notify.join(),
             // not when exec() first returns. Until then the std::thread may still be joinable even if run() has completed.
             Scalpel::SelfTest::SelfTest selftest;
-            selftest.registerCallback([&app](const Scalpel::SelfTest::Report& r) {
-                // Worker thread: queue only — logging, app.start(), and Qt UI on Core 0.
-                QMetaObject::invokeMethod(QCoreApplication::instance(), [&app, r]() {
-                    Scalpel::SelfTest::LAST_REPORT = r;
-                    print_selftest_report(r);
-                    app.start();
-                    Scalpel::GUI::Dashboard::on_selftest_done(r);
-                }, Qt::QueuedConnection);
+            selftest.registerCallback([&app, selftest_done_efd, selftest_wake_use_eventfd](
+ const Scalpel::SelfTest::Report& r) {
+                Scalpel::SelfTest::LAST_REPORT = r;
+                if (selftest_wake_use_eventfd)
+                    (void)::eventfd_write(selftest_done_efd, 1);
+                else
+                    QMetaObject::invokeMethod(QCoreApplication::instance(), [&app, r]() {
+                        print_selftest_report(r);
+                        app.start();
+                        Scalpel::GUI::Dashboard::on_selftest_done(r);
+                    }, Qt::QueuedConnection);
             });
             selftest.start();
 
@@ -159,6 +184,14 @@ int main(int argc, char* argv[]) {
             });
 
             ret = qapp.exec(); // Block on main event loop
+
+            if (selftest_done_sn.has_value())
+                selftest_done_sn->setEnabled(false);
+            selftest_done_sn.reset();
+            if (selftest_wake_use_eventfd && selftest_done_efd >= 0) {
+                ::close(selftest_done_efd);
+                selftest_done_efd = -1;
+            }
 
             // If user closed the window (no UNIX signal), request stop on Core 1 runner
             if (!signal_received.exchange(true, std::memory_order_acq_rel))
