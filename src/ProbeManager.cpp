@@ -8,6 +8,7 @@
 
 namespace Scalpel::Probe {
 
+// Benchmark-only: tight loop to estimate heuristic throughput; not a production timer path.
 void Manager::run_internal_stress(std::function<void(double)> on_complete,
                                     std::atomic<bool>* cancel_requested) {
     auto& tel = Telemetry::instance();
