@@ -318,15 +318,12 @@ OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
     title->setObjectName("section_title");
     layout->addWidget(title);
 
-    // Mode and performance labels
+    // Mode label
     auto* info_row = new QHBoxLayout();
     lbl_mode = new QLabel("Mode: Acceleration");
-    lbl_cpu_capacity = new QLabel("CPU Capacity: --");
     lbl_mode->setStyleSheet("color: #00cc66; font-weight: bold; font-size: 15px;");
-    lbl_cpu_capacity->setStyleSheet("color: #ffaa00; font-weight: bold; font-size: 15px;");
     info_row->addWidget(lbl_mode);
     info_row->addStretch();
-    info_row->addWidget(lbl_cpu_capacity);
     layout->addLayout(info_row);
 
     // Dual chart row
@@ -406,8 +403,6 @@ void OverviewPage::refresh(const Telemetry& tel, const std::array<uint64_t, 4>& 
     bps_plot->update();
 
     lbl_mode->setText(tel.bridge_mode.load(std::memory_order_relaxed) ? "Mode: Bridge" : "Mode: Acceleration");
-    double cap = tel.internal_limit_mbps.load(std::memory_order_relaxed);
-    if (cap > 0) lbl_cpu_capacity->setText(QString("CPU Capacity: %1 Mbps").arg(cap, 0, 'f', 1));
 }
 
 // ═════════════════════════════════════════════════════════════

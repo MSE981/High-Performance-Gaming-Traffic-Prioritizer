@@ -34,7 +34,6 @@
 #include <string>
 #include <vector>
 #include "Telemetry.hpp"
-#include "ProbeManager.hpp"
 #include "SelfTest.hpp"
 
 namespace Scalpel::GUI {
@@ -106,7 +105,6 @@ private:
     RealTimePlot* pps_plot;
     RealTimePlot* bps_plot;
     QLabel* core_labels[4];
-    QLabel* lbl_cpu_capacity;
     QLabel* lbl_mode;
     // System info section
     QLabel* lbl_hostname;
