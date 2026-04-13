@@ -57,7 +57,7 @@ void NatEngine::tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
 
 bool NatEngine::process_outbound(Net::ParsedPacket& pkt) {
     if (!pkt.is_valid_ipv4()) return false;
-    if (wan_ip == 0) return false;
+    if (wan_ip.raw() == 0) return false;
 
     auto ip = pkt.ipv4;
     if (ip->protocol != 6 && ip->protocol != 17) return false;

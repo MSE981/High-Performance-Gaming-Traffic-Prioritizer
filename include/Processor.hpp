@@ -16,7 +16,14 @@ namespace Scalpel::Logic {
     // 5-tuple flow identifier
     struct FlowKey {
         Net::IPv4Net saddr, daddr;   // NBO — matched directly against IPv4Header fields
-        uint16_t     sport, dport;
+        uint16_t     sport = 0;
+        uint16_t     dport = 0;
+
+        constexpr FlowKey() noexcept : saddr(), daddr(), sport(0), dport(0) {}
+
+        constexpr FlowKey(Net::IPv4Net sa, Net::IPv4Net da, uint16_t sp, uint16_t dp) noexcept
+            : saddr(sa), daddr(da), sport(sp), dport(dp) {}
+
         bool operator==(const FlowKey&) const = default;
     };
 

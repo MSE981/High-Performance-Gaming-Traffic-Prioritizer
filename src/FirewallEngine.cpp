@@ -51,8 +51,8 @@ void FirewallEngine::track_outbound(const Net::ParsedPacket& pkt) {
     uint8_t proto = pkt.l4_protocol;
     if (proto != 6 && proto != 17) return;
 
-    uint32_t remote_ip = pkt.ipv4->daddr;
-    uint32_t lan_ip    = pkt.ipv4->saddr;
+    uint32_t remote_ip = pkt.ipv4->daddr.raw();
+    uint32_t lan_ip    = pkt.ipv4->saddr.raw();
     uint16_t remote_port, lan_port;
 
     if (proto == 17) {
@@ -128,7 +128,7 @@ bool FirewallEngine::check_inbound(const Net::ParsedPacket& pkt) {
     if (proto == 1) return true;
     if (proto != 6 && proto != 17) return false;
 
-    uint32_t remote_ip = pkt.ipv4->saddr;
+    uint32_t remote_ip = pkt.ipv4->saddr.raw();
     uint16_t sport;
 
     if (proto == 17) {

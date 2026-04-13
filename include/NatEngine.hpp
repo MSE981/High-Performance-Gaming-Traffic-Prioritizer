@@ -26,7 +26,7 @@ namespace Scalpel::Logic {
 
         static constexpr size_t MAX_SESSIONS = 65536;
 
-        std::array<NatSession, MAX_SESSIONS> sessions{};
+        std::array<NatSession, MAX_SESSIONS> sessions;
         std::array<int32_t, 65536> port_to_index{};
 
         std::array<UpnpMapping, 256> upnp_rules{};

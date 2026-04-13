@@ -36,7 +36,7 @@ namespace Scalpel::Logic {
         std::atomic<uint32_t> current_tick{0};
 
         static constexpr size_t MAX_BLOCKED = 64;
-        std::array<Net::IPv4Net, MAX_BLOCKED> blocked_ips{};
+        std::array<Net::IPv4Net, MAX_BLOCKED> blocked_ips;
         std::atomic<uint8_t> blocked_count{0};
 
         static uint32_t hash_remote(uint32_t remote_ip, uint16_t remote_port, uint8_t proto);
