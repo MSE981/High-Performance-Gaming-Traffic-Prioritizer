@@ -27,6 +27,7 @@ namespace Scalpel::Logic {
         Net::SpscRingBuffer<SoapRequestJob, 64> soap_jobs{};
         int soap_listen_fd = -1;
         int soap_job_notify_efd = -1;
+        int shutdown_efd = -1;
 
         void run_ssdp_server();
         void run_soap_server();
