@@ -51,7 +51,6 @@ target_link_libraries(engine_scheduler PRIVATE dataplane)
 
 # ── I/O engines ───────────────────────────────────────────────────────────────
 add_library(engine_net       src/NetworkEngine.cpp)
-add_library(engine_probe     src/ProbeManager.cpp)
 add_library(engine_upnp      src/UpnpEngine.cpp)
 
 target_link_libraries(engine_upnp PRIVATE dataplane)
@@ -63,7 +62,7 @@ add_library(selftest         src/SelfTest.cpp)
 set(ALL_SCALPEL_LIBS
     utils_network utils_system config dataplane
     engine_nat engine_dns engine_dhcp engine_firewall engine_scheduler
-    engine_net engine_probe engine_upnp
+    engine_net engine_upnp
     selftest
 )
 foreach(lib IN LISTS ALL_SCALPEL_LIBS)
@@ -97,8 +96,7 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/demo")
         demo/dns_demo.cpp
         demo/dhcp_demo.cpp
         demo/scheduler_demo.cpp
-        demo/firewall_demo.cpp
-        demo/probe_demo.cpp)
+        demo/firewall_demo.cpp)
         if(EXISTS "${CMAKE_SOURCE_DIR}/${demo_src}")
             get_filename_component(demo_name ${demo_src} NAME_WE)
             add_executable(${demo_name} ${demo_src})
