@@ -174,8 +174,8 @@ void NotificationPanel::mousePressEvent(QMouseEvent* event) {
 
 void NotificationPanel::mouseReleaseEvent(QMouseEvent* event) {
     int dy = event->pos().y() - swipe_start_y_;
-    // Upward swipe (dy < -24px) → collapse with fast-start kick
-    if (dy < -24) {
+    // Upward swipe (dy < -192px) → collapse with fast-start kick
+    if (dy < -192) {
         kick(-12.0);
         set_expanded(false);
     }
@@ -2163,7 +2163,7 @@ bool Dashboard::eventFilter(QObject* obj, QEvent* event) {
             bool panel_active = notif_panel_->is_expanded() || !notif_panel_->is_settled();
             auto* w = qobject_cast<QWidget*>(obj);
             bool on_panel = w && (w == notif_panel_ || notif_panel_->isAncestorOf(w));
-            if (panel_active && !on_panel && dy < -24) {
+            if (panel_active && !on_panel && dy < -192) {
                 notif_panel_->kick(-12.0);
                 notif_panel_->set_expanded(false);
             }
