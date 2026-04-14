@@ -296,7 +296,6 @@ void SelfTest::test_firewall(Report& r) {
     Config::DevicePolicy p{};
     p.ip      = block_ip;
     p.blocked = true;
-    // mac stays zero-initialized: firewall block logic only checks ip
     Config::upsert_device_policy(p);
     fw_block->sync_blocked_ips();
     bool block_pass = fw_block->is_blocked_ip(block_ip);

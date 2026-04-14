@@ -1486,10 +1486,6 @@ void DevicePage::refresh() {
         r.lbl_ul    = lbl_ul;
         r.val_dl    = dl;
         r.val_ul    = ul;
-        unsigned int m[6]{};
-        if (sscanf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x",
-                   &m[0],&m[1],&m[2],&m[3],&m[4],&m[5]) == 6)
-            for (int k = 0; k < 6; ++k) r.mac[k] = static_cast<uint8_t>(m[k]);
         size_t idx = rows_.size();
         rows_.push_back(r);
 
@@ -1531,7 +1527,6 @@ void DevicePage::on_apply_all() {
     for (auto& r : rows_) {
         Config::DevicePolicy p{};
         p.ip           = r.ip;
-        std::ranges::copy(r.mac, p.mac.begin());
         p.blocked      = !r.chk_allow->isChecked();
         p.rate_limited = r.chk_rate->isChecked();
         p.dl           = Traffic::Mbps{r.val_dl};

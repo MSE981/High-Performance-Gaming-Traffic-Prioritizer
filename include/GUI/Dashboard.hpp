@@ -268,7 +268,6 @@ private:
 
     struct DeviceRow {
         Net::IPv4Net ip{};
-        std::array<uint8_t, 6> mac{};
         QCheckBox* chk_allow;
         QCheckBox* chk_rate;
         QPushButton* lbl_dl;
