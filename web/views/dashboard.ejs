@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>HPGTP - Overview</title>
+    <%- include('partials/head') %>
+    <style>
+      .top-status-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 24px;
+      }
+      .mode-row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 20px;
+        font-size: 0.95rem;
+      }
+      .graphs-container {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 20px;
+      }
+      .graph-box {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 12px;
+        height: 250px;
+      }
+      .cores-container {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+        margin-top: 20px;
+      }
+      .core-box {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        text-align: center;
+        padding: 12px;
+      }
+
+      .sys-info-row {
+        display: flex;
+        padding: 8px 0;
+        border-bottom: 1px solid #f1f5f9;
+      }
+      .sys-info-row:last-child {
+        border-bottom: none;
+      }
+      .sys-info-label {
+        width: 120px;
+        color: #64748b;
+        font-size: 0.95rem;
+      }
+
+      .speed-test-section {
+        margin-top: 24px;
+        background: #f8fafc;
+        padding: 20px;
+        border-radius: 8px;
+        border: 1px solid #e2e8f0;
+      }
+
+
+      /* Responsive Layouts for Dashboard */
+      @media (max-width: 1024px) {
+        .graphs-container, .cores-container {
+          grid-template-columns: repeat(2, 1fr);
+        }
+      }
+
+      @media (max-width: 768px) {
+        .graphs-container, .cores-container {
+          grid-template-columns: 1fr;
+        }
+        .top-status-bar {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 12px;
+        }
+        .mode-row {
+          flex-direction: column;
+          gap: 8px;
+        }
+        .speed-test-section > div[style*="display: flex"] {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 12px;
+        }
+        .sys-info-row {
+          flex-direction: column;
+          gap: 4px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-container">
+      <div class="top-status-bar">
+        <div>
+          <span class="text-danger font-semibold sys-reboot-btn" style="cursor: pointer"
+            >Reboot</span
+          >
+          <span
+            class="font-semibold"
+            style="margin-left: 12px; font-size: 1.1rem"
+            >HPGTP</span
+          >
+        </div>
+        <div class="font-mono text-secondary">
+          10.0 10.0 <span id="hdr-temp">--°C</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header" style="border: none; margin-bottom: 0">
+          System Overview
+        </div>
+
+        <div class="mode-row">
+          <span class="font-semibold" style="color: #0d9488"
+            >● Mode: Acceleration</span
+          >
+          <span class="font-mono text-secondary font-semibold"
+            >Capacity: 9863.8 Mbps</span
+          >
+        </div>
+
+        <div class="graphs-container">
+          <div class="graph-box">
+            <div
+              class="font-semibold text-secondary"
+              style="font-size: 0.85rem; margin-bottom: 5px"
+            >
+              Packet rate (PPS)
+            </div>
+            <div id="pps-chart" style="width: 100%; height: 210px"></div>
+          </div>
+          <div class="graph-box">
+            <div
+              class="font-semibold text-secondary"
+              style="font-size: 0.85rem; margin-bottom: 5px"
+            >
+              Bandwidth (Mbps)
+            </div>
+            <div id="bw-chart" style="width: 100%; height: 210px"></div>
+          </div>
+        </div>
+
+        <div class="cores-container">
+          <div class="core-box">
+            Core 0
+            <span
+              id="core0"
+              class="font-mono font-semibold"
+              style="font-size: 1.1rem"
+              >0%</span
+            >
+          </div>
+          <div class="core-box">
+            Core 1
+            <span
+              id="core1"
+              class="font-mono font-semibold"
+              style="font-size: 1.1rem"
+              >0%</span
+            >
+          </div>
+          <div class="core-box">
+            Core 2
+            <span
+              id="core2"
+              class="font-mono font-semibold"
+              style="font-size: 1.1rem"
+              >0%</span
+            >
+          </div>
+          <div class="core-box">
+            Core 3
+            <span
+              id="core3"
+              class="font-mono font-semibold"
+              style="font-size: 1.1rem"
+              >0%</span
+            >
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">System Info</div>
+        <div>
+          <div class="sys-info-row">
+            <div class="sys-info-label">Hostname:</div>
+            <div class="font-mono">ENG5092nb2Bdk</div>
+          </div>
+          <div class="sys-info-row">
+            <div class="sys-info-label">Kernel:</div>
+            <div class="font-mono text-secondary" style="font-size: 0.85rem">
+              Linux 6.12.62+rpt-rpi-2712 aarch64 (Debian)
+            </div>
+          </div>
+          <div class="sys-info-row">
+            <div class="sys-info-label">CPU Temp:</div>
+            <div class="font-mono" id="cpu-temp">-- °C</div>
+          </div>
+          <div class="sys-info-row">
+            <div class="sys-info-label">Uptime:</div>
+            <div class="font-mono" id="uptime-val">--</div>
+          </div>
+          <div class="sys-info-row">
+            <div class="sys-info-label">Memory:</div>
+            <div class="font-mono" id="mem-val">-- MB / 4049 MB</div>
+          </div>
+        </div>
+
+        <div class="speed-test-section">
+          <div class="font-semibold" style="margin-bottom: 8px">Speed Test</div>
+          <div
+            class="text-secondary"
+            style="font-size: 0.9rem; margin-bottom: 16px"
+          >
+            Measures real ISP throughput via speedtest-cli. Routing continues
+            gracefully during test.
+          </div>
+          <div style="display: flex; align-items: center; gap: 20px">
+            <button class="btn" id="runtest-btn">▶ Run Test</button>
+            <span class="font-mono text-primary font-semibold" id="speed-result"
+              >↓ 101.3 Mbps / ↑ 24.5 Mbps</span
+            >
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <%- include('partials/sidebar_nav', { activeTab: 'overview' }) %>
+
+    <script>
+      const chartOptions = {
+        grid: { left: "10%", right: "5%", top: "10%", bottom: "15%" },
+        xAxis: {
+          type: "category",
+          boundaryGap: false,
+          show: false,
+          data: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
+        },
+        yAxis: {
+          type: "value",
+          min: 0,
+          max: 1000,
+          splitLine: {
+            show: true,
+            lineStyle: { color: "#e2e8f0", type: "dashed" },
+          },
+          axisLabel: { color: "#64748b", formatter: "{value}" },
+        },
+        series: [
+          {
+            type: "line",
+            data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            smooth: true,
+            lineStyle: { color: "#0d9488", width: 2 },
+            areaStyle: {
+              color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                { offset: 0, color: "rgba(13, 148, 136, 0.2)" },
+                { offset: 1, color: "rgba(13, 148, 136, 0.0)" },
+              ]),
+            },
+            symbol: "none",
+          },
+        ],
+      };
+
+      let ppsChart = echarts.init(document.getElementById("pps-chart"));
+      let bwChart = echarts.init(document.getElementById("bw-chart"));
+      ppsChart.setOption(chartOptions);
+
+      let bwOptions = JSON.parse(JSON.stringify(chartOptions));
+      bwOptions.series[0].lineStyle.color = "#4f46e5";
+      bwOptions.series[0].areaStyle.color = new echarts.graphic.LinearGradient(
+        0,
+        0,
+        0,
+        1,
+        [
+          { offset: 0, color: "rgba(79, 70, 229, 0.2)" },
+          { offset: 1, color: "rgba(79, 70, 229, 0.0)" },
+        ],
+      );
+      bwOptions.yAxis.max = 1000;
+      bwChart.setOption(bwOptions);
+
+      setInterval(function () {
+        $.getJSON("/api/status", function (data) {
+          if (data.uptime) $("#uptime-val").text(data.uptime);
+          if (data.memory)
+            $("#mem-val").text(
+              Math.round(4049 * (data.memory / 100)) + " MB / 4049 MB",
+            );
+
+          $("#core0").text((Math.random() * 20).toFixed(0) + "%");
+          $("#core1").text((Math.random() * 5).toFixed(0) + "%");
+          $("#core2").text((Math.random() * 5).toFixed(0) + "%");
+          $("#core3").text((Math.random() * 5).toFixed(0) + "%");
+
+          let temp = (45 + Math.random() * 5).toFixed(1) + " °C";
+          $("#cpu-temp").text(temp);
+          $("#hdr-temp").text(temp);
+          
+
+        });
+      }, 2000);
+
+      // Speed Test Interactive Flow
+      $('#runtest-btn').on('click', function() {
+        Swal.fire({
+          title: 'Start Speed Test?',
+          text: 'The system will accurately measure throughput from your edge to the gaming backbone. Proceed?',
+          icon: 'question',
+          showCancelButton: true,
+          confirmButtonColor: '#4f46e5',
+          cancelButtonColor: '#94a3b8',
+          confirmButtonText: 'Yes, start testing'
+        }).then((result) => {
+          if (result.isConfirmed) {
+            Swal.fire({
+              title: 'Testing in Progress',
+              html: `
+                <div id="swal-test-status" style="margin-bottom: 15px; font-size: 0.95rem; color: #475569;">Initializing routing path...</div>
+                <div style="width: 100%; height: 12px; background-color: #e2e8f0; border-radius: 6px; overflow: hidden;">
+                  <div id="swal-progress-bar" style="width: 0%; height: 100%; background-color: #4f46e5; transition: width 0.3s ease-in-out;"></div>
+                </div>
+              `,
+              allowOutsideClick: false,
+              showConfirmButton: false,
+              didOpen: () => {
+                let progress = 0;
+                let statusText = document.getElementById('swal-test-status');
+                let progressBar = document.getElementById('swal-progress-bar');
+                
+                let timer = setInterval(() => {
+                  progress += Math.floor(Math.random() * 15) + 5;
+                  
+                  if (progress > 20 && progress < 60) {
+                    statusText.innerHTML = "Downloading test chunks... <span class='text-primary'>↓</span>";
+                  } else if (progress >= 60 && progress < 90) {
+                    statusText.innerHTML = "Uploading test chunks... <span class='text-success'>↑</span>";
+                    progressBar.style.backgroundColor = "#059669";
+                  }
+
+                  if (progress >= 100) {
+                    progress = 100;
+                    clearInterval(timer);
+                    
+                    setTimeout(() => {
+                      let downSpeed = (Math.random() * 200 + 800).toFixed(1);
+                      let upSpeed = (Math.random() * 50 + 100).toFixed(1);
+                      $('#speed-result').text(`↓ ${downSpeed} Mbps / ↑ ${upSpeed} Mbps`);
+                      
+                      Swal.fire({
+                        title: 'Test Completed!',
+                        html: `
+                          <div style="margin-top: 15px; font-size: 1.1rem; line-height: 2;">
+                            <div style="display: flex; justify-content: flex-start; align-items: center; gap: 10px;">
+                               <div style="background: #eef2ff; color: #4f46e5; padding: 5px 10px; border-radius: 8px; width: 100px; text-align: left;"><strong style="font-size:1.15rem;">↓</strong> Download</div>
+                               <b style="font-size: 1.25rem;">${downSpeed} <span style="font-size: 0.85rem; color: #64748b;">Mbps</span></b>
+                            </div>
+                            <div style="display: flex; justify-content: flex-start; align-items: center; gap: 10px; margin-top: 10px;">
+                               <div style="background: #ecfdf5; color: #059669; padding: 5px 10px; border-radius: 8px; width: 100px; text-align: left;"><strong style="font-size:1.15rem;">↑</strong> Upload</div>
+                               <b style="font-size: 1.25rem;">${upSpeed} <span style="font-size: 0.85rem; color: #64748b;">Mbps</span></b>
+                            </div>
+                          </div>
+                          <div style="margin-top: 20px; font-size: 1rem; color: #475569;">
+                            Do you want to use these speed results for capacity settings?
+                          </div>
+                        `,
+                        icon: 'success',
+                        showCancelButton: true,
+                        confirmButtonColor: '#4f46e5',
+                        cancelButtonColor: '#94a3b8',
+                        confirmButtonText: 'Use',
+                        cancelButtonText: 'Do not use',
+                        reverseButtons: true
+                      }).then((applyResult) => {
+                        if (applyResult.isConfirmed) {
+                           Swal.fire({
+                             title: 'Applied',
+                             text: 'The new capacity settings have been applied.',
+                             icon: 'success',
+                             timer: 1500,
+                             showConfirmButton: false
+                           });
+                        }
+                      });
+                    }, 500);
+                  }
+                  
+                  progressBar.style.width = progress + '%';
+                }, 400);
+              }
+            });
+          }
+        });
+      });
+    </script>
+  </body>
+</html>

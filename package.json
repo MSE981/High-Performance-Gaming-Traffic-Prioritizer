@@ -1,0 +1,36 @@
+{
+  "name": "high-performance-gaming-traffic-prioritizer",
+  "version": "1.0.0",
+  "description": "> A Raspberry Pi 5 that sits between your router and your desk. Your games get the fast lane. Everything else waits its turn.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint web/**/*.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MSE981/High-Performance-Gaming-Traffic-Prioritizer.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/MSE981/High-Performance-Gaming-Traffic-Prioritizer/issues"
+  },
+  "homepage": "https://github.com/MSE981/High-Performance-Gaming-Traffic-Prioritizer#readme",
+  "dependencies": {
+    "ejs": "^5.0.1",
+    "express": "^5.2.1",
+    "express-session": "^1.19.0",
+    "socket.io": "^4.8.3",
+    "systeminformation": "^5.31.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.2.0",
+    "globals": "^17.4.0",
+    "prettier": "^3.8.2",
+    "prettier-plugin-ejs": "^1.0.3"
+  }
+}

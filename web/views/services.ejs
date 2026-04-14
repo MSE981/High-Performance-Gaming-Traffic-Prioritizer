@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>HPGTP - Services</title>
+    <%- include('partials/head') %>
+    <style>
+      .top-status-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 24px;
+      }
+
+      .service-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 20px;
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        margin-bottom: 16px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+        transition:
+          box-shadow 0.2s,
+          border-color 0.2s;
+      }
+      .service-row:hover {
+        border-color: #cbd5e1;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.04);
+      }
+
+      .service-info {
+        display: flex;
+        align-items: center;
+        flex: 1;
+      }
+
+      .service-toggle {
+        width: 44px;
+        height: 24px;
+        border-radius: 12px;
+        margin-right: 16px;
+        position: relative;
+        background-color: #e2e8f0;
+        cursor: pointer;
+        transition: background-color 0.2s;
+      }
+      .service-toggle::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px; /* Off state */
+        width: 20px;
+        height: 20px;
+        background: #ffffff;
+        border-radius: 50%;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+        transition: left 0.2s;
+      }
+      .service-toggle.on {
+        background-color: #059669; /* Emerald */
+      }
+      .service-toggle.on::after {
+        left: 22px;
+      }
+
+      .service-details {
+        display: flex;
+        flex-direction: column;
+      }
+      .service-name {
+        font-weight: 600;
+        color: #0f172a;
+        font-size: 1.05rem;
+      }
+      .service-desc {
+        color: #64748b;
+        font-size: 0.85rem;
+        margin-top: 4px;
+      }
+
+      .service-actions {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .status-badge {
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        background: #f1f5f9;
+      }
+      .status-badge.running {
+        color: #059669;
+      }
+      .status-badge.stopped {
+        color: #dc2626;
+      }
+
+      @media (max-width: 768px) {
+        .top-status-bar {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 12px;
+        }
+        .service-row {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 16px;
+        }
+        .service-info {
+          width: 100%;
+        }
+        .service-actions {
+          width: 100%;
+          justify-content: flex-end;
+          border-top: 1px solid #f1f5f9;
+          padding-top: 12px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-container">
+      <div class="top-status-bar">
+        <div>
+          <span class="text-danger font-semibold sys-reboot-btn" style="cursor: pointer"
+            >Reboot</span
+          >
+          <span
+            class="font-semibold"
+            style="margin-left: 12px; font-size: 1.1rem"
+            >HPGTP</span
+          >
+        </div>
+        <div class="font-mono text-secondary">10.0 10.0 46°C</div>
+      </div>
+
+      <div class="page-title" style="margin-bottom: 8px">Services</div>
+      <div
+        class="text-secondary"
+        style="font-size: 0.9rem; margin-bottom: 24px"
+      >
+        Enable or disable core network services. Changes take effect
+        immediately, no restart required.
+      </div>
+
+      <div class="service-row">
+        <div class="service-info">
+          <div class="service-toggle on"></div>
+          <div class="service-details">
+            <span class="service-name">NAT (Network Address Translation)</span>
+            <span class="service-desc">Zero-copy SNAT/DNAT engine</span>
+          </div>
+        </div>
+        <div class="service-actions">
+          <div class="status-badge running">● Running</div>
+        </div>
+      </div>
+
+      <div class="service-row">
+        <div class="service-info">
+          <div class="service-toggle on"></div>
+          <div class="service-details">
+            <span class="service-name">DHCP (Dynamic Host Config)</span>
+            <span class="service-desc"
+              >Automatically assigns IP addresses to LAN clients</span
+            >
+          </div>
+        </div>
+        <div class="service-actions">
+          <button class="btn btn-secondary" id="set-dhcp-btn">Set DHCP</button>
+          <div class="status-badge running">● Running</div>
+        </div>
+      </div>
+
+      <div class="service-row">
+        <div class="service-info">
+          <div class="service-toggle on"></div>
+          <div class="service-details">
+            <span class="service-name">DNS Cache</span>
+            <span class="service-desc"
+              >Local DNS cache for fast resolution</span
+            >
+          </div>
+        </div>
+        <div class="service-actions">
+          <button class="btn btn-secondary" id="set-dns-btn">Set DNS</button>
+          <div class="status-badge running">● Running</div>
+        </div>
+      </div>
+
+      <div class="service-row">
+        <div class="service-info">
+          <div class="service-toggle on"></div>
+          <div class="service-details">
+            <span class="service-name">Firewall</span>
+            <span class="service-desc">Inbound traffic filter rule engine</span>
+          </div>
+        </div>
+        <div class="service-actions">
+          <div class="status-badge running">● Running</div>
+        </div>
+      </div>
+
+      <div class="service-row">
+        <div class="service-info">
+          <div class="service-toggle"></div>
+          <div class="service-details">
+            <span class="service-name">UPnP (Plug & Play)</span>
+            <span class="service-desc"
+              >Automatic port mapping for NAT traversal</span
+            >
+          </div>
+        </div>
+        <div class="service-actions">
+          <div class="status-badge stopped">○ Stopped</div>
+        </div>
+      </div>
+    </div>
+
+    <%- include('partials/sidebar_nav', { activeTab: 'services' }) %>
+
+    <script>
+      $(document).ready(function() {
+        // Toggle interaction
+        $('.service-toggle').on('click', function() {
+          const $toggle = $(this);
+          const isOn = $toggle.hasClass('on');
+          const $badge = $toggle.closest('.service-row').find('.status-badge');
+          
+          if (isOn) {
+            $toggle.removeClass('on');
+            $toggle.css('background-color', '#e2e8f0'); // off gray
+            $badge.removeClass('running').addClass('stopped').html('○ Stopped');
+            Swal.fire({ toast: true, position: 'top-end', icon: 'info', title: 'Service Stopped', showConfirmButton: false, timer: 2000 });
+          } else {
+            $toggle.addClass('on');
+            $toggle.css('background-color', '#059669'); // emerald
+            $badge.removeClass('stopped').addClass('running').html('● Running');
+            Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: 'Service Started', showConfirmButton: false, timer: 2000 });
+          }
+        });
+
+        // Add proper toggle sliding logic
+        $('<style>').text('.service-toggle:not(.on)::after { left: 2px !important; } .service-toggle.on::after { left: 22px !important; }').appendTo('head');
+
+        // DHCP Modal
+        $('#set-dhcp-btn').on('click', function() {
+          Swal.fire({
+            title: 'Configure DHCP Range',
+            html: '<input id="swal-dhcp-start" class="swal2-input" placeholder="Start (e.g. 192.168.1.10)"><input id="swal-dhcp-end" class="swal2-input" placeholder="End (e.g. 192.168.1.200)">',
+            focusConfirm: false,
+            showCancelButton: true,
+            confirmButtonColor: '#4f46e5',
+            confirmButtonText: 'Save Settings',
+          }).then((result) => {
+            if (result.isConfirmed) {
+              Swal.fire('Saved!', 'LAN client IPs will now be assigned from the new range.', 'success');
+            }
+          });
+        });
+
+        // DNS Modal
+        $('#set-dns-btn').on('click', function() {
+          Swal.fire({
+            title: 'Upstream DNS Servers',
+            html: '<input id="swal-dns1" class="swal2-input" placeholder="Primary DNS (e.g. 8.8.8.8)"><input id="swal-dns2" class="swal2-input" placeholder="Secondary DNS (e.g. 1.1.1.1)">',
+            focusConfirm: false,
+            showCancelButton: true,
+            confirmButtonColor: '#4f46e5',
+            confirmButtonText: 'Update DNS',
+          }).then((result) => {
+            if (result.isConfirmed) {
+              Swal.fire('Updated!', 'DNS requests will now route strictly through selected upstream servers.', 'success');
+            }
+          });
+        });
+
+        // Reboot Action (Globally applicable to sys-reboot-btn)
+        $('.sys-reboot-btn').on('click', function() {
+          Swal.fire({
+            title: 'Execute Reboot?',
+            text: 'Are you sure you want to reboot the system? All active sessions will be dropped.',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#dc2626',
+            cancelButtonColor: '#94a3b8',
+            confirmButtonText: 'Yes, reboot now'
+          }).then((result) => {
+            if (result.isConfirmed) {
+              Swal.fire({ title: 'Rebooting Kernel...', html: 'System going down immediately.', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); }});
+              setTimeout(() => { location.reload(); }, 3000);
+            }
+          });
+        });
+      });
+    </script>
+  </body>
+</html>

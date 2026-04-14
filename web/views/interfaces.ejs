@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>HPGTP - Interfaces</title>
+    <%- include('partials/head') %>
+    <style>
+      .top-status-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 24px;
+      }
+
+      .interface-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 16px;
+        position: relative;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+      }
+      .interface-header {
+        font-weight: 700;
+        color: #0f172a;
+        margin-bottom: 16px;
+        font-size: 1.15rem;
+        font-family: ui-monospace, monospace;
+      }
+      .interface-status {
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        color: #64748b;
+        font-size: 0.85rem;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .role-group {
+        display: flex;
+        gap: 12px;
+      }
+      .role-btn {
+        flex: 1;
+        padding: 10px;
+        background: #f8fafc;
+        border: 1px solid #cbd5e1;
+        color: #475569;
+        text-align: center;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: 0.2s;
+        font-weight: 500;
+        font-size: 0.9rem;
+      }
+      .role-btn:hover {
+        background: #f1f5f9;
+      }
+      .role-btn.active {
+        background: #4f46e5;
+        color: #ffffff;
+        border-color: #4f46e5;
+        box-shadow: 0 2px 4px rgba(79, 70, 229, 0.2);
+      }
+
+      .advanced-options {
+        margin-top: 32px;
+        border-top: 1px solid #e2e8f0;
+        padding-top: 24px;
+      }
+      .advanced-title {
+        color: #0f172a;
+        font-weight: 600;
+        font-size: 1.1rem;
+        margin-bottom: 20px;
+      }
+      .checkbox-row {
+        display: flex;
+        align-items: center;
+        margin-bottom: 16px;
+        color: #334155;
+        font-size: 0.95rem;
+      }
+      .adv-toggle-btn {
+        display: flex;
+        align-items: center;
+        background: #f8fafc;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        color: #334155;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 0.9rem;
+        transition: all 0.2s ease;
+        height: 40px;
+        justify-content: center;
+        padding: 0 16px;
+        gap: 8px;
+        user-select: none;
+      }
+      .adv-toggle-btn:hover {
+        background: #f1f5f9;
+        border-color: #94a3b8;
+      }
+      .adv-toggle-box {
+        width: 22px;
+        height: 22px;
+        border-radius: 6px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        flex-shrink: 0;
+        transition: all 0.2s ease;
+      }
+      .adv-toggle-box.active {
+        background-color: #4f46e5;
+        border: 1px solid #4f46e5;
+      }
+      .adv-toggle-box.active::after {
+        content: "✓";
+        color: white;
+        font-size: 13px;
+        font-weight: bold;
+      }
+      .adv-toggle-box.inactive {
+        border: 2px solid #cbd5e1;
+        background: #ffffff;
+      }
+
+      .bottom-actions {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 32px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-container">
+      <div class="top-status-bar">
+        <div>
+          <span class="text-danger font-semibold sys-reboot-btn" style="cursor: pointer"
+            >Reboot</span
+          >
+          <span
+            class="font-semibold"
+            style="margin-left: 12px; font-size: 1.1rem"
+            >HPGTP</span
+          >
+        </div>
+        <div class="font-mono text-secondary">10.0 10.0 45°C</div>
+      </div>
+
+      <div class="page-title" style="margin-bottom: 8px">
+        Network Interface Roles
+      </div>
+      <div
+        class="text-secondary"
+        style="font-size: 0.9rem; margin-bottom: 24px"
+      >
+        Assign a role to each detected interface. Exactly one must be set as
+        Default Gateway.
+      </div>
+
+      <div class="interface-card">
+        <div class="interface-header">eth0</div>
+        <div class="interface-status">
+          <span style="color: #cbd5e1">○</span> Down
+        </div>
+        <div class="role-group">
+          <div class="role-btn">WAN</div>
+          <div class="role-btn active">LAN</div>
+          <div class="role-btn">Gateway</div>
+          <div class="role-btn">Disabled</div>
+        </div>
+      </div>
+
+      <div class="interface-card">
+        <div class="interface-header">eth1</div>
+        <div class="interface-status">
+          <span style="color: #cbd5e1">○</span> Down
+        </div>
+        <div class="role-group">
+          <div class="role-btn">WAN</div>
+          <div class="role-btn">LAN</div>
+          <div class="role-btn active">Gateway</div>
+          <div class="role-btn">Disabled</div>
+        </div>
+      </div>
+
+      <div class="interface-card">
+        <div class="interface-header">eth2</div>
+        <div class="interface-status">
+          <span style="color: #cbd5e1">○</span> Down
+        </div>
+        <div class="role-group">
+          <div class="role-btn">WAN</div>
+          <div class="role-btn">LAN</div>
+          <div class="role-btn">Gateway</div>
+          <div class="role-btn active">Disabled</div>
+        </div>
+      </div>
+
+      <div class="interface-card">
+        <div class="interface-header">eth3</div>
+        <div class="interface-status">
+          <span style="color: #cbd5e1">○</span> Down
+        </div>
+        <div class="role-group">
+          <div class="role-btn">WAN</div>
+          <div class="role-btn">LAN</div>
+          <div class="role-btn">Gateway</div>
+          <div class="role-btn active">Disabled</div>
+        </div>
+      </div>
+
+      <div class="advanced-options">
+        <div class="advanced-title">Advanced Options</div>
+
+        <div class="checkbox-row">
+          <div style="width: 200px; font-weight: 500">
+            Spanning Tree Protocol:
+          </div>
+          <div class="adv-toggle-btn">
+            <div class="adv-toggle-box inactive"></div>
+            Enable STP
+          </div>
+        </div>
+
+        <div class="checkbox-row">
+          <div style="width: 200px; font-weight: 500">IGMP Snooping:</div>
+          <div class="adv-toggle-btn">
+            <div class="adv-toggle-box inactive"></div>
+            Enable IGMP Snooping
+          </div>
+        </div>
+
+        <div class="bottom-actions">
+          <button class="btn btn-secondary">Refresh</button>
+          <div style="display: flex; gap: 12px">
+            <button
+              class="btn btn-secondary"
+              style="border-radius: 24px; padding: 10px 24px"
+            >
+              Reset
+            </button>
+            <button class="btn" style="border-radius: 24px; padding: 10px 24px">
+              Save / Apply
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <%- include('partials/sidebar_nav', { activeTab: 'interfaces' }) %>
+
+    <script>
+      $(document).ready(function() {
+        // Role Selection
+        $('.role-btn').on('click', function() {
+          $(this).siblings().removeClass('active');
+          $(this).addClass('active');
+          
+          let roleName = $(this).text();
+          let $status = $(this).closest('.interface-card').find('.interface-status');
+          
+          if (roleName === 'Disabled') {
+             $status.html('<span style="color: #cbd5e1">○</span> Down');
+          } else {
+             $status.html('<span style="color: #059669">●</span> Up (1Gbps)');
+          }
+        });
+
+        // Advanced Options Toggle Buttons
+        $('.adv-toggle-btn').on('click', function() {
+          const $box = $(this).find('.adv-toggle-box');
+          if ($box.hasClass('active')) {
+            $box.removeClass('active').addClass('inactive');
+          } else {
+            $box.removeClass('inactive').addClass('active');
+          }
+        });
+
+        // Bottom Actions
+        $('button.btn-secondary:contains("Refresh")').on('click', function() {
+          Swal.fire({ title: 'Probing Hardware...', text: 'Scanning for network interfaces.', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); }});
+          setTimeout(() => { Swal.fire('Complete', 'Interface scan finished.', 'info'); }, 800);
+        });
+
+        $('button.btn-secondary:contains("Reset")').on('click', function() {
+          $('.role-btn:contains("Disabled")').click();
+          Swal.fire({ toast: true, position: 'top-end', icon: 'info', title: 'Roles Reset', showConfirmButton: false, timer: 2000 });
+        });
+
+        $('button.btn:contains("Save / Apply")').on('click', function() {
+          Swal.fire({ title: 'Applying Port Configurations...', text: 'Writing hardware offload paths...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); }});
+          setTimeout(() => { Swal.fire('Applied Successfully', 'Network interfaces have been successfully reconfigured.', 'success'); }, 1200);
+        });
+        
+        // Reboot Global
+        $('.sys-reboot-btn').on('click', function() {
+          Swal.fire({
+            title: 'Execute Reboot?',
+            text: 'System will restart. Active streams will drop.',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#dc2626',
+            confirmButtonText: 'Reboot'
+          }).then((result) => {
+            if (result.isConfirmed) {
+              Swal.fire({ title: 'Rebooting...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); }});
+            }
+          });
+        });
+      });
+    </script>
+  </body>
+</html>

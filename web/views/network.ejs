@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Network Diagnostics</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        background: #1a1a1a;
+        color: white;
+        padding: 20px;
+        margin: 0;
+      }
+
+      h1 {
+        text-align: center;
+        margin-bottom: 30px;
+      }
+
+      .navbar {
+        background-color: #2d2d2d;
+        overflow: hidden;
+        border-radius: 8px;
+        margin-bottom: 25px;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+        display: flex;
+        justify-content: center;
+        flex-wrap: wrap;
+      }
+
+      .navbar a {
+        display: block;
+        color: #ccc;
+        text-align: center;
+        padding: 14px 20px;
+        text-decoration: none;
+        font-weight: bold;
+        transition: 0.3s;
+      }
+
+      .navbar a:hover {
+        background-color: #444;
+        color: white;
+      }
+
+      .navbar a.active {
+        background-color: #28a745;
+        color: white;
+      }
+
+      .control-panel {
+        background: #2d2d2d;
+        padding: 25px;
+        border-radius: 10px;
+        max-width: 800px;
+        margin: 0 auto;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+      }
+
+      h2 {
+        text-align: center;
+        margin-top: 0;
+      }
+
+      .input-group {
+        display: flex;
+        justify-content: center;
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+
+      input {
+        padding: 12px;
+        width: 60%;
+        box-sizing: border-box;
+        border-radius: 5px;
+        border: 1px solid #555;
+        background: #222;
+        color: white;
+        font-size: 16px;
+      }
+
+      button {
+        padding: 12px 20px;
+        background: #007bff;
+        color: white;
+        border: none;
+        cursor: pointer;
+        border-radius: 5px;
+        font-weight: bold;
+        font-size: 16px;
+        transition: 0.3s;
+      }
+
+      button:hover {
+        background: #0056b3;
+      }
+
+      button:disabled {
+        background: #555;
+        cursor: not-allowed;
+      }
+
+      .terminal-window {
+        background: #0c0c0c;
+        color: #00ff00;
+        padding: 15px;
+        border-radius: 5px;
+        text-align: left;
+        min-height: 250px;
+        white-space: pre-wrap;
+        font-family: "Courier New", Courier, monospace;
+        overflow-y: auto;
+        border: 1px solid #333;
+      }
+    </style>
+  </head>
+
+  <body>
+    <h1>🚀 Core System Management (BMC)</h1>
+
+    <div class="navbar">
+      <a href="/">📊 Dashboard</a>
+      <a href="/network" class="active">🌐 Network</a>
+      <a href="/qos">🚦 QoS</a>
+      <a href="/devices">📱 Devices</a>
+      <a href="/logs">📈 Logs</a>
+      <a href="/dev">🛠️ Dev</a>
+      <a href="/security"> Security</a>
+    </div>
+
+    <div class="control-panel">
+      <h2>Connection Test (Ping)</h2>
+
+      <div class="input-group">
+        <input
+          type="text"
+          id="target-ip"
+          value="8.8.8.8"
+          placeholder="Enter IP or Domain (e.g., google.com)"
+        />
+        <button onclick="executePing()" id="ping-btn">Start Ping</button>
+      </div>
+
+      <div class="terminal-window" id="output-terminal">
+        System initialized. Ready to send ICMP echo requests...
+      </div>
+    </div>
+
+    <script>
+      function executePing() {
+        const target = document.getElementById("target-ip").value;
+        const terminal = document.getElementById("output-terminal");
+        const pingBtn = document.getElementById("ping-btn");
+
+        terminal.innerText =
+          "Pinging " + target + "...\nWaiting for response...";
+        pingBtn.disabled = true;
+        pingBtn.innerText = "Running...";
+
+        const formData = new URLSearchParams();
+        formData.append("target", target);
+
+        fetch("/api/ping", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: formData.toString(),
+        })
+          .then((response) => response.json())
+          .then((data) => {
+            terminal.innerText = data.output;
+            pingBtn.disabled = false;
+            pingBtn.innerText = "Start Ping";
+          })
+          .catch((error) => {
+            terminal.innerText = "Network Error: " + error;
+            pingBtn.disabled = false;
+            pingBtn.innerText = "Start Ping";
+          });
+      }
+    </script>
+  </body>
+</html>
