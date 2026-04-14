@@ -6,6 +6,7 @@
 #include <print>
 #include <cassert>
 #include <array>
+#include <memory>
 
 int main() {
     std::println("=== Scheduler / TokenBucket Demo ===");
@@ -54,15 +55,15 @@ int main() {
 
     // 3. Shaper: enqueue then process_queue (tx_fd = -1, sends will fail)
     {
-        HPGTP::Traffic::Shaper shaper(HPGTP::Traffic::Mbps{1000.0});
+        auto shaper = std::make_unique<HPGTP::Traffic::Shaper>(HPGTP::Traffic::Mbps{1000.0});
 
         std::array<uint8_t, 128> pkt{};
-        shaper.enqueue_normal(std::span<const uint8_t>{pkt});
-        shaper.enqueue_normal(std::span<const uint8_t>{pkt});
+        shaper->enqueue_normal(std::span<const uint8_t>{pkt});
+        shaper->enqueue_normal(std::span<const uint8_t>{pkt});
 
         // process_queue with invalid fd: try_hardware_send returns Fatal,
         // packet is discarded and popped; queue should drain without hang.
-        shaper.process_queue(-1);
+        shaper->process_queue(-1);
 
         std::println("[PASS] Shaper: enqueue + process_queue with invalid fd completed.");
     }

@@ -53,8 +53,8 @@ namespace HPGTP::Logic {
         std::array<StaticRecord, MAX_STATIC> static_records{};
         std::atomic<uint8_t> static_count{0};
 
-        void do_bounce(Net::ParsedPacket& pkt, DnsHeader* dns, Net::UDPHeader* udp,
-                       Net::IPv4Net ip, int bounce_fd);
+        [[nodiscard]] bool do_bounce(Net::ParsedPacket& pkt, DnsHeader* dns, Net::UDPHeader* udp,
+                                     Net::IPv4Net ip, int bounce_fd);
         static void rewrite_upstream(Net::ParsedPacket& pkt, Net::IPv4Net upstream_ip);
 
     public:

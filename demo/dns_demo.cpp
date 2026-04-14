@@ -40,7 +40,7 @@ static std::vector<uint8_t> make_dns_query(const char* hostname) {
     // Frame: 14 Eth + 20 IP + 8 UDP + 12 DNS hdr + qname + 4 (type+class)
     size_t dns_payload = 12 + qname_len + 4;
     size_t total       = 14 + 20 + 8 + dns_payload;
-    std::vector<uint8_t> buf(total, 0);
+    std::vector<uint8_t> buf(total + 64, 0);
 
     // Ethernet
     buf[12] = 0x08; buf[13] = 0x00;
