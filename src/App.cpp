@@ -296,7 +296,9 @@ App::~App() {
     if (worker_upstream.joinable())   worker_upstream.join();
     close_worker_poll_fds();
     running_watchdog.store(false, std::memory_order_relaxed);
+    wake_watchdog_for_shutdown();
     if (watchdog.joinable()) watchdog.join();
+    close_watchdog_stop_efd();
 }
 
 void App::open_worker_poll_fds_for_start() {
@@ -333,6 +335,18 @@ void App::wake_proc_threads_for_shutdown() {
     }
 }
 
+void App::wake_watchdog_for_shutdown() {
+    if (watchdog_stop_efd_ >= 0)
+        (void)::eventfd_write(watchdog_stop_efd_, 1);
+}
+
+void App::close_watchdog_stop_efd() {
+    if (watchdog_stop_efd_ >= 0) {
+        ::close(watchdog_stop_efd_);
+        watchdog_stop_efd_ = -1;
+    }
+}
+
 void App::stop() {
     if (shutdown_sequence_started_.exchange(true, std::memory_order_acq_rel)) return;
     running_workers.store(false, std::memory_order_relaxed);
@@ -360,6 +374,14 @@ void App::start() {
         std::memory_order_relaxed);
     Scalpel::System::Optimizer::lock_cpu_frequency();
 
+    if (watchdog_stop_efd_ < 0) {
+        watchdog_stop_efd_ = ::eventfd(0, EFD_CLOEXEC);
+        if (watchdog_stop_efd_ < 0) {
+            std::println(stderr, "[Fatal] watchdog stop eventfd: {}",
+                std::strerror(errno));
+            std::exit(1);
+        }
+    }
     running_watchdog.store(true, std::memory_order_relaxed);
     watchdog = std::thread([this]() { watchdog_loop(); });
 
@@ -539,9 +561,6 @@ void App::watchdog_loop() {
     int      last_throttle_pct = 100;
 
     auto& si = tel.sys_info;
-    struct pollfd pfds[2]{};
-    pfds[0] = { tfd,          POLLIN, 0 };
-    pfds[1] = { si.rescan_poll_fd(), POLLIN, 0 };
 
     // Raw-fd sysfs reader — no heap, no ifstream
     auto read_sysfd = [](const char* path, std::span<char> out) {
@@ -595,15 +614,33 @@ void App::watchdog_loop() {
     };
 
     while (running_watchdog.load(std::memory_order_relaxed)) {
-        int nfds = (si.rescan_poll_fd() >= 0) ? 2 : 1;
-        if (poll(pfds, nfds, 1000) <= 0) continue;
+        const int rescan_fd = si.rescan_poll_fd();
+        struct pollfd pfds[3]{};
+        pfds[0] = { tfd, POLLIN, 0 };
+        pfds[1] = { watchdog_stop_efd_, POLLIN, 0 };
+        int nfds = 2;
+        if (rescan_fd >= 0) {
+            pfds[2] = { rescan_fd, POLLIN, 0 };
+            nfds    = 3;
+        }
+        int pr = poll(pfds, nfds, -1);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+
+        if ((pfds[1].revents & POLLIN) != 0) {
+            uint64_t v;
+            (void)::eventfd_read(watchdog_stop_efd_, &v);
+            continue;
+        }
 
         bool timer_fired = (pfds[0].revents & POLLIN) != 0;
         bool force_scan  = false;
 
         if (timer_fired && ::read(tfd, &expirations, sizeof(expirations)) <= 0)
             timer_fired = false;
-        if (nfds == 2 && (pfds[1].revents & POLLIN)) {
+        if (nfds == 3 && (pfds[2].revents & POLLIN)) {
             si.consume_rescan();
             force_scan = true;
         }

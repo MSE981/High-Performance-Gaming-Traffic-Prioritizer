@@ -146,10 +146,13 @@ class App {
         int stop_efd{-1};
     };
     std::array<WorkerPollSync, 2> worker_poll_{};
+    int watchdog_stop_efd_{-1};
 
     void open_worker_poll_fds_for_start();
     void close_worker_poll_fds();
     void wake_proc_threads_for_shutdown();
+    void wake_watchdog_for_shutdown();
+    void close_watchdog_stop_efd();
 
 public:
     App();
