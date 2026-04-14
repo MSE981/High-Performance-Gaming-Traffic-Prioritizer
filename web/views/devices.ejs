@@ -11,64 +11,90 @@
         margin-bottom: 24px;
       }
 
+      .devices-container {
+        width: 100%;
+        overflow-x: auto;
+        padding-bottom: 16px;
+      }
+      .devices-table {
+        min-width: 1050px;
+      }
+
+      .table-header {
+        display: grid;
+        grid-template-columns: 140px 150px 140px 140px 200px 200px;
+        gap: 16px;
+        padding: 0 20px;
+        margin-bottom: 8px;
+        color: #64748b;
+        font-size: 0.85rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        align-items: center;
+      }
+      .table-header div {
+        text-align: left;
+      }
+      .table-header .center-col {
+        text-align: center;
+      }
+
       .device-card {
         background: #ffffff;
         border: 1px solid #e2e8f0;
         border-radius: 12px;
-        margin-bottom: 20px;
+        margin-bottom: 12px;
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
-        overflow: hidden;
-      }
-      .device-header {
-        padding: 12px 20px;
-        border-bottom: 1px solid #f1f5f9;
-        background: #f8fafc;
-        display: flex;
-        align-items: baseline;
-      }
-      .device-header span.ip {
-        font-weight: 600;
-        color: #0f172a;
-        font-size: 1.05rem;
-        margin-right: 12px;
-        font-family: ui-monospace, monospace;
-      }
-      .device-header span.mac {
-        color: #64748b;
-        font-size: 0.85rem;
-        font-family: ui-monospace, monospace;
-      }
-
-      .device-body {
-        padding: 20px;
-      }
-
-      .toggle-group {
-        display: flex;
+        display: grid;
+        grid-template-columns: 140px 150px 140px 140px 200px 200px;
         gap: 16px;
-        margin-bottom: 20px;
+        align-items: center;
+        padding: 12px 20px;
+        transition: all 0.2s ease;
       }
+      .device-card:hover {
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        border-color: #cbd5e1;
+      }
+
+      .device-ip {
+        font-family: ui-monospace, monospace;
+        color: #0f172a;
+        font-weight: 600;
+        font-size: 1.05rem;
+      }
+      .device-mac {
+        font-family: ui-monospace, monospace;
+        color: #64748b;
+        font-size: 0.9rem;
+      }
+
       .toggle-btn {
         display: flex;
         align-items: center;
         background: #f8fafc;
         border: 1px solid #cbd5e1;
-        padding: 8px 16px;
         border-radius: 8px;
         color: #334155;
         cursor: pointer;
-        font-weight: 500;
+        font-weight: 600;
         font-size: 0.9rem;
-        transition: background 0.2s;
+        transition: all 0.2s ease;
+        height: 40px;
+        justify-content: center;
+        width: 100%;
+        box-sizing: border-box;
       }
       .toggle-btn:hover {
         background: #f1f5f9;
+        border-color: #94a3b8;
       }
       .toggle-box {
         width: 18px;
         height: 18px;
         border-radius: 4px;
-        margin-right: 10px;
+        margin-right: 8px;
         display: flex;
         justify-content: center;
         align-items: center;
@@ -91,43 +117,75 @@
       .rate-limit-row {
         display: flex;
         align-items: center;
-        margin-bottom: 12px;
+        justify-content: center;
       }
       .rate-btn {
-        background: #f1f5f9;
+        background: #f8fafc;
         border: 1px solid #cbd5e1;
         color: #334155;
         width: 36px;
-        height: 36px;
+        height: 40px;
         display: flex;
         justify-content: center;
         align-items: center;
         border-radius: 6px;
         cursor: pointer;
         font-size: 1.2rem;
-        transition: background 0.2s;
+        transition: all 0.2s ease;
       }
       .rate-btn:hover {
         background: #e2e8f0;
+        border-color: #94a3b8;
       }
-      .rate-input {
-        flex: 1;
-        background: #ffffff;
-        border: 1px solid #cbd5e1;
-        color: #0f172a;
-        height: 36px;
+      .rate-input-wrap {
         display: flex;
-        justify-content: center;
         align-items: center;
-        margin: 0 12px;
+        border: 1px solid #cbd5e1;
         border-radius: 6px;
-        font-family: ui-monospace, monospace;
-        font-weight: 500;
+        background: #ffffff;
+        height: 40px;
+        margin: 0 6px;
+        padding: 0 10px;
+        gap: 4px;
+        box-sizing: border-box;
       }
-      .rate-input.upload {
-        color: #4f46e5;
+      .rate-input-wrap.upload {
         border-color: #c7d2fe;
         background: #eef2ff;
+      }
+      .rate-input-wrap .rate-prefix,
+      .rate-input-wrap .rate-suffix {
+        font-family: ui-monospace, monospace;
+        font-size: 0.9rem;
+        font-weight: 500;
+        color: #64748b;
+        white-space: nowrap;
+        user-select: none;
+      }
+      .rate-input-wrap.upload .rate-prefix,
+      .rate-input-wrap.upload .rate-suffix {
+        color: #6366f1;
+      }
+      .rate-input-wrap input.rate-input {
+        width: 60px;
+        border: none;
+        outline: none;
+        background: transparent;
+        font-family: ui-monospace, monospace;
+        font-weight: 600;
+        font-size: 0.95rem;
+        color: #0f172a;
+        text-align: center;
+        padding: 0;
+        -moz-appearance: textfield;
+      }
+      .rate-input-wrap.upload input.rate-input {
+        color: #4f46e5;
+      }
+      .rate-input-wrap input.rate-input::-webkit-outer-spin-button,
+      .rate-input-wrap input.rate-input::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
       }
     </style>
   </head>
@@ -156,42 +214,20 @@
         limits, then click Apply All.
       </div>
 
-      <div class="device-card">
-        <div class="device-header">
-          <span class="ip">192.168.3.14</span>
-          <span class="mac">b6:b1:30:dc:93:27</span>
-        </div>
-        <div class="device-body">
-          <div class="toggle-group">
-            <div class="toggle-btn">
-              <div class="toggle-box active"></div>
-              Allow Access
-            </div>
-            <div class="toggle-btn">
-              <div class="toggle-box inactive"></div>
-              Rate Limit
-            </div>
+      <div class="devices-container">
+        <div class="devices-table">
+          <div class="table-header">
+            <div>IP Address</div>
+            <div>MAC Address</div>
+            <div>Network Access</div>
+            <div>Rate Limiting</div>
+            <div class="center-col">Download Limit</div>
+            <div class="center-col">Upload Limit</div>
           </div>
-          <div class="rate-limit-row">
-            <div class="rate-btn">-</div>
-            <div class="rate-input">↓ 100.0 Mbps</div>
-            <div class="rate-btn">+</div>
-          </div>
-          <div class="rate-limit-row">
-            <div class="rate-btn">-</div>
-            <div class="rate-input upload">↑ 10.0 Mbps</div>
-            <div class="rate-btn">+</div>
-          </div>
-        </div>
-      </div>
 
-      <div class="device-card">
-        <div class="device-header">
-          <span class="ip">192.168.3.1</span>
-          <span class="mac">4c:50:77:3d:a3:98</span>
-        </div>
-        <div class="device-body">
-          <div class="toggle-group">
+          <div class="device-card">
+            <div class="device-ip">192.168.3.14</div>
+            <div class="device-mac">b6:b1:30:dc:93:27</div>
             <div class="toggle-btn">
               <div class="toggle-box active"></div>
               Allow Access
@@ -200,16 +236,55 @@
               <div class="toggle-box inactive"></div>
               Rate Limit
             </div>
+            <div class="rate-limit-row">
+              <div class="rate-btn">-</div>
+              <div class="rate-input-wrap">
+                <span class="rate-prefix">↓</span>
+                <input class="rate-input" type="text" inputmode="numeric" pattern="[0-9]*" value="100">
+                <span class="rate-suffix">Mbps</span>
+              </div>
+              <div class="rate-btn">+</div>
+            </div>
+            <div class="rate-limit-row">
+              <div class="rate-btn">-</div>
+              <div class="rate-input-wrap upload">
+                <span class="rate-prefix">↑</span>
+                <input class="rate-input" type="text" inputmode="numeric" pattern="[0-9]*" value="10">
+                <span class="rate-suffix">Mbps</span>
+              </div>
+              <div class="rate-btn">+</div>
+            </div>
           </div>
-          <div class="rate-limit-row">
-            <div class="rate-btn">-</div>
-            <div class="rate-input">↓ 100.0 Mbps</div>
-            <div class="rate-btn">+</div>
-          </div>
-          <div class="rate-limit-row">
-            <div class="rate-btn">-</div>
-            <div class="rate-input upload">↑ 10.0 Mbps</div>
-            <div class="rate-btn">+</div>
+
+          <div class="device-card">
+            <div class="device-ip">192.168.3.1</div>
+            <div class="device-mac">4c:50:77:3d:a3:98</div>
+            <div class="toggle-btn">
+              <div class="toggle-box active"></div>
+              Allow Access
+            </div>
+            <div class="toggle-btn">
+              <div class="toggle-box inactive"></div>
+              Rate Limit
+            </div>
+            <div class="rate-limit-row">
+              <div class="rate-btn">-</div>
+              <div class="rate-input-wrap">
+                <span class="rate-prefix">↓</span>
+                <input class="rate-input" type="text" inputmode="decimal" value="100.0">
+                <span class="rate-suffix">Mbps</span>
+              </div>
+              <div class="rate-btn">+</div>
+            </div>
+            <div class="rate-limit-row">
+              <div class="rate-btn">-</div>
+              <div class="rate-input-wrap upload">
+                <span class="rate-prefix">↑</span>
+                <input class="rate-input" type="text" inputmode="decimal" value="10.0">
+                <span class="rate-suffix">Mbps</span>
+              </div>
+              <div class="rate-btn">+</div>
+            </div>
           </div>
         </div>
       </div>
@@ -252,29 +327,39 @@
           }
         });
 
+        // Numeric-only input: allow digits and control keys only (no decimal point)
+        $(document).on('keydown', 'input.rate-input', function(e) {
+          const allowed = ['Backspace','Delete','Tab','ArrowLeft','ArrowRight','Home','End'];
+          if (allowed.includes(e.key)) return;
+          if (e.key >= '0' && e.key <= '9') return;
+          e.preventDefault();
+        });
+        // Also block paste of non-numeric content
+        $(document).on('paste', 'input.rate-input', function(e) {
+          const paste = (e.originalEvent.clipboardData || window.clipboardData).getData('text');
+          if (!/^\d+$/.test(paste)) e.preventDefault();
+        });
+        // Strip any non-digit on input (covers IME, autofill, etc.)
+        $(document).on('input', 'input.rate-input', function() {
+          this.value = this.value.replace(/[^0-9]/g, '');
+        });
+
         // +/- Rate Limit Controls
         $('.rate-btn').on('click', function() {
-          // Check if rate limits are enabled first
           const $card = $(this).closest('.device-card');
           const isRateLimitActive = $card.find('.toggle-btn:contains("Rate Limit") .toggle-box').hasClass('active');
-          
           if (!isRateLimitActive) return;
 
           const isPlus = $(this).text().trim() === '+';
-          const $input = $(this).siblings('.rate-input');
-          const isUpload = $input.hasClass('upload');
-          let currentText = $input.text();
-          let currentVal = parseFloat(currentText.replace(/[^0-9.]/g, ''));
-          
-          // Adjust by 5 Mbps steps
+          const $input = $(this).siblings('.rate-input-wrap').find('input.rate-input');
+          let currentVal = parseInt($input.val(), 10) || 0;
+
           if (isPlus) {
-            currentVal += 5.0;
+            currentVal += 5;
           } else {
-            currentVal = Math.max(0, currentVal - 5.0);
+            currentVal = Math.max(0, currentVal - 5);
           }
-          
-          let prefix = isUpload ? '↑' : '↓';
-          $input.text(prefix + ' ' + currentVal.toFixed(1) + ' Mbps');
+          $input.val(currentVal);
         });
 
         // Apply Button

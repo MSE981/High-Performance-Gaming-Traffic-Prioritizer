@@ -83,14 +83,50 @@
         color: #334155;
         font-size: 0.95rem;
       }
-      .custom-checkbox {
-        width: 20px;
-        height: 20px;
-        border: 2px solid #cbd5e1;
-        border-radius: 4px;
-        margin-right: 16px;
-        background: #ffffff;
+      .adv-toggle-btn {
+        display: flex;
+        align-items: center;
+        background: #f8fafc;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        color: #334155;
         cursor: pointer;
+        font-weight: 600;
+        font-size: 0.9rem;
+        transition: all 0.2s ease;
+        height: 40px;
+        justify-content: center;
+        padding: 0 16px;
+        gap: 8px;
+        user-select: none;
+      }
+      .adv-toggle-btn:hover {
+        background: #f1f5f9;
+        border-color: #94a3b8;
+      }
+      .adv-toggle-box {
+        width: 22px;
+        height: 22px;
+        border-radius: 6px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        flex-shrink: 0;
+        transition: all 0.2s ease;
+      }
+      .adv-toggle-box.active {
+        background-color: #4f46e5;
+        border: 1px solid #4f46e5;
+      }
+      .adv-toggle-box.active::after {
+        content: "✓";
+        color: white;
+        font-size: 13px;
+        font-weight: bold;
+      }
+      .adv-toggle-box.inactive {
+        border: 2px solid #cbd5e1;
+        background: #ffffff;
       }
 
       .bottom-actions {
@@ -186,14 +222,18 @@
           <div style="width: 200px; font-weight: 500">
             Spanning Tree Protocol:
           </div>
-          <div class="custom-checkbox"></div>
-          <div class="text-secondary">Enable STP</div>
+          <div class="adv-toggle-btn">
+            <div class="adv-toggle-box inactive"></div>
+            Enable STP
+          </div>
         </div>
 
         <div class="checkbox-row">
           <div style="width: 200px; font-weight: 500">IGMP Snooping:</div>
-          <div class="custom-checkbox"></div>
-          <div class="text-secondary">Enable IGMP Snooping</div>
+          <div class="adv-toggle-btn">
+            <div class="adv-toggle-box inactive"></div>
+            Enable IGMP Snooping
+          </div>
         </div>
 
         <div class="bottom-actions">
@@ -232,13 +272,13 @@
           }
         });
 
-        // Advanced Options Checkboxes
-        $('.custom-checkbox').on('click', function() {
-          let isOn = $(this).css('background-color') === 'rgb(79, 70, 229)';
-          if (isOn) {
-            $(this).css('background-color', '#ffffff');
+        // Advanced Options Toggle Buttons
+        $('.adv-toggle-btn').on('click', function() {
+          const $box = $(this).find('.adv-toggle-box');
+          if ($box.hasClass('active')) {
+            $box.removeClass('active').addClass('inactive');
           } else {
-            $(this).css('background-color', '#4f46e5');
+            $box.removeClass('inactive').addClass('active');
           }
         });
 

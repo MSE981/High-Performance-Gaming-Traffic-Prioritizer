@@ -18,7 +18,7 @@
       }
       .graphs-container {
         display: grid;
-        grid-template-columns: repeat(3, 1fr);
+        grid-template-columns: repeat(2, 1fr);
         gap: 20px;
       }
       .graph-box {
@@ -40,11 +40,6 @@
         border-radius: 8px;
         text-align: center;
         padding: 12px;
-      }
-      .core-box.active {
-        background: #eef2ff; /* Light Indigo */
-        border-color: #c7d2fe;
-        color: #4f46e5;
       }
 
       .sys-info-row {
@@ -69,35 +64,6 @@
         border: 1px solid #e2e8f0;
       }
 
-      .core-sublabel {
-        font-size: 0.75rem;
-        font-weight: normal;
-        display: block;
-        margin-top: -2px;
-        margin-bottom: 2px;
-        color: #94a3b8;
-      }
-      
-      .core-box.active .core-sublabel {
-        color: inherit;
-      }
-
-      .architecture-note {
-        font-size: 0.85rem;
-        color: #64748b;
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        padding: 12px;
-        margin-top: 16px;
-        line-height: 1.5;
-      }
-
-      .architecture-note-title {
-        color: #4f46e5;
-        font-weight: 600;
-        margin-right: 4px;
-      }
 
       /* Responsive Layouts for Dashboard */
       @media (max-width: 1024px) {
@@ -169,15 +135,6 @@
               class="font-semibold text-secondary"
               style="font-size: 0.85rem; margin-bottom: 5px"
             >
-              Live Download Speed
-            </div>
-            <div id="speed-gauge-chart" style="width: 100%; height: 210px; margin-top: -10px;"></div>
-          </div>
-          <div class="graph-box">
-            <div
-              class="font-semibold text-secondary"
-              style="font-size: 0.85rem; margin-bottom: 5px"
-            >
               Packet rate (PPS)
             </div>
             <div id="pps-chart" style="width: 100%; height: 210px"></div>
@@ -194,9 +151,8 @@
         </div>
 
         <div class="cores-container">
-          <div class="core-box active" aria-label="Dedicated Fast-Path Core">
+          <div class="core-box">
             Core 0
-            <span class="core-sublabel">(Fast-Path)</span>
             <span
               id="core0"
               class="font-mono font-semibold"
@@ -204,9 +160,8 @@
               >0%</span
             >
           </div>
-          <div class="core-box" aria-label="Standard OS Core">
+          <div class="core-box">
             Core 1
-            <span class="core-sublabel">(OS/Ctrl)</span>
             <span
               id="core1"
               class="font-mono font-semibold"
@@ -214,9 +169,8 @@
               >0%</span
             >
           </div>
-          <div class="core-box" aria-label="Standard OS Core">
+          <div class="core-box">
             Core 2
-            <span class="core-sublabel">(OS/Ctrl)</span>
             <span
               id="core2"
               class="font-mono font-semibold"
@@ -224,9 +178,8 @@
               >0%</span
             >
           </div>
-          <div class="core-box" aria-label="Standard OS Core">
+          <div class="core-box">
             Core 3
-            <span class="core-sublabel">(OS/Ctrl)</span>
             <span
               id="core3"
               class="font-mono font-semibold"
@@ -234,11 +187,6 @@
               >0%</span
             >
           </div>
-        </div>
-
-        <div class="architecture-note">
-          <span class="architecture-note-title">System Architecture:</span>
-          Core 0 is strictly isolated as the <strong>Dedicated Fast-Path Core (Data Plane)</strong>. By pinning the high-performance packet processing engine to a single physical core, the system eliminates Context Switching and CPU Cache misses. This localized execution approach ensures deterministic, ultra-low latency for critical gaming traffic, while delegating the remaining kernels to handle system background tasks and control plane protocols.
         </div>
       </div>
 
@@ -326,52 +274,6 @@
         ],
       };
 
-      let speedGaugeChart = echarts.init(document.getElementById("speed-gauge-chart"));
-      const gaugeOptions = {
-        series: [
-          {
-            type: 'gauge',
-            startAngle: 180,
-            endAngle: 0,
-            center: ['50%', '75%'],
-            radius: '110%',
-            min: 0,
-            max: 1000,
-            splitNumber: 5,
-            axisLine: {
-              lineStyle: {
-                width: 12,
-                color: [
-                  [0.3, '#059669'],
-                  [0.7, '#4f46e5'],
-                  [1, '#dc2626']
-                ]
-              }
-            },
-            pointer: {
-              icon: 'path://M12.8,0.7l12,40.1H0.7L12.8,0.7z',
-              length: '60%',
-              width: 8,
-              offsetCenter: [0, '-10%'],
-              itemStyle: { color: '#0f172a' }
-            },
-            axisTick: { show: false },
-            splitLine: { show: false },
-            axisLabel: { distance: -20, color: '#94a3b8', fontSize: 10 },
-            detail: {
-              valueAnimation: true,
-              formatter: '{value} Mbps',
-              color: '#0f172a',
-              fontSize: 18,
-              fontWeight: 700,
-              offsetCenter: [0, '25%']
-            },
-            data: [{ value: 0 }]
-          }
-        ]
-      };
-      speedGaugeChart.setOption(gaugeOptions);
-
       let ppsChart = echarts.init(document.getElementById("pps-chart"));
       let bwChart = echarts.init(document.getElementById("bw-chart"));
       ppsChart.setOption(chartOptions);
@@ -408,11 +310,7 @@
           $("#cpu-temp").text(temp);
           $("#hdr-temp").text(temp);
           
-          if (data.download_speed) {
-            speedGaugeChart.setOption({
-              series: [{ data: [{ value: data.download_speed }] }]
-            });
-          }
+
         });
       }, 2000);
 
