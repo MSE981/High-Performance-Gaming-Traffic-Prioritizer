@@ -110,6 +110,11 @@ int main(int argc, char* argv[]) {
             if (selftest_done_efd < 0) {
                 std::println(stderr, "[Fatal] selftest done eventfd: {}",
                     std::strerror(errno));
+                if (gui_stop_efd >= 0) {
+                    ::close(gui_stop_efd);
+                    gui_stop_efd = -1;
+                }
+                close_shutdown_signal_efd();
                 return 1;
             }
 
