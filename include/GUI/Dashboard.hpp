@@ -203,6 +203,8 @@ class QosPage : public QWidget {
     Q_OBJECT
 public:
     explicit QosPage(QWidget* parent = nullptr);
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 private slots:
     void on_edit_whitelist();
     void on_toggle_accel();

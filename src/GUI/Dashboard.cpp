@@ -636,6 +636,10 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     auto* bw_form = new QFormLayout(bw_group);
     edit_dl_limit = new QLineEdit("500");
     edit_ul_limit = new QLineEdit("50");
+    edit_dl_limit->setReadOnly(true);
+    edit_ul_limit->setReadOnly(true);
+    edit_dl_limit->installEventFilter(this);
+    edit_ul_limit->installEventFilter(this);
     bw_form->addRow("Download Limit (Mbps):", edit_dl_limit);
     bw_form->addRow("Upload Limit (Mbps):", edit_ul_limit);
     {
@@ -743,6 +747,32 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     connect(btn_edit_wl, &QPushButton::clicked, this, &QosPage::on_edit_whitelist);
 }
 
+bool QosPage::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonPress) {
+        constexpr double kMin = 0.1;
+        constexpr double kMax = 1e6;
+        if (watched == edit_dl_limit) {
+            bool ok = false;
+            double cur = edit_dl_limit->text().trimmed().toDouble(&ok);
+            if (!ok) cur = 500.0;
+            if (auto v = NumPadDialog::get_double(this, QStringLiteral("Download Limit (Mbps)"),
+                                                  cur, kMin, kMax))
+                edit_dl_limit->setText(QString::number(*v, 'g', 12));
+            return true;
+        }
+        if (watched == edit_ul_limit) {
+            bool ok = false;
+            double cur = edit_ul_limit->text().trimmed().toDouble(&ok);
+            if (!ok) cur = 50.0;
+            if (auto v = NumPadDialog::get_double(this, QStringLiteral("Upload Limit (Mbps)"),
+                                                  cur, kMin, kMax))
+                edit_ul_limit->setText(QString::number(*v, 'g', 12));
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
 void QosPage::on_apply_global_bw() {
     bool ok_dl = false, ok_ul = false;
     double dl = edit_dl_limit->text().trimmed().toDouble(&ok_dl);
@@ -750,7 +780,8 @@ void QosPage::on_apply_global_bw() {
     constexpr double kMin = 0.1;
     constexpr double kMax = 1e6;
     if (!ok_dl || !ok_ul || dl < kMin || ul < kMin || dl > kMax || ul > kMax) {
-        QMessageBox::warning(this, "Invalid limits",
+        Dashboard::post_notification(
+            QStringLiteral("Invalid limits"),
             QStringLiteral("Enter download and upload between %1 and %2 Mbps.")
                 .arg(kMin, 0, 'g', 6)
                 .arg(kMax, 0, 'g', 6));
@@ -760,6 +791,9 @@ void QosPage::on_apply_global_bw() {
     tel.qos_global_dl_mbps_pending.store(dl, std::memory_order_relaxed);
     tel.qos_global_ul_mbps_pending.store(ul, std::memory_order_relaxed);
     tel.qos_global_bw_dirty.store(true, std::memory_order_release);
+    Dashboard::post_notification(
+        QStringLiteral("QoS"),
+        QStringLiteral("Parameters have been applied successfully."));
 }
 
 void QosPage::on_toggle_accel() {
