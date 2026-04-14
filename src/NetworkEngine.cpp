@@ -66,10 +66,18 @@ std::expected<void, std::string> RawSocketManager::init() {
 }
 
 void RawSocketManager::do_poll(int timeout_ms) {
+    if (fd < 0) return;
     struct pollfd pfd{};
     pfd.fd     = fd;
     pfd.events = POLLIN;
-    poll(&pfd, 1, timeout_ms);
+    int r = ::poll(&pfd, 1, timeout_ms);
+    if (r < 0 && errno != EINTR) {
+        std::println(stderr,
+            "[Engine] poll failed on {}: {} — closing RX socket",
+            iface.data(), std::strerror(errno));
+        ::close(fd);
+        fd = -1;
+    }
 }
 
 bool RawSocketManager::peek_frame(std::span<uint8_t>& out) {
