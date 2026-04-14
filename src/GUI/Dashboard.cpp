@@ -877,33 +877,33 @@ NumPadDialog::NumPadDialog(const QString& title, QString initial_text,
     btn_dot_   = nullptr;
     setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
     setStyleSheet(HPGTP::GUI::DARK_STYLESHEET);
-    setFixedWidth(360);
+    setFixedWidth(540);
 
     auto* lay = new QVBoxLayout(this);
-    lay->setContentsMargins(20, 20, 20, 20);
-    lay->setSpacing(10);
+    lay->setContentsMargins(30, 30, 30, 30);
+    lay->setSpacing(15);
 
     auto* lbl_title = new QLabel(title);
     lbl_title->setAlignment(Qt::AlignCenter);
     lbl_title->setWordWrap(true);
-    lbl_title->setStyleSheet("font-size:16px; font-weight:bold; color:#ffffff; padding-bottom:4px;");
+    lbl_title->setStyleSheet("font-size:24px; font-weight:bold; color:#ffffff; padding-bottom:6px;");
     lay->addWidget(lbl_title);
 
     display_ = new QLabel();
     display_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    display_->setFixedHeight(58);
+    display_->setFixedHeight(87);
     lay->addWidget(display_);
 
     auto* grid = new QGridLayout();
-    grid->setSpacing(8);
+    grid->setSpacing(12);
     grid->setColumnStretch(0, 1);
     grid->setColumnStretch(1, 1);
     grid->setColumnStretch(2, 1);
 
     auto make_btn = [&](const QString& t, int row, int col, int rs = 1, int cs = 1) -> QPushButton* {
         auto* b = new QPushButton(t);
-        b->setFixedHeight(56);
-        b->setStyleSheet("font-size:22px; font-weight:bold;");
+        b->setFixedHeight(84);
+        b->setStyleSheet("font-size:33px; font-weight:bold;");
         grid->addWidget(b, row, col, rs, cs);
         return b;
     };
@@ -932,7 +932,7 @@ NumPadDialog::NumPadDialog(const QString& title, QString initial_text,
     } else {
         b0 = make_btn("0", 3, 0);
         auto* row4_pad = new QWidget();
-        row4_pad->setFixedHeight(56);
+        row4_pad->setFixedHeight(84);
         row4_pad->setAttribute(Qt::WA_TransparentForMouseEvents);
         grid->addWidget(row4_pad, 3, 1);
         del = make_btn(QStringLiteral("\u232B"), 3, 2);
@@ -942,10 +942,19 @@ NumPadDialog::NumPadDialog(const QString& title, QString initial_text,
     lay->addLayout(grid);
 
     auto* btn_row = new QHBoxLayout();
-    btn_row->setSpacing(10);
+    btn_row->setSpacing(15);
     auto* cancel = new QPushButton("Cancel");
     btn_ok_ = new QPushButton("OK");
     btn_ok_->setObjectName("btn_primary");
+    {
+        QFont bf;
+        bf.setBold(true);
+        bf.setPixelSize(23);
+        cancel->setFont(bf);
+        btn_ok_->setFont(bf);
+        cancel->setFixedHeight(84);
+        btn_ok_->setFixedHeight(84);
+    }
     btn_row->addWidget(cancel, 1);
     btn_row->addWidget(btn_ok_, 1);
     lay->addLayout(btn_row);
@@ -1005,7 +1014,7 @@ void NumPadDialog::update_display() {
     bool red    = false;
 
     if (text_.isEmpty()) {
-    } else if (text_ == '-' || text_ == '.' || text_ == '-.') {
+    } else if (text_ == u'-' || text_ == u'.' || text_ == QStringLiteral("-.")) {
     } else {
         bool ok_parse = false;
         double val = text_.toDouble(&ok_parse);
@@ -1025,8 +1034,8 @@ void NumPadDialog::update_display() {
     }
 
     display_->setStyleSheet(
-        QString("background-color:#22223a; border:2px solid %1; border-radius:8px;"
-                "font-size:26px; font-weight:bold; color:%2; padding:0 12px;")
+        QString("background-color:#22223a; border:3px solid %1; border-radius:12px;"
+                "font-size:39px; font-weight:bold; color:%2; padding:0 18px;")
             .arg(red ? "#cc3333" : "#3a3a5a")
             .arg(red ? "#ff6666" : "#ffffff"));
     btn_ok_->setEnabled(ok_btn);
