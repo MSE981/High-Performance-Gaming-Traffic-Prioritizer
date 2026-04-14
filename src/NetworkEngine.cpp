@@ -27,12 +27,16 @@ std::expected<void, std::string> RawSocketManager::init() {
     fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
     if (fd < 0) return std::unexpected(std::string("Socket creation failed: ") + strerror(errno));
 
+    std::string_view iface_sv{iface.data()};
+
     struct ifreq ifr{};
-    std::strncpy(ifr.ifr_name, iface.data(), IFNAMSIZ - 1);
+    auto n1 = iface_sv.copy(ifr.ifr_name, IFNAMSIZ - 1);
+    ifr.ifr_name[n1] = '\0';
     if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) return std::unexpected("Interface lookup failed");
 
     struct ifreq ifr_p{};
-    std::strncpy(ifr_p.ifr_name, iface.data(), IFNAMSIZ - 1);
+    auto n2 = iface_sv.copy(ifr_p.ifr_name, IFNAMSIZ - 1);
+    ifr_p.ifr_name[n2] = '\0';
     if (ioctl(fd, SIOCGIFFLAGS, &ifr_p) < 0)
         return std::unexpected("Failed to get interface flags");
 

@@ -2,6 +2,7 @@
 #include <print>
 #include <cstring>
 #include <cstdio>
+#include <string_view>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
@@ -19,8 +20,8 @@ std::string Network::get_local_ip(const std::string& iface) {
 
     struct ifreq ifr {};
     ifr.ifr_addr.sa_family = AF_INET;
-    strncpy(ifr.ifr_name, iface.c_str(), IFNAMSIZ - 1);
-    ifr.ifr_name[IFNAMSIZ - 1] = '\0';
+    auto n = std::string_view{iface}.copy(ifr.ifr_name, IFNAMSIZ - 1);
+    ifr.ifr_name[n] = '\0';
 
     if (ioctl(fd, SIOCGIFADDR, &ifr) < 0) {
         close(fd);
@@ -108,8 +109,8 @@ bool Network::disable_hardware_offloads(const std::string& iface) {
     if (fd < 0) return false;
 
     struct ifreq ifr {};
-    strncpy(ifr.ifr_name, iface.c_str(), IFNAMSIZ - 1);
-    ifr.ifr_name[IFNAMSIZ - 1] = '\0';
+    auto n = std::string_view{iface}.copy(ifr.ifr_name, IFNAMSIZ - 1);
+    ifr.ifr_name[n] = '\0';
 
     struct ethtool_value eval {};
     bool success = true;

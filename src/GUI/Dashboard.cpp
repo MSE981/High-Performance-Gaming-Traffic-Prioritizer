@@ -25,6 +25,7 @@
 #include <thread>
 #include <print>
 #include <algorithm>
+#include <string_view>
 #include <fcntl.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -536,8 +537,9 @@ void InterfacePage::scan_interfaces() {
 
         // Store entry
         if (role_entries_count_ < role_entries_.size()) {
-            strncpy(role_entries_[role_entries_count_].name.data(), name.c_str(), 15);
-            role_entries_[role_entries_count_].name[15] = '\0';
+            auto nn = std::string_view{name}.copy(
+                role_entries_[role_entries_count_].name.data(), 15);
+            role_entries_[role_entries_count_].name[nn] = '\0';
             role_entries_[role_entries_count_].group = btn_group;
             ++role_entries_count_;
         }

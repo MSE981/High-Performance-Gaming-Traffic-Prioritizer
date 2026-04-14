@@ -17,6 +17,7 @@
 #include <print>
 #include <iostream>
 #include <cerrno>
+#include <string_view>
 
 namespace Scalpel {
 
@@ -566,8 +567,11 @@ void App::watchdog_loop() {
                    cnt < Telemetry::SystemInfo::MAX_IFACES) {
                 if (de->d_name[0] == '.' || strncmp(de->d_name, "lo", 3) == 0)
                     continue;
-                strncpy(si.ifaces[cnt].name.data(), de->d_name, 15);
-                si.ifaces[cnt].name[15] = '\0';
+                {
+                    std::string_view name_sv{de->d_name};
+                    auto nn = name_sv.copy(si.ifaces[cnt].name.data(), 15);
+                    si.ifaces[cnt].name[nn] = '\0';
+                }
                 char path[64];
                 snprintf(path, sizeof(path),
                     "/sys/class/net/%s/operstate", de->d_name);
@@ -578,9 +582,11 @@ void App::watchdog_loop() {
                     ::close(sfd);
                     if (n > 0 && sbuf[n - 1] == '\n') sbuf[n - 1] = '\0';
                 }
-                strncpy(si.ifaces[cnt].operstate.data(),
-                    sbuf[0] ? sbuf : "unknown", 7);
-                si.ifaces[cnt].operstate[7] = '\0';
+                {
+                    std::string_view op_sv{sbuf[0] ? sbuf : "unknown"};
+                    auto no = op_sv.copy(si.ifaces[cnt].operstate.data(), 7);
+                    si.ifaces[cnt].operstate[no] = '\0';
+                }
                 ++cnt;
             }
             closedir(d);
@@ -727,8 +733,9 @@ void App::watchdog_loop() {
                                 Net::IPv4Net ip = Net::parse_ipv4(ip_str);
                                 if (ip.raw() != INADDR_NONE && strcmp(flags, "0x0") != 0) {
                                     tel.device_table[dcnt].ip = ip;
-                                    strncpy(tel.device_table[dcnt].mac.data(), mac, 17);
-                                    tel.device_table[dcnt].mac[17] = '\0';
+                                    std::string_view mac_sv{mac};
+                                    auto nm = mac_sv.copy(tel.device_table[dcnt].mac.data(), 17);
+                                    tel.device_table[dcnt].mac[nm] = '\0';
                                     ++dcnt;
                                 }
                             }
