@@ -475,9 +475,27 @@
                                <b style="font-size: 1.25rem;">${upSpeed} <span style="font-size: 0.85rem; color: #64748b;">Mbps</span></b>
                             </div>
                           </div>
+                          <div style="margin-top: 20px; font-size: 1rem; color: #475569;">
+                            Do you want to use these speed results for capacity settings?
+                          </div>
                         `,
                         icon: 'success',
-                        confirmButtonColor: '#4f46e5'
+                        showCancelButton: true,
+                        confirmButtonColor: '#4f46e5',
+                        cancelButtonColor: '#94a3b8',
+                        confirmButtonText: 'Use',
+                        cancelButtonText: 'Do not use',
+                        reverseButtons: true
+                      }).then((applyResult) => {
+                        if (applyResult.isConfirmed) {
+                           Swal.fire({
+                             title: 'Applied',
+                             text: 'The new capacity settings have been applied.',
+                             icon: 'success',
+                             timer: 1500,
+                             showConfirmButton: false
+                           });
+                        }
                       });
                     }, 500);
                   }
