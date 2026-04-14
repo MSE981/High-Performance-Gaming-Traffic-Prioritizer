@@ -24,6 +24,8 @@
 #include <QRegularExpressionValidator>
 #include <QDoubleSpinBox>
 #include <QMessageBox>
+#include <QSignalBlocker>
+#include <QSizePolicy>
 #include <thread>
 #include <print>
 #include <algorithm>
@@ -39,6 +41,47 @@ namespace HPGTP::GUI {
 // NotificationPanel: iOS-style pull-down overlay
 // Spring constants tuned for a snappy-but-not-bouncy feel
 // ═════════════════════════════════════════════════════════════
+// SwitchToggle: pill track + round thumb (accent #0077ff, muted track #2a2a4a)
+SwitchToggle::SwitchToggle(QWidget* parent) : QWidget(parent) {
+    setFixedSize(58, 32);
+    setCursor(Qt::PointingHandCursor);
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+}
+
+void SwitchToggle::setChecked(bool on) {
+    if (checked_ == on) return;
+    checked_ = on;
+    update();
+}
+
+void SwitchToggle::mouseReleaseEvent(QMouseEvent* e) {
+    if (e->button() == Qt::LeftButton && rect().contains(e->position().toPoint())) {
+        checked_ = !checked_;
+        update();
+        emit toggled(checked_);
+    }
+    QWidget::mouseReleaseEvent(e);
+}
+
+void SwitchToggle::paintEvent(QPaintEvent*) {
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QRect r = rect().adjusted(1, 1, -2, -2);
+    const QColor trackOn(0x00, 0x77, 0xff);
+    const QColor trackOff(0x2a, 0x2a, 0x4a);
+    const QColor border(0x3a, 0x3a, 0x5a);
+    const QColor thumb(0xee, 0xee, 0xf5);
+    p.setPen(QPen(border, 1));
+    p.setBrush(checked_ ? trackOn : trackOff);
+    p.drawRoundedRect(r, r.height() / 2.0, r.height() / 2.0);
+    const int diam = r.height() - 6;
+    const int x    = checked_ ? (r.right() - diam - 2) : (r.left() + 2);
+    const int y    = r.center().y() - diam / 2;
+    p.setPen(Qt::NoPen);
+    p.setBrush(thumb);
+    p.drawEllipse(QRect(x, y, diam, diam));
+}
+
 NotificationPanel::NotificationPanel(QWidget* parent) : QFrame(parent) {
     // Height set dynamically by Dashboard (full-screen overlay)
     setAttribute(Qt::WA_TranslucentBackground);
@@ -437,12 +480,12 @@ InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
     // Advanced options
     auto* adv_group = new QGroupBox("Advanced Options");
     auto* adv_form = new QFormLayout(adv_group);
-    chk_stp = new QCheckBox("Enable STP");
-    chk_stp->setChecked(Config::ENABLE_STP.load(std::memory_order_relaxed));
-    adv_form->addRow("Spanning Tree Protocol:", chk_stp);
-    chk_igmp = new QCheckBox("Enable IGMP Snooping");
-    chk_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed));
-    adv_form->addRow("IGMP Snooping:", chk_igmp);
+    sw_stp = new SwitchToggle();
+    sw_stp->setChecked(Config::ENABLE_STP.load(std::memory_order_relaxed));
+    adv_form->addRow("Spanning Tree Protocol:", sw_stp);
+    sw_igmp = new SwitchToggle();
+    sw_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed));
+    adv_form->addRow("IGMP Snooping:", sw_igmp);
     layout->addWidget(adv_group);
 
     // Button row
@@ -587,8 +630,8 @@ void InterfacePage::on_save_clicked() {
         if (role_entries_[i].group->checkedId() == 1) Config::add_bridged(role_entries_[i].name.data());
     Config::IFACE_LAN = Config::BRIDGED_IFACES_COUNT == 0 ? "" : std::string(Config::BRIDGED_INTERFACES[0].name.data());
 
-    Config::ENABLE_STP.store(chk_stp->isChecked(), std::memory_order_relaxed);
-    Config::ENABLE_IGMP_SNOOPING.store(chk_igmp->isChecked(), std::memory_order_relaxed);
+    Config::ENABLE_STP.store(sw_stp->isChecked(), std::memory_order_relaxed);
+    Config::ENABLE_IGMP_SNOOPING.store(sw_igmp->isChecked(), std::memory_order_relaxed);
     Config::ENABLE_ACCELERATION.store(true, std::memory_order_relaxed);
     Telemetry::instance().bridge_mode.store(true, std::memory_order_relaxed);
 
@@ -598,8 +641,8 @@ void InterfacePage::on_save_clicked() {
 
 void InterfacePage::on_reset_clicked() {
     scan_interfaces(); // Rebuilds table from Config::IFACE_ROLES
-    chk_stp->setChecked(Config::ENABLE_STP.load(std::memory_order_relaxed));
-    chk_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed));
+    sw_stp->setChecked(Config::ENABLE_STP.load(std::memory_order_relaxed));
+    sw_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed));
 }
 
 void InterfacePage::on_refresh_clicked() {
@@ -626,10 +669,18 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     layout->addWidget(title);
 
     // Acceleration toggle
-    chk_acceleration = new QCheckBox("Enable Gaming Traffic Acceleration (Heuristic Priority Scheduling)");
-    chk_acceleration->setChecked(Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed));
-    connect(chk_acceleration, &QCheckBox::toggled, this, &QosPage::on_toggle_accel);
-    layout->addWidget(chk_acceleration);
+    {
+        auto* accel_row = new QHBoxLayout();
+        auto* lbl_accel = new QLabel("Enable Gaming Traffic Acceleration (Heuristic Priority Scheduling)");
+        lbl_accel->setWordWrap(true);
+        lbl_accel->setStyleSheet("font-size: 15px; color: #e0e0e0;");
+        sw_acceleration = new SwitchToggle();
+        sw_acceleration->setChecked(Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed));
+        connect(sw_acceleration, &SwitchToggle::toggled, this, &QosPage::on_toggle_accel);
+        accel_row->addWidget(lbl_accel, 1);
+        accel_row->addWidget(sw_acceleration, 0, Qt::AlignVCenter);
+        layout->addLayout(accel_row);
+    }
 
     // Bandwidth limit
     auto* bw_group = new QGroupBox("Global Bandwidth Limits");
@@ -797,7 +848,7 @@ void QosPage::on_apply_global_bw() {
 }
 
 void QosPage::on_toggle_accel() {
-    bool on = chk_acceleration->isChecked();
+    bool on = sw_acceleration->isChecked();
     Config::ENABLE_ACCELERATION.store(on, std::memory_order_relaxed);
     Telemetry::instance().bridge_mode.store(!on, std::memory_order_relaxed);
     std::println("[GUI] Acceleration mode: {}", on ? "ON" : "OFF");
@@ -1295,10 +1346,18 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
     edit_dns_secondary->setPlaceholderText("e.g. 8.8.4.4");
     form->addRow("Secondary DNS:", edit_dns_secondary);
 
-    chk_dns_redirect = new QCheckBox("Force all DNS queries to upstream server");
-    chk_dns_redirect->setChecked(Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
-    chk_dns_redirect->setToolTip("When enabled, all LAN DNS queries (UDP 53) are forwarded to the configured upstream server");
-    form->addRow("", chk_dns_redirect);
+    auto* redirect_row = new QHBoxLayout();
+    auto* lbl_redirect = new QLabel("Force all DNS queries to upstream server");
+    lbl_redirect->setWordWrap(true);
+    lbl_redirect->setStyleSheet("color: #e0e0e0;");
+    sw_dns_redirect = new SwitchToggle();
+    sw_dns_redirect->setChecked(Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
+    sw_dns_redirect->setToolTip("When enabled, all LAN DNS queries (UDP 53) are forwarded to the configured upstream server");
+    redirect_row->addWidget(lbl_redirect, 1);
+    redirect_row->addWidget(sw_dns_redirect, 0, Qt::AlignVCenter);
+    auto* redirect_wrap = new QWidget();
+    redirect_wrap->setLayout(redirect_row);
+    form->addRow("", redirect_wrap);
 
     auto* static_dns_label = new QLabel("Static DNS Records (hostname → IP, never expires, overrides cache)");
     static_dns_label->setStyleSheet("color: #808090; font-size: 12px;");
@@ -1361,7 +1420,7 @@ void DnsConfigDialog::on_apply() {
 
     Config::DNS_UPSTREAM_PRIMARY   = edit_dns_primary->text().toStdString();
     Config::DNS_UPSTREAM_SECONDARY = edit_dns_secondary->text().toStdString();
-    Config::DNS_REDIRECT_ENABLED.store(chk_dns_redirect->isChecked(), std::memory_order_relaxed);
+    Config::DNS_REDIRECT_ENABLED.store(sw_dns_redirect->isChecked(), std::memory_order_relaxed);
 
     Config::STATIC_DNS_COUNT = 0;
     for (int i = 0; i < static_dns_table->rowCount(); ++i) {
@@ -1377,7 +1436,7 @@ void DnsConfigDialog::on_apply() {
     Telemetry::instance().dns_config_dirty.store(true, std::memory_order_release);
     std::println("[GUI] DNS config updated: upstream {}→{}, redirect={}, static={} records",
         Config::DNS_UPSTREAM_PRIMARY, Config::DNS_UPSTREAM_SECONDARY,
-        chk_dns_redirect->isChecked(), Config::STATIC_DNS_COUNT);
+        sw_dns_redirect->isChecked(), Config::STATIC_DNS_COUNT);
     accept();
 }
 
@@ -1428,9 +1487,11 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
         row_frame->setStyleSheet("QFrame { background-color: #22223a; border: 1px solid #2a2a4a; border-radius: 6px; padding: 8px; margin: 2px 0px; }");
         auto* row_lay = new QHBoxLayout(row_frame);
 
-        rows[i].chk = new QCheckBox(defs[i].name);
-        rows[i].chk->setChecked(defs[i].state->load(std::memory_order_relaxed));
-        rows[i].chk->setStyleSheet("font-size: 15px; font-weight: bold;");
+        auto* name_lbl = new QLabel(defs[i].name);
+        name_lbl->setStyleSheet("font-size: 15px; font-weight: bold; color: #e0e0e0;");
+
+        rows[i].sw = new SwitchToggle();
+        rows[i].sw->setChecked(defs[i].state->load(std::memory_order_relaxed));
 
         auto* desc_lbl = new QLabel(defs[i].description);
         desc_lbl->setStyleSheet("color: #808090; font-size: 12px;");
@@ -1439,9 +1500,10 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
         rows[i].status_label->setStyleSheet("color: #00cc66; font-weight: bold;");
 
         auto* text_col = new QVBoxLayout();
-        text_col->addWidget(rows[i].chk);
+        text_col->addWidget(name_lbl);
         text_col->addWidget(desc_lbl);
         row_lay->addLayout(text_col, 1);
+        row_lay->addWidget(rows[i].sw, 0, Qt::AlignVCenter);
 
         // Settings button (DHCP / DNS only)
         if (defs[i].settings_label) {
@@ -1469,7 +1531,7 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
         auto* state_ptr  = defs[i].state;
         auto* status_lbl = rows[i].status_label;
         auto* btn_cfg    = rows[i].btn_settings;
-        connect(rows[i].chk, &QCheckBox::toggled, [state_ptr, status_lbl, btn_cfg](bool checked) {
+        connect(rows[i].sw, &SwitchToggle::toggled, [state_ptr, status_lbl, btn_cfg](bool checked) {
             state_ptr->store(checked, std::memory_order_relaxed);
             status_lbl->setText(checked ? "● Running" : "○ Stopped");
             status_lbl->setStyleSheet(checked ? "color: #00cc66; font-weight: bold;" : "color: #cc3333; font-weight: bold;");
@@ -1493,8 +1555,14 @@ void ServicePage::refresh_status() {
     };
     for (int i = 0; i < 5; ++i) {
         bool on = states[i]->load(std::memory_order_relaxed);
+        {
+            QSignalBlocker b(rows[i].sw);
+            rows[i].sw->setChecked(on);
+        }
         rows[i].status_label->setText(on ? "● Running" : "○ Stopped");
         rows[i].status_label->setStyleSheet(on ? "color: #00cc66; font-weight: bold;" : "color: #cc3333; font-weight: bold;");
+        if (rows[i].btn_settings)
+            rows[i].btn_settings->setEnabled(on);
     }
 }
 
@@ -1607,15 +1675,21 @@ void DevicePage::refresh() {
         lbl_info->setTextFormat(Qt::RichText);
         cl->addWidget(lbl_info);
 
-        // Row 1: checkboxes
+        // Row 1: allow / rate-limit switches
         auto* chk_row = new QHBoxLayout();
-        auto* chk_allow = new QCheckBox("Allow Access");
-        chk_allow->setChecked(!blocked);
-        auto* chk_rate = new QCheckBox("Rate Limit");
-        chk_rate->setChecked(rate_limited);
-        chk_row->addWidget(chk_allow);
+        auto* lbl_allow = new QLabel("Allow Access");
+        lbl_allow->setStyleSheet("color: #e0e0e0;");
+        auto* sw_allow = new SwitchToggle();
+        sw_allow->setChecked(!blocked);
+        auto* lbl_rate = new QLabel("Rate Limit");
+        lbl_rate->setStyleSheet("color: #e0e0e0;");
+        auto* sw_rate = new SwitchToggle();
+        sw_rate->setChecked(rate_limited);
+        chk_row->addWidget(lbl_allow);
+        chk_row->addWidget(sw_allow);
         chk_row->addSpacing(24);
-        chk_row->addWidget(chk_rate);
+        chk_row->addWidget(lbl_rate);
+        chk_row->addWidget(sw_rate);
         chk_row->addStretch();
         cl->addLayout(chk_row);
 
@@ -1647,8 +1721,8 @@ void DevicePage::refresh() {
         // Push row — capture index so lambdas can safely reference rows_[idx]
         DeviceRow r;
         r.ip        = ip;
-        r.chk_allow = chk_allow;
-        r.chk_rate  = chk_rate;
+        r.sw_allow = sw_allow;
+        r.sw_rate  = sw_rate;
         r.lbl_dl    = lbl_dl;
         r.lbl_ul    = lbl_ul;
         r.val_dl    = dl;
@@ -1694,8 +1768,8 @@ void DevicePage::on_apply_all() {
     for (auto& r : rows_) {
         Config::DevicePolicy p{};
         p.ip           = r.ip;
-        p.blocked      = !r.chk_allow->isChecked();
-        p.rate_limited = r.chk_rate->isChecked();
+        p.blocked      = !r.sw_allow->isChecked();
+        p.rate_limited = r.sw_rate->isChecked();
         p.dl           = Traffic::Mbps{r.val_dl};
         p.ul           = Traffic::Mbps{r.val_ul};
         Config::upsert_device_policy(p);

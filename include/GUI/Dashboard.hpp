@@ -27,6 +27,8 @@
 #include <QRegularExpressionValidator>
 #include <QDialog>
 #include <QEvent>
+#include <QMouseEvent>
+#include <QPaintEvent>
 #include <QButtonGroup>
 #include <QTime>
 #include <QMenu>
@@ -44,6 +46,23 @@ namespace HPGTP::GUI {
 // Notification panel: pull-down overlay (iOS-style)
 // Slides in from top via spring physics, driven by anim_timer
 // ═══════════════════════════════════════════
+// Pill-style on/off switch (track #0077ff on / #2a2a4a off, border #3a3a5a)
+class SwitchToggle : public QWidget {
+    Q_OBJECT
+public:
+    explicit SwitchToggle(QWidget* parent = nullptr);
+    bool isChecked() const { return checked_; }
+public slots:
+    void setChecked(bool on);
+signals:
+    void toggled(bool checked);
+protected:
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
+private:
+    bool checked_ = false;
+};
+
 class NotificationPanel : public QFrame {
     Q_OBJECT
 public:
@@ -141,8 +160,8 @@ private:
     std::array<RoleEntry, Telemetry::SystemInfo::MAX_IFACES> role_entries_{};
     size_t role_entries_count_ = 0;
 
-    QCheckBox*       chk_stp;
-    QCheckBox*       chk_igmp;
+    SwitchToggle*    sw_stp;
+    SwitchToggle*    sw_igmp;
     QPushButton*     btn_refresh = nullptr;
     QSocketNotifier* scan_done_notifier_ = nullptr;
 };
@@ -211,7 +230,7 @@ private slots:
     void on_throttle_changed(int value_pct);
     void on_apply_global_bw();
 private:
-    QCheckBox*    chk_acceleration;
+    SwitchToggle* sw_acceleration;
     QLineEdit*    edit_dl_limit;
     QLineEdit*    edit_ul_limit;
     QTableWidget* whitelist_table;
@@ -250,7 +269,7 @@ private slots:
 private:
     QLineEdit*    edit_dns_primary;
     QLineEdit*    edit_dns_secondary;
-    QCheckBox*    chk_dns_redirect;
+    SwitchToggle*  sw_dns_redirect;
     QTableWidget* static_dns_table;
 };
 
@@ -264,9 +283,9 @@ public:
     void refresh_status();
 private:
     struct ServiceRow {
-        QCheckBox*   chk;
-        QLabel*      status_label;
-        QPushButton* btn_settings = nullptr;  // non-null only for DHCP and DNS rows
+        SwitchToggle* sw;
+        QLabel*       status_label;
+        QPushButton*  btn_settings = nullptr;  // non-null only for DHCP and DNS rows
     };
     ServiceRow rows[5]; // NAT, DHCP, DNS, Firewall, UPnP
 };
@@ -284,8 +303,8 @@ private:
 
     struct DeviceRow {
         Net::IPv4Net ip{};
-        QCheckBox* chk_allow;
-        QCheckBox* chk_rate;
+        SwitchToggle* sw_allow;
+        SwitchToggle* sw_rate;
         QPushButton* lbl_dl;
         QPushButton* lbl_ul;
         double     val_dl = 100.0;
