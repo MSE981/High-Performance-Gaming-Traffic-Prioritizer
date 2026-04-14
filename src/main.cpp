@@ -13,15 +13,13 @@
 
 std::atomic<bool> signal_received{false};
 
-// Written only from signal_handler (async-signal-safe path); read on a normal thread.
-static int shutdown_signal_efd = -1;
+static std::atomic<int> shutdown_signal_efd{-1};
 
-// Async-signal-safe: only set flag and bump eventfd; never join threads here.
 extern "C" void signal_handler(int signal) {
     (void)signal;
     if (signal_received.exchange(true, std::memory_order_acq_rel)) return;
-    if (shutdown_signal_efd >= 0)
-        (void)::eventfd_write(shutdown_signal_efd, 1);
+    int fd = shutdown_signal_efd.load(std::memory_order_relaxed);
+    if (fd >= 0) (void)::eventfd_write(fd, 1);
 }
 
 #include <QApplication>
@@ -49,6 +47,11 @@ void print_selftest_report(const Scalpel::SelfTest::Report& r) {
 
 } // namespace
 
+static void close_shutdown_signal_efd() {
+    int fd = shutdown_signal_efd.exchange(-1, std::memory_order_acq_rel);
+    if (fd >= 0) ::close(fd);
+}
+
 int main(int argc, char* argv[]) {
     // Ignore SIGPIPE
     std::signal(SIGPIPE, SIG_IGN);
@@ -64,17 +67,19 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    shutdown_signal_efd = ::eventfd(0, EFD_CLOEXEC);
-    if (shutdown_signal_efd < 0) {
-        std::println(stderr, "[Fatal] shutdown eventfd: {}", std::strerror(errno));
-        return 1;
+    {
+        int fd = ::eventfd(0, EFD_CLOEXEC);
+        if (fd < 0) {
+            std::println(stderr, "[Fatal] shutdown eventfd: {}", std::strerror(errno));
+            return 1;
+        }
+        shutdown_signal_efd.store(fd, std::memory_order_release);
     }
 
     int gui_stop_efd = ::eventfd(0, EFD_CLOEXEC);
     if (gui_stop_efd < 0) {
         std::println(stderr, "[Fatal] gui shutdown chain eventfd: {}", std::strerror(errno));
-        ::close(shutdown_signal_efd);
-        shutdown_signal_efd = -1;
+        close_shutdown_signal_efd();
         return 1;
     }
 
@@ -89,8 +94,7 @@ int main(int argc, char* argv[]) {
         std::println(stderr, "[Fatal Error] Initialization failed: {}", res.error());
         ::close(gui_stop_efd);
         gui_stop_efd = -1;
-        ::close(shutdown_signal_efd);
-        shutdown_signal_efd = -1;
+        close_shutdown_signal_efd();
         return 1;
     }
 
@@ -128,11 +132,14 @@ int main(int argc, char* argv[]) {
             Scalpel::GUI::Dashboard gui;
             gui.showFullScreen();
 
-            QSocketNotifier shutdown_sn(shutdown_signal_efd, QSocketNotifier::Read, &qapp);
+            QSocketNotifier shutdown_sn(
+                shutdown_signal_efd.load(std::memory_order_relaxed),
+                QSocketNotifier::Read, &qapp);
             QObject::connect(&shutdown_sn, &QSocketNotifier::activated, &qapp,
                 [gui_stop_efd](int) {
                     uint64_t v;
-                    (void)::eventfd_read(shutdown_signal_efd, &v);
+                    int      fd = shutdown_signal_efd.load(std::memory_order_relaxed);
+                    if (fd >= 0) (void)::eventfd_read(fd, &v);
                     (void)::eventfd_write(gui_stop_efd, 1);
                 });
 
@@ -192,7 +199,9 @@ int main(int argc, char* argv[]) {
                 Scalpel::System::Optimizer::set_current_thread_affinity(1);
                 while (cli_listener_run.load(std::memory_order_relaxed)) {
                     uint64_t v;
-                    int      r = ::eventfd_read(shutdown_signal_efd, &v);
+                    int      fd = shutdown_signal_efd.load(std::memory_order_relaxed);
+                    if (fd < 0) break;
+                    int      r = ::eventfd_read(fd, &v);
                     if (r < 0) {
                         if (errno == EINTR) continue;
                         break;
@@ -214,7 +223,10 @@ int main(int argc, char* argv[]) {
             app.start();
             app.wait_for_shutdown();
             cli_listener_run.store(false, std::memory_order_relaxed);
-            (void)::eventfd_write(shutdown_signal_efd, 1);
+            {
+                int fd = shutdown_signal_efd.load(std::memory_order_relaxed);
+                if (fd >= 0) (void)::eventfd_write(fd, 1);
+            }
             cli_shutdown_listener.join();
         }
     } catch (const std::exception& e) {
@@ -223,10 +235,7 @@ int main(int argc, char* argv[]) {
             ::close(gui_stop_efd);
             gui_stop_efd = -1;
         }
-        if (shutdown_signal_efd >= 0) {
-            ::close(shutdown_signal_efd);
-            shutdown_signal_efd = -1;
-        }
+        close_shutdown_signal_efd();
         return 1;
     }
 
@@ -234,10 +243,7 @@ int main(int argc, char* argv[]) {
         ::close(gui_stop_efd);
         gui_stop_efd = -1;
     }
-    if (shutdown_signal_efd >= 0) {
-        ::close(shutdown_signal_efd);
-        shutdown_signal_efd = -1;
-    }
+    close_shutdown_signal_efd();
     if (Scalpel::Config::SAVE_ON_EXIT.load(std::memory_order_relaxed))
         Scalpel::Config::save_config("config/config.txt");
     std::println("[System] Application cleanly exited. Kernel resources fully released.");
