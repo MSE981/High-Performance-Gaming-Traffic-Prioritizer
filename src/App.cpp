@@ -584,7 +584,8 @@ void App::watchdog_loop() {
             struct dirent* de;
             while ((de = readdir(d)) != nullptr &&
                    cnt < Telemetry::SystemInfo::MAX_IFACES) {
-                if (de->d_name[0] == '.' || strncmp(de->d_name, "lo", 3) == 0)
+                if (de->d_name[0] == '.'
+                    || std::string_view{de->d_name} == "lo")
                     continue;
                 {
                     std::string_view name_sv{de->d_name};

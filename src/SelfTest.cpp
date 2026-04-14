@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <string_view>
 
 #include "Config.hpp"
 #include "NatEngine.hpp"
@@ -411,7 +412,7 @@ void SelfTest::test_system(Report& r) {
             struct dirent* de;
             while ((de = readdir(d)) != nullptr) {
                 if (de->d_name[0] == '.') continue;
-                if (strncmp(de->d_name, "lo", 3) == 0) continue;
+                if (std::string_view{de->d_name} == "lo") continue;
                 ++iface_count;
             }
             closedir(d);
