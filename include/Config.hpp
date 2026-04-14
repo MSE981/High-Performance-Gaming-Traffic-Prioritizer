@@ -144,7 +144,7 @@ namespace Scalpel::Config {
     static constexpr size_t MAX_DEVICE_POLICIES = 64;
     struct DevicePolicy {
         Net::IPv4Net ip{};
-        uint8_t      mac[6]{};
+        std::array<uint8_t, 6> mac{};
         bool         blocked      = false;
         bool         rate_limited = false;
         Traffic::Mbps dl{100.0};

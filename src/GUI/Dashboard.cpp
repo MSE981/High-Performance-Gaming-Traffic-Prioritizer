@@ -1531,7 +1531,7 @@ void DevicePage::on_apply_all() {
     for (auto& r : rows_) {
         Config::DevicePolicy p{};
         p.ip           = r.ip;
-        std::memcpy(p.mac, r.mac.data(), 6);
+        std::ranges::copy(r.mac, p.mac.begin());
         p.blocked      = !r.chk_allow->isChecked();
         p.rate_limited = r.chk_rate->isChecked();
         p.dl           = Traffic::Mbps{r.val_dl};
