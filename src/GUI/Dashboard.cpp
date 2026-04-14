@@ -1571,29 +1571,30 @@ void Dashboard::post_notification(const QString& title, const QString& body) {
 
 void Dashboard::on_selftest_done(const Scalpel::SelfTest::Report& r) {
     if (!instance_) return;
-    // Hide overlay
-    if (instance_->testing_overlay_)
-        instance_->testing_overlay_->hide();
+    QMetaObject::invokeMethod(instance_, [r]() {
+        if (!instance_) return;
+        if (instance_->testing_overlay_)
+            instance_->testing_overlay_->hide();
 
-    // Post self-test results to notification panel
-    size_t failures = r.count - r.passed;
-    if (failures == 0) {
-        instance_->notif_panel_->push_notification(
-            "Self-Test Passed",
-            QString("All %1 checks passed. Data plane ready.").arg(r.count));
-    } else {
-        instance_->notif_panel_->push_notification(
-            QString("Self-Test: %1 failure(s)").arg(failures),
-            QString("%1/%2 checks passed.").arg(r.passed).arg(r.count));
-        for (size_t i = 0; i < r.count; ++i) {
-            if (!r.cases[i].pass)
-                instance_->notif_panel_->push_notification(
-                    QString("[FAIL] %1").arg(r.cases[i].name.data()),
-                    r.cases[i].detail.data());
+        size_t failures = r.count - r.passed;
+        if (failures == 0) {
+            instance_->notif_panel_->push_notification(
+                "Self-Test Passed",
+                QString("All %1 checks passed. Data plane ready.").arg(r.count));
+        } else {
+            instance_->notif_panel_->push_notification(
+                QString("Self-Test: %1 failure(s)").arg(failures),
+                QString("%1/%2 checks passed.").arg(r.passed).arg(r.count));
+            for (size_t i = 0; i < r.count; ++i) {
+                if (!r.cases[i].pass)
+                    instance_->notif_panel_->push_notification(
+                        QString("[FAIL] %1").arg(r.cases[i].name.data()),
+                        r.cases[i].detail.data());
+            }
         }
-    }
-    instance_->notif_panel_->push_notification(
-        "Engine Ready", "Data plane Cores 2/3 attached. Forwarding engine running.");
+        instance_->notif_panel_->push_notification(
+            "Engine Ready", "Data plane Cores 2/3 attached. Forwarding engine running.");
+    }, Qt::QueuedConnection);
 }
 
 void Dashboard::setup_ui() {
