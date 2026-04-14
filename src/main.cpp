@@ -12,8 +12,6 @@
 #include <sys/eventfd.h>
 #include <unistd.h>
 
-// Global pointer and signal debounce flag
-Scalpel::App* global_app = nullptr;
 std::atomic<bool> signal_received{false};
 
 // Written only from signal_handler (async-signal-safe path); read on a normal thread.
@@ -82,7 +80,6 @@ int main(int argc, char* argv[]) {
     }
 
     Scalpel::App app;
-    global_app = &app;
 
     // 2. Register shutdown signals (handler must not call App::stop)
     std::signal(SIGINT, signal_handler);
@@ -95,7 +92,6 @@ int main(int argc, char* argv[]) {
         gui_stop_efd = -1;
         ::close(shutdown_signal_efd);
         shutdown_signal_efd = -1;
-        global_app = nullptr;
         return 1;
     }
 
@@ -125,7 +121,7 @@ int main(int argc, char* argv[]) {
                         break;
                     }
                     if (gui_shutdown_runner_quit.load(std::memory_order_relaxed)) break;
-                    if (global_app) global_app->stop();
+                    app.stop();
                 }
             });
 
@@ -205,7 +201,7 @@ int main(int argc, char* argv[]) {
         } else {
             // Pure CLI mode: dedicated thread reads shutdown eventfd and calls App::stop().
             std::atomic<bool> cli_listener_run{true};
-            std::thread cli_shutdown_listener([&cli_listener_run] {
+            std::thread cli_shutdown_listener([&app, &cli_listener_run] {
                 Scalpel::System::Optimizer::set_current_thread_affinity(1);
                 while (cli_listener_run.load(std::memory_order_relaxed)) {
                     uint64_t v;
@@ -215,7 +211,7 @@ int main(int argc, char* argv[]) {
                         break;
                     }
                     if (!cli_listener_run.load(std::memory_order_relaxed)) break;
-                    if (global_app) global_app->stop();
+                    app.stop();
                 }
             });
 
@@ -244,11 +240,9 @@ int main(int argc, char* argv[]) {
             ::close(shutdown_signal_efd);
             shutdown_signal_efd = -1;
         }
-        global_app = nullptr;
         return 1;
     }
 
-    global_app = nullptr;
     if (gui_stop_efd >= 0) {
         ::close(gui_stop_efd);
         gui_stop_efd = -1;
