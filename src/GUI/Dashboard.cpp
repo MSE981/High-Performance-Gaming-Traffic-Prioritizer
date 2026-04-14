@@ -1675,21 +1675,26 @@ void Dashboard::setup_ui() {
     notif_panel_->setFixedSize(centralWidget()->width(), centralWidget()->height());
     notif_panel_->raise();
 
-    // Populate startup log entries written by start.sh
-    {
+    // Async startup log read — regular file I/O is offloaded off the GUI thread.
+    // Each line is queued back via invokeMethod; if Dashboard is destroyed before
+    // delivery, Qt silently drops the queued event (QObject receiver invalidation).
+    startup_log_reader_ = std::jthread([](std::stop_token st) {
         QFile log("/tmp/hpgtp_startup.log");
-        if (log.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QTextStream ts(&log);
-            while (!ts.atEnd()) {
-                QString line = ts.readLine().trimmed();
-                if (line.isEmpty()) continue;
-                int sep = line.indexOf('|');
-                QString title = (sep >= 0) ? line.left(sep)   : line;
-                QString body  = (sep >= 0) ? line.mid(sep + 1): QString();
-                notif_panel_->push_notification(title, body);
-            }
+        if (!log.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+        QTextStream ts(&log);
+        while (!ts.atEnd()) {
+            if (st.stop_requested()) return;
+            QString line = ts.readLine().trimmed();
+            if (line.isEmpty()) continue;
+            int sep = line.indexOf('|');
+            QString title = (sep >= 0) ? line.left(sep)   : line;
+            QString body  = (sep >= 0) ? line.mid(sep + 1): QString();
+            QMetaObject::invokeMethod(instance_, [title, body]() {
+                if (instance_ && instance_->notif_panel_)
+                    instance_->notif_panel_->push_notification(title, body);
+            }, Qt::QueuedConnection);
         }
-    }
+    });
 
     // Self-test results posted asynchronously via on_selftest_done() after worker completes.
 
