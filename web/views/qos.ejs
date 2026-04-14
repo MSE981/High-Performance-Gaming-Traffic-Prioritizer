@@ -114,6 +114,8 @@
               class="form-control"
               value="<%= config.bandwidth_limit || 500 %>"
               style="flex: 1"
+              min="0"
+              oninput="this.value = this.value.replace(/[^0-9]/g, '')"
             />
           </div>
           <div class="form-row" style="display: flex; align-items: center; margin-bottom: 12px">
@@ -126,6 +128,8 @@
               class="form-control"
               value="50"
               style="flex: 1"
+              min="0"
+              oninput="this.value = this.value.replace(/[^0-9]/g, '')"
             />
           </div>
           <button type="button" id="apply-qos-btn" class="btn" style="margin-top: 8px;">Apply Restrictions</button>
