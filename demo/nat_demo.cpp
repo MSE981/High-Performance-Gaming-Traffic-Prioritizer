@@ -7,7 +7,7 @@
 #include "NatEngine.hpp"
 #include "Headers.hpp"
 
-namespace Net = Scalpel::Net;
+namespace Net = HPGTP::Net;
 
 #include <cstring>
 #include <print>
@@ -50,7 +50,7 @@ static std::array<uint8_t, 56> make_udp_frame(
 int main() {
     std::println("=== NAT Engine Demo ===");
 
-    Scalpel::Logic::NatEngine nat;
+    HPGTP::Logic::NatEngine nat;
 
     // WAN IP: 203.0.113.1 (TEST-NET-3, RFC 5737)
     const uint32_t wan_raw = htonl(0xCB007101);  // 203.0.113.1 in NBO

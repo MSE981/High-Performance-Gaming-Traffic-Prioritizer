@@ -14,7 +14,7 @@
 #include <string_view>
 #include <charconv>
 
-namespace Scalpel::Logic {
+namespace HPGTP::Logic {
 
 UpnpEngine::UpnpEngine(std::shared_ptr<NatEngine> nat, const std::string& ip)
     : nat_engine(nat), router_ip_str(ip) {
@@ -286,4 +286,4 @@ void UpnpEngine::run_soap_server() {
     }
 }
 
-} // namespace Scalpel::Logic
+} // namespace HPGTP::Logic

@@ -4,7 +4,7 @@
 #include <cerrno>
 #include <cstdint>
 
-namespace Scalpel::DataPlane {
+namespace HPGTP::DataPlane {
 
 TxFrameOutput::PacketTxTry TxFrameOutput::try_send_packet_nonblocking(
     int tx_fd, std::span<const uint8_t> pkt) noexcept {
@@ -41,4 +41,4 @@ void TxFrameOutput::send_stream_blocking(int fd, std::span<const uint8_t> data) 
     }
 }
 
-} // namespace Scalpel::DataPlane
+} // namespace HPGTP::DataPlane

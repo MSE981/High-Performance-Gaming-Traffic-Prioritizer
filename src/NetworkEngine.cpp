@@ -12,7 +12,7 @@
 #include <poll.h>
 #include <linux/if_packet.h>
 
-namespace Scalpel::Engine {
+namespace HPGTP::Engine {
 
 RawSocketManager::RawSocketManager(std::string_view iface_name) {
     iface_name.copy(iface.data(), IFACE_NAME_MAX - 1);
@@ -110,4 +110,4 @@ void RawSocketManager::advance_frame() {
     rx_idx = (rx_idx + 1) % FRAME_NR;
 }
 
-} // namespace Scalpel::Engine
+} // namespace HPGTP::Engine

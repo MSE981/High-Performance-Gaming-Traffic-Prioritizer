@@ -7,7 +7,7 @@
 #include <string>
 #include "Headers.hpp"
 
-namespace Scalpel::Logic {
+namespace HPGTP::Logic {
 
     struct DhcpMessage {
         size_t len = 0;

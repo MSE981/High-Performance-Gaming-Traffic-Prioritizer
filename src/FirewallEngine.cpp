@@ -1,7 +1,7 @@
 #include "FirewallEngine.hpp"
 #include <netinet/in.h>
 
-namespace Scalpel::Logic {
+namespace HPGTP::Logic {
 
 uint32_t FirewallEngine::hash_remote(uint32_t remote_ip, uint16_t remote_port, uint8_t proto) {
     uint32_t h = 2166136261U;
@@ -198,4 +198,4 @@ void FirewallEngine::cleanup() {
     }
 }
 
-} // namespace Scalpel::Logic
+} // namespace HPGTP::Logic

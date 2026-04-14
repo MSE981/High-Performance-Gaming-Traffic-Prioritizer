@@ -5,9 +5,10 @@
 #include <arpa/inet.h>
 #include <print>
 #include <algorithm>
+#include <cstring>
 #include <string>
 
-namespace Scalpel::Logic {
+namespace HPGTP::Logic {
 
 // DhcpHeader is an internal wire-format struct — hidden from all clients
 #pragma pack(push, 1)
@@ -235,4 +236,4 @@ void DhcpEngine::process_background_tasks(int lan_fd) {
         handle_dhcp_request(msg, lan_fd);
 }
 
-} // namespace Scalpel::Logic
+} // namespace HPGTP::Logic

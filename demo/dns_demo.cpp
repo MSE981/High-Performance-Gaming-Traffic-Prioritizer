@@ -6,7 +6,7 @@
 #include "Config.hpp"
 #include "Headers.hpp"
 
-namespace Net = Scalpel::Net;
+namespace Net = HPGTP::Net;
 
 #include <print>
 #include <cassert>
@@ -79,9 +79,9 @@ int main() {
     std::println("=== DNS Engine Demo ===");
 
     // Inject a static record: example.test → 10.0.0.1
-    Scalpel::Config::upsert_static_dns("example.test", "10.0.0.1");
+    HPGTP::Config::upsert_static_dns("example.test", "10.0.0.1");
 
-    Scalpel::Logic::DnsEngine dns;
+    HPGTP::Logic::DnsEngine dns;
     dns.reload_static_records();
 
     auto frame  = make_dns_query("example.test");

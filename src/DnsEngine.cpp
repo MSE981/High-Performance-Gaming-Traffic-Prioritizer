@@ -4,7 +4,7 @@
 #include <cstring>
 #include <print>
 
-namespace Scalpel::Logic {
+namespace HPGTP::Logic {
 
 static uint32_t hash_qname(const uint8_t* qname, size_t max_len) {
     uint32_t h = 2166136261U;
@@ -180,4 +180,4 @@ void DnsEngine::process_background_tasks() {
     }
 }
 
-} // namespace Scalpel::Logic
+} // namespace HPGTP::Logic

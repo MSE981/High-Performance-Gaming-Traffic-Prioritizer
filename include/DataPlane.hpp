@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace Scalpel::DataPlane {
+namespace HPGTP::DataPlane {
 
 // Single egress path for raw Ethernet frames from the data plane.
 struct TxFrameOutput {
@@ -20,4 +20,4 @@ struct TxFrameOutput {
     static void send_stream_blocking(int fd, std::span<const uint8_t> data);
 };
 
-} // namespace Scalpel::DataPlane
+} // namespace HPGTP::DataPlane

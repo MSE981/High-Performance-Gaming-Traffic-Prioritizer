@@ -19,7 +19,7 @@
 #include <cerrno>
 #include <string_view>
 
-namespace Scalpel {
+namespace HPGTP {
 
 namespace {
 
@@ -368,11 +368,11 @@ std::expected<void, std::string> App::init() {
 }
 
 void App::start() {
-    std::println("=== Scalpel High-Performance Software Router ===");
+    std::println("=== High-performance gaming traffic prioritizer (software router) ===");
     Telemetry::instance().bridge_mode.store(
         !Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed),
         std::memory_order_relaxed);
-    Scalpel::System::Optimizer::lock_cpu_frequency();
+    HPGTP::System::Optimizer::lock_cpu_frequency();
 
     if (watchdog_stop_efd_ < 0) {
         watchdog_stop_efd_ = ::eventfd(0, EFD_CLOEXEC);
@@ -446,8 +446,8 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
 
     std::thread rx_thread(
         [this, mgr = std::move(rx_mgr), &frame_q, &poll_sync, core = cfg.core_id]() mutable {
-            Scalpel::System::Optimizer::set_current_thread_affinity(core);
-            Scalpel::System::Optimizer::set_realtime_priority();
+            HPGTP::System::Optimizer::set_current_thread_affinity(core);
+            HPGTP::System::Optimizer::set_realtime_priority();
             const int sock_fd = mgr->get_fd();
             while (this->running_workers.load(std::memory_order_relaxed)) {
                 struct pollfd pfds_rx[2]{};
@@ -488,8 +488,8 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
         });
 
     std::thread proc_thread([this, &consumer, &frame_q, &poll_sync, cfg]() {
-        Scalpel::System::Optimizer::set_current_thread_affinity(cfg.core_id);
-        Scalpel::System::Optimizer::set_realtime_priority();
+        HPGTP::System::Optimizer::set_current_thread_affinity(cfg.core_id);
+        HPGTP::System::Optimizer::set_realtime_priority();
         while (this->running_workers.load(std::memory_order_relaxed)) {
             RxFrameCopy copy{};
             while (frame_q.pop(copy)) {
@@ -541,7 +541,7 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
 // ─── Watchdog loop (Core 1, 1 Hz timerfd) ────────────────────────────────────
 
 void App::watchdog_loop() {
-    Scalpel::System::Optimizer::set_current_thread_affinity(1);
+    HPGTP::System::Optimizer::set_current_thread_affinity(1);
     auto& tel = Telemetry::instance();
 
     int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
@@ -554,7 +554,6 @@ void App::watchdog_loop() {
 
     uint64_t expirations;
     uint64_t last_bytes[4]  = {};
-    uint64_t last_ticks[4]  = {};
     uint64_t stat_idle[4]   = {};
     uint64_t stat_total[4]  = {};
     uint64_t watchdog_tick  = 0;
@@ -869,12 +868,9 @@ void App::watchdog_loop() {
                     pct, base_dl_mbps * factor, base_ul_mbps * factor);
             }
         }
-
-        // Heartbeat fault detection
-        last_ticks[2] = tel.core_metrics[2].last_heartbeat.load(std::memory_order_relaxed);
     }
 
     close(tfd);
 }
 
-} // namespace Scalpel
+} // namespace HPGTP

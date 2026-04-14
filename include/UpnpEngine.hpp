@@ -8,7 +8,7 @@
 #include "Headers.hpp"
 #include "NatEngine.hpp"
 
-namespace Scalpel::Logic {
+namespace HPGTP::Logic {
 
     class UpnpEngine {
         struct SoapRequestJob {

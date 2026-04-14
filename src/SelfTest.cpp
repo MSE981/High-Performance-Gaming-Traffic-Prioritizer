@@ -17,7 +17,7 @@
 #include "FirewallEngine.hpp"
 #include "Processor.hpp"
 
-namespace Scalpel::SelfTest {
+namespace HPGTP::SelfTest {
 
 // Wire-format DHCP header — mirrors the internal layout used by DhcpEngine.
 // Defined locally here so DhcpEngine's private type stays confined to its TU.
@@ -423,4 +423,4 @@ void SelfTest::test_system(Report& r) {
     }
 }
 
-} // namespace Scalpel::SelfTest
+} // namespace HPGTP::SelfTest

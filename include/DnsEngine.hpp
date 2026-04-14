@@ -7,7 +7,7 @@
 #include "Telemetry.hpp"
 #include "Config.hpp"
 
-namespace Scalpel::Logic {
+namespace HPGTP::Logic {
     struct DnsHeader {
         uint16_t id;
         uint16_t flags;

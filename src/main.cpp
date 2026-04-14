@@ -30,7 +30,7 @@ extern "C" void signal_handler(int signal) {
 
 namespace {
 
-void print_selftest_report(const Scalpel::SelfTest::Report& r) {
+void print_selftest_report(const HPGTP::SelfTest::Report& r) {
     std::println("\n=== Startup self-test: {} / {} passed ===", r.passed, r.count);
     for (size_t i = 0; i < r.count; ++i) {
         std::println("  [{}] {} : {}",
@@ -60,9 +60,9 @@ int main(int argc, char* argv[]) {
 
     // 1. Load router and system config
     // Requires the working directory to be the project root (i.e. run as: ./build/app from project root)
-    Scalpel::Config::load_config("config/config.txt");
+    HPGTP::Config::load_config("config/config.txt");
 
-    if (auto r = Scalpel::Telemetry::instance().sys_info.init_event_fds(); !r) {
+    if (auto r = HPGTP::Telemetry::instance().sys_info.init_event_fds(); !r) {
         std::println(stderr, "[Fatal] {}", r.error());
         return 1;
     }
@@ -83,7 +83,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    Scalpel::App app;
+    HPGTP::App app;
 
     // 2. Register shutdown signals (handler must not call App::stop)
     std::signal(SIGINT, signal_handler);
@@ -100,9 +100,9 @@ int main(int argc, char* argv[]) {
 
     int ret = 0;
     try {
-        if (Scalpel::Config::global_state.enable_gui.load(std::memory_order_relaxed)) {
+        if (HPGTP::Config::global_state.enable_gui.load(std::memory_order_relaxed)) {
             // Core 0: UI/Graphics — must be set before QApplication construction
-            Scalpel::System::Optimizer::set_current_thread_affinity(0);
+            HPGTP::System::Optimizer::set_current_thread_affinity(0);
 
             std::atomic<bool> gui_shutdown_runner_quit{false};
 
@@ -121,7 +121,7 @@ int main(int argc, char* argv[]) {
             QApplication qapp(argc, argv);
 
             std::thread gui_shutdown_runner([&app, gui_stop_efd, &gui_shutdown_runner_quit]() {
-                Scalpel::System::Optimizer::set_current_thread_affinity(1);
+                HPGTP::System::Optimizer::set_current_thread_affinity(1);
                 for (;;) {
                     uint64_t v;
                     int rr = ::eventfd_read(gui_stop_efd, &v);
@@ -134,7 +134,7 @@ int main(int argc, char* argv[]) {
                 }
             });
 
-            Scalpel::GUI::Dashboard gui;
+            HPGTP::GUI::Dashboard gui;
             gui.showFullScreen();
 
             QSocketNotifier shutdown_sn(
@@ -153,10 +153,10 @@ int main(int argc, char* argv[]) {
                 [&app, selftest_done_efd](int) {
                     uint64_t v;
                     (void)::eventfd_read(selftest_done_efd, &v);
-                    const Scalpel::SelfTest::Report r = Scalpel::SelfTest::LAST_REPORT;
+                    const HPGTP::SelfTest::Report r = HPGTP::SelfTest::LAST_REPORT;
                     print_selftest_report(r);
                     app.start();
-                    Scalpel::GUI::Dashboard::on_selftest_done(r);
+                    HPGTP::GUI::Dashboard::on_selftest_done(r);
                 });
 
             // Async self-test: worker sets LAST_REPORT then eventfd_write(selftest_done_efd); Core 0
@@ -164,9 +164,9 @@ int main(int argc, char* argv[]) {
             // SelfTest::~SelfTest() joins the worker (see SelfTest.hpp); that runs when `selftest`
             // goes out of scope at the end of this block, after qapp.exec() and watchdog_notify.join(),
             // not when exec() first returns. Until then the std::thread may still be joinable even if run() has completed.
-            Scalpel::SelfTest::SelfTest selftest;
-            selftest.registerCallback([selftest_done_efd](const Scalpel::SelfTest::Report& r) {
-                Scalpel::SelfTest::LAST_REPORT = r;
+            HPGTP::SelfTest::SelfTest selftest;
+            selftest.registerCallback([selftest_done_efd](const HPGTP::SelfTest::Report& r) {
+                HPGTP::SelfTest::LAST_REPORT = r;
                 (void)::eventfd_write(selftest_done_efd, 1);
             });
             selftest.start();
@@ -175,7 +175,7 @@ int main(int argc, char* argv[]) {
             // safely notify Qt to exit GUI. Fixes bug where signal_handler alone couldn't
             // interrupt Qt exec(), causing terminal to hang completely.
             std::thread watchdog_notify([&app, &qapp]() {
-                Scalpel::System::Optimizer::set_current_thread_affinity(1); // Core 1: Watchdog
+                HPGTP::System::Optimizer::set_current_thread_affinity(1); // Core 1: Watchdog
                 app.wait_for_shutdown();
                 QMetaObject::invokeMethod(&qapp, "quit", Qt::QueuedConnection);
             });
@@ -201,7 +201,7 @@ int main(int argc, char* argv[]) {
             // Pure CLI mode: dedicated thread reads shutdown eventfd and calls App::stop().
             std::atomic<bool> cli_listener_run{true};
             std::thread cli_shutdown_listener([&app, &cli_listener_run] {
-                Scalpel::System::Optimizer::set_current_thread_affinity(1);
+                HPGTP::System::Optimizer::set_current_thread_affinity(1);
                 while (cli_listener_run.load(std::memory_order_relaxed)) {
                     uint64_t v;
                     int      fd = shutdown_signal_efd.load(std::memory_order_relaxed);
@@ -217,13 +217,13 @@ int main(int argc, char* argv[]) {
             });
 
             {
-                Scalpel::SelfTest::SelfTest selftest;
-                selftest.registerCallback([](const Scalpel::SelfTest::Report& r) {
-                    Scalpel::SelfTest::LAST_REPORT = r;
+                HPGTP::SelfTest::SelfTest selftest;
+                selftest.registerCallback([](const HPGTP::SelfTest::Report& r) {
+                    HPGTP::SelfTest::LAST_REPORT = r;
                 });
                 selftest.start();
                 selftest.join();
-                print_selftest_report(Scalpel::SelfTest::LAST_REPORT);
+                print_selftest_report(HPGTP::SelfTest::LAST_REPORT);
             }
             app.start();
             app.wait_for_shutdown();
@@ -249,8 +249,8 @@ int main(int argc, char* argv[]) {
         gui_stop_efd = -1;
     }
     close_shutdown_signal_efd();
-    if (Scalpel::Config::SAVE_ON_EXIT.load(std::memory_order_relaxed))
-        Scalpel::Config::save_config("config/config.txt");
+    if (HPGTP::Config::SAVE_ON_EXIT.load(std::memory_order_relaxed))
+        HPGTP::Config::save_config("config/config.txt");
     std::println("[System] Application cleanly exited. Kernel resources fully released.");
 
     return ret;

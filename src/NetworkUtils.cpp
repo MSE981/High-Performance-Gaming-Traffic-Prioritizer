@@ -12,7 +12,7 @@
 #include <linux/ethtool.h>
 #include <linux/sockios.h>
 
-namespace Scalpel::Utils {
+namespace HPGTP::Utils {
 
 std::string Network::get_local_ip(const std::string& iface) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -131,4 +131,4 @@ bool Network::disable_hardware_offloads(const std::string& iface) {
     return success;
 }
 
-} // namespace Scalpel::Utils
+} // namespace HPGTP::Utils

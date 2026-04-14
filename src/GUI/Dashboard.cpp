@@ -17,6 +17,7 @@
 #include <QTimerEvent>
 #include <QResizeEvent>
 #include <QMouseEvent>
+#include <QPoint>
 #include <QFormLayout>
 #include <QScrollArea>
 #include <QRegularExpressionValidator>
@@ -30,7 +31,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 
-namespace Scalpel::GUI {
+namespace HPGTP::GUI {
 
 // ═════════════════════════════════════════════════════════════
 // NotificationPanel: iOS-style pull-down overlay
@@ -745,7 +746,7 @@ NumPadDialog::NumPadDialog(const QString& title, int initial,
     : QDialog(parent), min_(min), max_(max)
 {
     setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
-    setStyleSheet(Scalpel::GUI::DARK_STYLESHEET);
+    setStyleSheet(HPGTP::GUI::DARK_STYLESHEET);
     setFixedWidth(360);
 
     auto* lay = new QVBoxLayout(this);
@@ -845,7 +846,7 @@ std::optional<int> NumPadDialog::get_int(QWidget* parent, const QString& title,
 PortWhitelistDialog::PortWhitelistDialog(QWidget* parent) : QDialog(parent) {
     setWindowTitle("Edit Game Port Whitelist");
     setMinimumSize(720, 900);
-    setStyleSheet(Scalpel::GUI::DARK_STYLESHEET);
+    setStyleSheet(HPGTP::GUI::DARK_STYLESHEET);
 
     auto* lay = new QVBoxLayout(this);
     lay->setContentsMargins(20, 16, 20, 16);
@@ -889,7 +890,7 @@ void PortWhitelistDialog::on_add_port() {
     QDialog dlg(this);
     dlg.setWindowTitle("Select Protocol");
     dlg.setFixedSize(560, 300);
-    dlg.setStyleSheet(Scalpel::GUI::DARK_STYLESHEET);
+    dlg.setStyleSheet(HPGTP::GUI::DARK_STYLESHEET);
 
     auto* lay = new QVBoxLayout(&dlg);
     lay->setContentsMargins(24, 20, 24, 20);
@@ -1564,7 +1565,7 @@ void Dashboard::post_notification(const QString& title, const QString& body) {
     }, Qt::QueuedConnection);
 }
 
-void Dashboard::on_selftest_done(const Scalpel::SelfTest::Report& r) {
+void Dashboard::on_selftest_done(const HPGTP::SelfTest::Report& r) {
     if (!instance_) return;
     QMetaObject::invokeMethod(instance_, [r]() {
         if (!instance_) return;
@@ -1881,16 +1882,18 @@ bool Dashboard::eventFilter(QObject* obj, QEvent* event) {
         if (etype == QEvent::MouseButtonPress) {
             auto* me = static_cast<QMouseEvent*>(event);
             bool panel_active = notif_panel_->is_expanded() || !notif_panel_->is_settled();
-            bool in_pull_zone = me->globalPos().y() < height() * 15 / 100;
+            const QPoint gp = me->globalPosition().toPoint();
+            bool in_pull_zone = gp.y() < height() * 15 / 100;
             if (panel_active || in_pull_zone) {
-                notif_pull_y0_ = me->globalPos().y();
-                notif_pull_x0_ = me->globalPos().x();
+                notif_pull_y0_ = gp.y();
+                notif_pull_x0_ = gp.x();
             }
 
         } else if (etype == QEvent::MouseMove && notif_pull_y0_ >= 0) {
             auto* me = static_cast<QMouseEvent*>(event);
-            int dy = me->globalPos().y() - notif_pull_y0_;
-            int dx = std::abs(me->globalPos().x() - notif_pull_x0_);
+            const QPoint gp = me->globalPosition().toPoint();
+            int dy = gp.y() - notif_pull_y0_;
+            int dx = std::abs(gp.x() - notif_pull_x0_);
             // Horizontal intent wins — abandon notification tracking
             if (dx > 30) {
                 notif_pull_y0_ = notif_pull_x0_ = -1;
@@ -1904,7 +1907,7 @@ bool Dashboard::eventFilter(QObject* obj, QEvent* event) {
 
         } else if (etype == QEvent::MouseButtonRelease && notif_pull_y0_ >= 0) {
             auto* me = static_cast<QMouseEvent*>(event);
-            int dy = me->globalPos().y() - notif_pull_y0_;
+            int dy = me->globalPosition().toPoint().y() - notif_pull_y0_;
             // Interrupt / collapse: upward swipe when panel is opening or open.
             // Skip if touch is on the panel itself (NotificationPanel::mouseReleaseEvent
             // already handles that path — avoid double kick).
@@ -2018,4 +2021,4 @@ void Dashboard::timerEvent(QTimerEvent* event) {
     }
 }
 
-} // namespace Scalpel::GUI
+} // namespace HPGTP::GUI

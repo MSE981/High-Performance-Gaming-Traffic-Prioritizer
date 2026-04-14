@@ -12,7 +12,7 @@
 #include "NetworkTypes.hpp"
 #include "Units.hpp"
 
-namespace Scalpel::Config {
+namespace HPGTP::Config {
     // Per-interface role assignment
     enum class IfaceRole : uint8_t { WAN = 0, LAN = 1, GATEWAY = 2, DISABLED = 3 };
 

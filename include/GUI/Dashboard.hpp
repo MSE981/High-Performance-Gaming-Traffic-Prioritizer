@@ -37,7 +37,7 @@
 #include "Telemetry.hpp"
 #include "SelfTest.hpp"
 
-namespace Scalpel::GUI {
+namespace HPGTP::GUI {
 
 // ═══════════════════════════════════════════
 // Notification panel: pull-down overlay (iOS-style)
@@ -292,7 +292,7 @@ public:
     // Thread-safe: callable from any thread (engine cores, network threads)
     static void post_notification(const QString& title, const QString& body);
     // Called on Qt main thread after async self-test completes
-    static void on_selftest_done(const Scalpel::SelfTest::Report& r);
+    static void on_selftest_done(const HPGTP::SelfTest::Report& r);
 protected:
     void timerEvent(QTimerEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
@@ -351,4 +351,4 @@ private slots:
     void on_shutdown_clicked();
 };
 
-} // namespace Scalpel::GUI
+} // namespace HPGTP::GUI

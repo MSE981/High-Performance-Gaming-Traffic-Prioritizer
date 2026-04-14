@@ -5,7 +5,7 @@
 #include "DhcpEngine.hpp"
 #include "Headers.hpp"
 
-namespace Net = Scalpel::Net;
+namespace Net = HPGTP::Net;
 
 #include <print>
 #include <cassert>
@@ -74,9 +74,9 @@ int main() {
     std::println("=== DHCP Engine Demo ===");
 
     // ── 1. Construct engine with a small address pool ────────────────────────
-    Scalpel::Logic::DhcpEngine engine(
+    HPGTP::Logic::DhcpEngine engine(
         "192.168.50.1",
-        Scalpel::Logic::DhcpPoolConfig{
+        HPGTP::Logic::DhcpPoolConfig{
             Net::parse_ipv4("192.168.50.100"),
             Net::parse_ipv4("192.168.50.110"),
             std::chrono::seconds{3600}});
@@ -126,7 +126,7 @@ int main() {
     }
 
     // ── 6. Reconfigure pool and verify engine accepts the new config ──────────
-    if (auto rr = engine.reconfigure(Scalpel::Logic::DhcpPoolConfig{
+    if (auto rr = engine.reconfigure(HPGTP::Logic::DhcpPoolConfig{
             Net::parse_ipv4("10.0.0.100"),
             Net::parse_ipv4("10.0.0.200"),
             std::chrono::seconds{7200}});

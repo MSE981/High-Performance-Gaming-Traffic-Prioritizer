@@ -1,7 +1,7 @@
 #pragma once
 #include <QString>
 
-namespace Scalpel::GUI {
+namespace HPGTP::GUI {
 
     // Global dark theme QSS stylesheet
     // Optimized for 800x1280 DSI display
@@ -461,4 +461,4 @@ namespace Scalpel::GUI {
 
     )QSS";
 
-} // namespace Scalpel::GUI
+} // namespace HPGTP::GUI

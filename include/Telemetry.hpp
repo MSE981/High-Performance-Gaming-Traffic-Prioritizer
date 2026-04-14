@@ -7,7 +7,7 @@
 #include <string>
 #include "NetworkTypes.hpp"
 
-namespace Scalpel {
+namespace HPGTP {
 
     // Core metrics slot (L1 cache line aligned)
     // Forced alignment to 64 bytes ensures each CPU core's stats updates don't trigger cache line bouncing

@@ -7,7 +7,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-namespace Scalpel::Config {
+namespace HPGTP::Config {
 
 // ── private helpers ──────────────────────────────────────────────────────────
 
@@ -200,4 +200,4 @@ void save_config(const std::string& path) {
     std::println("[Config] Config saved: {}", path);
 }
 
-} // namespace Scalpel::Config
+} // namespace HPGTP::Config

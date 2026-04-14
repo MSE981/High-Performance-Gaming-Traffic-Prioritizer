@@ -10,7 +10,7 @@
 #include "Telemetry.hpp"
 #include "Units.hpp"
 
-namespace Scalpel::Traffic {
+namespace HPGTP::Traffic {
 
     // Token bucket rate limiter — kept inline (hot path, called every packet)
     class TokenBucket {

@@ -6,7 +6,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-namespace Scalpel::System::Optimizer {
+namespace HPGTP::System::Optimizer {
 
 void lock_cpu_frequency() {
     for (int i = 0; i < 4; ++i) {
@@ -37,4 +37,4 @@ void set_realtime_priority() {
         std::println(stderr, "[System] Warning: Failed to set SCHED_FIFO. Run with sudo/setcap?");
 }
 
-} // namespace Scalpel::System::Optimizer
+} // namespace HPGTP::System::Optimizer
