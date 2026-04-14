@@ -1,18 +1,29 @@
-﻿#pragma once
+#pragma once
 #include <span>
 #include <cstdint>
-#include <netinet/in.h>
-#include <bit>
+#include <cstddef>
 #include <array>
 #include "Headers.hpp"
 #include "Config.hpp"
 
 namespace Scalpel::Logic {
 
+    // Big-endian wire uint16 → host (Pi 5 is little-endian). Avoids public <netinet/in.h> in this header.
+    constexpr inline uint16_t net16_to_host(uint16_t be) noexcept {
+        return static_cast<uint16_t>((be << 8) | (be >> 8));
+    }
+
     // 5-tuple flow identifier
     struct FlowKey {
-        uint32_t saddr, daddr;
-        uint16_t sport, dport;
+        Net::IPv4Net saddr, daddr;   // NBO — matched directly against IPv4Header fields
+        uint16_t     sport = 0;
+        uint16_t     dport = 0;
+
+        constexpr FlowKey() noexcept : saddr(), daddr(), sport(0), dport(0) {}
+
+        constexpr FlowKey(Net::IPv4Net sa, Net::IPv4Net da, uint16_t sp, uint16_t dp) noexcept
+            : saddr(sa), daddr(da), sport(sp), dport(dp) {}
+
         bool operator==(const FlowKey&) const = default;
     };
 
@@ -84,7 +95,8 @@ namespace Scalpel::Logic {
         uint32_t process_counter = 0;
         uint32_t pkt_count = 0;   // monotonic packet counter — lightweight logical clock
 
-        using ProtocolHandler = Net::Priority(*)(HeuristicProcessor*, const Net::ParsedPacket&);
+        using ProtocolHandler =
+            Net::Priority (*)(HeuristicProcessor*, const Net::ParsedPacket&);
         std::array<ProtocolHandler, 256> protocol_handlers;
 
         // UDP protocol-specific identification logic
@@ -92,8 +104,8 @@ namespace Scalpel::Logic {
             auto udp = parsed.udp();
             if (!udp) return Net::Priority::Normal;
 
-            uint16_t dport = ntohs(udp->dest);
-            uint16_t sport = ntohs(udp->source);
+            uint16_t dport = net16_to_host(udp->dest);
+            uint16_t sport = net16_to_host(udp->source);
 
             // DNS priority pass
             if (dport == 53 || sport == 53) return Net::Priority::Critical;
@@ -104,7 +116,7 @@ namespace Scalpel::Logic {
             if (stats) {
                 stats->total_pkts++;
                 stats->last_pkt = self->pkt_count;   // free integer store, no syscall
-                if (parsed.raw_span.size() > Config::LARGE_PACKET_THRESHOLD) stats->large_pkts++;
+                if (parsed.raw_span.size() > Config::LARGE_PACKET_THRESHOLD_BYTES) stats->large_pkts++;
 
                 // Disguised traffic detection (e.g., UDP-Ping flood)
                 if (!stats->is_disguised && stats->total_pkts < 50) {
@@ -116,8 +128,8 @@ namespace Scalpel::Logic {
             ++self->pkt_count;
 
             // Periodic cleanup: expire flows not seen in 3 × CLEANUP_INTERVAL packets
-            if (++self->process_counter > Config::CLEANUP_INTERVAL) {
-                self->flows.cleanup(self->pkt_count, Config::CLEANUP_INTERVAL * 3);
+            if (++self->process_counter > Config::CLEANUP_INTERVAL_PKTS) {
+                self->flows.cleanup(self->pkt_count, Config::CLEANUP_INTERVAL_PKTS * 3);
                 self->process_counter = 0;
             }
 
@@ -130,8 +142,8 @@ namespace Scalpel::Logic {
             if (parsed.raw_span.size() < 74) return Net::Priority::Critical; // Prioritize small packets (SYN/ACK)
             auto tcp = parsed.tcp();
             if (tcp) {
-                uint16_t dport = ntohs(tcp->dest);
-                uint16_t sport = ntohs(tcp->source);
+                uint16_t dport = net16_to_host(tcp->dest);
+                uint16_t sport = net16_to_host(tcp->source);
                 if (Config::is_game_port(dport) || Config::is_game_port(sport)) return Net::Priority::High;
             }
             return Net::Priority::Normal;

@@ -1,8 +1,16 @@
 #pragma once
 #include <cstdint>
-#include <netinet/in.h>
+#include <atomic>
+#include <array>
+#include <span>
+#include "NetworkTypes.hpp"
 
 namespace Scalpel::Net {
+
+    inline constexpr uint16_t eth_proto_wire_to_host(uint16_t be) noexcept {
+        return static_cast<uint16_t>((be << 8) | (be >> 8));
+    }
+
     enum class Priority : uint8_t {
         Critical = 0, // DNS, TCP-ACK
         High = 1, // Gaming
@@ -25,8 +33,8 @@ namespace Scalpel::Net {
         uint8_t  ttl;
         uint8_t  protocol;
         uint16_t check;
-        uint32_t saddr;
-        uint32_t daddr;
+        IPv4Net  saddr;   // always NBO — from wire
+        IPv4Net  daddr;   // always NBO — from wire
     };
 
     struct UDPHeader {
@@ -98,7 +106,7 @@ namespace Scalpel::Net {
             
             if (span.size() < sizeof(Net::EthernetHeader)) return p;
             p.eth = reinterpret_cast<Net::EthernetHeader*>(span.data());
-            if (ntohs(p.eth->proto) != 0x0800) return p; // Currently track IPv4 only
+            if (eth_proto_wire_to_host(p.eth->proto) != 0x0800) return p; // IPv4 only
             
             if (span.size() < sizeof(Net::EthernetHeader) + sizeof(Net::IPv4Header)) return p;
             p.ipv4 = reinterpret_cast<Net::IPv4Header*>(span.data() + sizeof(Net::EthernetHeader));

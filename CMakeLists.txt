@@ -9,48 +9,107 @@ set(CMAKE_CXX_EXTENSIONS ON)
 
 project(GamingTrafficPrioritizer VERSION 3.0 LANGUAGES CXX)
 
-
 include_directories(include)
 find_package(Threads REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL)
 
-# Enable Qt Meta-Object Compiler (MOC) for signals and slots
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
+# ── Raspberry Pi 5 (Cortex-A76) compile options ───────────────────────────────
+set(SCALPEL_COMPILE_OPTIONS "")
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    list(APPEND SCALPEL_COMPILE_OPTIONS
+        -O3
+        -mcpu=cortex-a76
+        -mtune=cortex-a76
+        -pipe
+        -Wall
+        -Wextra
+        -fexceptions
+    )
+elseif(MSVC)
+    list(APPEND SCALPEL_COMPILE_OPTIONS /std:c++latest)
+endif()
+
+# ── Infrastructure utilities ──────────────────────────────────────────────────
+add_library(utils_network    src/NetworkUtils.cpp src/NetworkTypes.cpp)
+add_library(dataplane        src/DataPlane.cpp)
+add_library(utils_system     src/SystemOptimizer.cpp)
+add_library(config           src/Config.cpp)
+
+# ── Data-plane engines ────────────────────────────────────────────────────────
+add_library(engine_nat       src/NatEngine.cpp)
+add_library(engine_dns       src/DnsEngine.cpp)
+add_library(engine_dhcp      src/DhcpEngine.cpp)
+add_library(engine_firewall  src/FirewallEngine.cpp)
+add_library(engine_scheduler src/Scheduler.cpp)
+
+target_link_libraries(engine_dns       PRIVATE dataplane)
+target_link_libraries(engine_dhcp      PRIVATE dataplane)
+target_link_libraries(engine_scheduler PRIVATE dataplane)
+
+# ── I/O engines ───────────────────────────────────────────────────────────────
+add_library(engine_net       src/NetworkEngine.cpp)
+add_library(engine_probe     src/ProbeManager.cpp)
+add_library(engine_upnp      src/UpnpEngine.cpp)
+
+target_link_libraries(engine_upnp PRIVATE dataplane)
+
+# ── Self-test component ───────────────────────────────────────────────────────
+add_library(selftest         src/SelfTest.cpp)
+
+# Apply compile options and _GNU_SOURCE to every library
+set(ALL_SCALPEL_LIBS
+    utils_network utils_system config dataplane
+    engine_nat engine_dns engine_dhcp engine_firewall engine_scheduler
+    engine_net engine_probe engine_upnp
+    selftest
+)
+foreach(lib IN LISTS ALL_SCALPEL_LIBS)
+    target_compile_options(${lib} PRIVATE ${SCALPEL_COMPILE_OPTIONS})
+    target_compile_definitions(${lib} PRIVATE _GNU_SOURCE)
+endforeach()
+
+# ── Main application ──────────────────────────────────────────────────────────
 add_executable(GamingTrafficPrioritizer
     src/main.cpp
+    src/App.cpp
+    src/Telemetry.cpp
     src/GUI/Dashboard.cpp
     include/GUI/Dashboard.hpp
 )
 
 target_link_libraries(GamingTrafficPrioritizer PRIVATE
+    ${ALL_SCALPEL_LIBS}
     Qt6::Widgets
     Qt6::OpenGL
     Threads::Threads
-    gpiodcxx
 )
 
+target_compile_options(GamingTrafficPrioritizer PRIVATE ${SCALPEL_COMPILE_OPTIONS})
 target_compile_definitions(GamingTrafficPrioritizer PRIVATE _GNU_SOURCE)
 
-
-
-# Raspberry Pi 5 (Cortex-A76) peak optimization flags
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(GamingTrafficPrioritizer PRIVATE 
-        -std=c++23
-        -O3
-        -mcpu=cortex-a76
-        -mtune=cortex-a76
-        -pipe
-        -Wall 
-        -Wextra 
-        -fexceptions
-    )
-elseif(MSVC)
-    target_compile_options(GamingTrafficPrioritizer PRIVATE 
-        /std:c++latest
-    )
+# ── Demo programs (Phase 5) ───────────────────────────────────────────────────
+if(EXISTS "${CMAKE_SOURCE_DIR}/demo")
+    foreach(demo_src IN ITEMS
+        demo/nat_demo.cpp
+        demo/dns_demo.cpp
+        demo/dhcp_demo.cpp
+        demo/scheduler_demo.cpp
+        demo/firewall_demo.cpp
+        demo/probe_demo.cpp)
+        if(EXISTS "${CMAKE_SOURCE_DIR}/${demo_src}")
+            get_filename_component(demo_name ${demo_src} NAME_WE)
+            add_executable(${demo_name} ${demo_src})
+            target_link_libraries(${demo_name} PRIVATE
+                ${ALL_SCALPEL_LIBS}
+                Threads::Threads
+            )
+            target_compile_options(${demo_name} PRIVATE ${SCALPEL_COMPILE_OPTIONS})
+            target_compile_definitions(${demo_name} PRIVATE _GNU_SOURCE)
+        endif()
+    endforeach()
 endif()
 
 # Auto-privilege: disabled due to SSH non-interactive password.
