@@ -26,6 +26,7 @@
 #include <QValidator>
 #include <QRegularExpressionValidator>
 #include <QDialog>
+#include <QEvent>
 #include <QButtonGroup>
 #include <QTime>
 #include <QMenu>
@@ -154,17 +155,29 @@ class NumPadDialog : public QDialog {
 public:
     static std::optional<int> get_int(QWidget* parent, const QString& title,
                                        int initial, int min, int max);
+    static std::optional<double> get_double(QWidget* parent, const QString& title,
+                                            double initial, double min, double max);
 private:
-    explicit NumPadDialog(const QString& title, int initial, int min, int max,
+    // Whitelist (get_int): allow_negative, no decimal. Bandwidth (get_double): decimal, no minus.
+    explicit NumPadDialog(const QString& title, QString initial_text,
+                          double min_val, double max_val,
+                          bool allow_negative, bool allow_decimal,
                           QWidget* parent = nullptr);
     void push_digit(char d);
+    void on_minus();
+    void on_dot();
     void do_backspace();
     void update_display();
 
-    QLabel*      display_;
-    QPushButton* btn_ok_;
-    QString      text_;
-    int          min_, max_;
+    QLabel*       display_;
+    QPushButton*  btn_ok_;
+    QPushButton*  btn_minus_ = nullptr;
+    QPushButton*  btn_dot_   = nullptr;
+    QString       text_;
+    double        min_;
+    double        max_;
+    bool          allow_negative_;
+    bool          allow_decimal_;
 };
 
 // ═══════════════════════════════════════════

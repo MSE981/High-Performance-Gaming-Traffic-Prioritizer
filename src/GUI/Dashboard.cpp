@@ -17,6 +17,7 @@
 #include <QTimerEvent>
 #include <QResizeEvent>
 #include <QMouseEvent>
+#include <QEvent>
 #include <QPoint>
 #include <QFormLayout>
 #include <QScrollArea>
@@ -27,6 +28,7 @@
 #include <print>
 #include <algorithm>
 #include <string_view>
+#include <cmath>
 #include <fcntl.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -770,10 +772,24 @@ void QosPage::on_toggle_accel() {
 // ═════════════════════════════════════════════════════════════
 // NumPadDialog
 // ═════════════════════════════════════════════════════════════
-NumPadDialog::NumPadDialog(const QString& title, int initial,
-                           int min, int max, QWidget* parent)
-    : QDialog(parent), min_(min), max_(max)
+namespace {
+QString numpad_format_initial_double(double v) {
+    return QString::number(v, 'g', 12);
+}
+} // namespace
+
+NumPadDialog::NumPadDialog(const QString& title, QString initial_text,
+                           double min_val, double max_val,
+                           bool allow_negative, bool allow_decimal,
+                           QWidget* parent)
+    : QDialog(parent)
+    , min_(min_val)
+    , max_(max_val)
+    , allow_negative_(allow_negative)
+    , allow_decimal_(allow_decimal)
 {
+    btn_minus_ = nullptr;
+    btn_dot_   = nullptr;
     setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
     setStyleSheet(HPGTP::GUI::DARK_STYLESHEET);
     setFixedWidth(360);
@@ -784,6 +800,7 @@ NumPadDialog::NumPadDialog(const QString& title, int initial,
 
     auto* lbl_title = new QLabel(title);
     lbl_title->setAlignment(Qt::AlignCenter);
+    lbl_title->setWordWrap(true);
     lbl_title->setStyleSheet("font-size:16px; font-weight:bold; color:#ffffff; padding-bottom:4px;");
     lay->addWidget(lbl_title);
 
@@ -794,22 +811,49 @@ NumPadDialog::NumPadDialog(const QString& title, int initial,
 
     auto* grid = new QGridLayout();
     grid->setSpacing(8);
+    grid->setColumnStretch(0, 1);
+    grid->setColumnStretch(1, 1);
+    grid->setColumnStretch(2, 1);
 
-    auto make_btn = [&](const QString& text, int row, int col,
-                        int rs = 1, int cs = 1) -> QPushButton* {
-        auto* b = new QPushButton(text);
-        b->setFixedHeight(62);
+    auto make_btn = [&](const QString& t, int row, int col, int rs = 1, int cs = 1) -> QPushButton* {
+        auto* b = new QPushButton(t);
+        b->setFixedHeight(56);
         b->setStyleSheet("font-size:22px; font-weight:bold;");
         grid->addWidget(b, row, col, rs, cs);
         return b;
     };
 
-    auto* b7  = make_btn("7", 0, 0); auto* b8 = make_btn("8", 0, 1); auto* b9 = make_btn("9", 0, 2);
-    auto* b4  = make_btn("4", 1, 0); auto* b5 = make_btn("5", 1, 1); auto* b6 = make_btn("6", 1, 2);
-    auto* b1  = make_btn("1", 2, 0); auto* b2 = make_btn("2", 2, 1); auto* b3 = make_btn("3", 2, 2);
-    auto* b0  = make_btn("0",   3, 0, 1, 2);
-    auto* del = make_btn("⌫",  3, 2);
+    auto* b7 = make_btn("7", 0, 0);
+    auto* b8 = make_btn("8", 0, 1);
+    auto* b9 = make_btn("9", 0, 2);
+    auto* b4 = make_btn("4", 1, 0);
+    auto* b5 = make_btn("5", 1, 1);
+    auto* b6 = make_btn("6", 1, 2);
+    auto* b1 = make_btn("1", 2, 0);
+    auto* b2 = make_btn("2", 2, 1);
+    auto* b3 = make_btn("3", 2, 2);
+
+    QPushButton* b0 = nullptr;
+    QPushButton* del = nullptr;
+
+    if (allow_negative_ && !allow_decimal_) {
+        b0         = make_btn("0", 3, 0);
+        btn_minus_ = make_btn(QStringLiteral("\u2212"), 3, 1);
+        del        = make_btn(QStringLiteral("\u232B"), 3, 2);
+    } else if (!allow_negative_ && allow_decimal_) {
+        b0       = make_btn("0", 3, 0);
+        btn_dot_ = make_btn(QStringLiteral("."), 3, 1);
+        del      = make_btn(QStringLiteral("\u232B"), 3, 2);
+    } else {
+        b0 = make_btn("0", 3, 0);
+        auto* row4_pad = new QWidget();
+        row4_pad->setFixedHeight(56);
+        row4_pad->setAttribute(Qt::WA_TransparentForMouseEvents);
+        grid->addWidget(row4_pad, 3, 1);
+        del = make_btn(QStringLiteral("\u232B"), 3, 2);
+    }
     del->setObjectName("btn_danger");
+
     lay->addLayout(grid);
 
     auto* btn_row = new QHBoxLayout();
@@ -821,24 +865,46 @@ NumPadDialog::NumPadDialog(const QString& title, int initial,
     btn_row->addWidget(btn_ok_, 1);
     lay->addLayout(btn_row);
 
-    text_ = initial > 0 ? QString::number(initial) : QString();
+    text_ = std::move(initial_text);
 
     for (auto [btn, ch] : std::initializer_list<std::pair<QPushButton*, char>>{
-            {b0,'0'},{b1,'1'},{b2,'2'},{b3,'3'},{b4,'4'},
-            {b5,'5'},{b6,'6'},{b7,'7'},{b8,'8'},{b9,'9'}})
-        connect(btn, &QPushButton::clicked, this, [this, ch](){ push_digit(ch); });
+             {b0, '0'}, {b1, '1'}, {b2, '2'}, {b3, '3'}, {b4, '4'},
+             {b5, '5'}, {b6, '6'}, {b7, '7'}, {b8, '8'}, {b9, '9'}}) {
+        if (btn)
+            connect(btn, &QPushButton::clicked, this, [this, ch]() { push_digit(ch); });
+    }
+    if (btn_minus_)
+        connect(btn_minus_, &QPushButton::clicked, this, &NumPadDialog::on_minus);
+    if (btn_dot_)
+        connect(btn_dot_, &QPushButton::clicked, this, &NumPadDialog::on_dot);
 
-    connect(del,     &QPushButton::clicked, this, &NumPadDialog::do_backspace);
+    connect(del, &QPushButton::clicked, this, &NumPadDialog::do_backspace);
     connect(btn_ok_, &QPushButton::clicked, this, &QDialog::accept);
-    connect(cancel,  &QPushButton::clicked, this, &QDialog::reject);
+    connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
 
     update_display();
 }
 
 void NumPadDialog::push_digit(char d) {
-    if (text_.length() >= 6) return;
-    if (d == '0' && text_.isEmpty()) return;
+    if (text_.length() >= 20) return;
     text_ += QChar(d);
+    update_display();
+}
+
+void NumPadDialog::on_minus() {
+    if (!allow_negative_) return;
+    if (!text_.isEmpty()) return;
+    text_ = '-';
+    update_display();
+}
+
+void NumPadDialog::on_dot() {
+    if (!allow_decimal_) return;
+    if (text_.contains('.')) return;
+    if (text_.isEmpty() || text_ == '-')
+        text_ += QStringLiteral("0.");
+    else
+        text_ += '.';
     update_display();
 }
 
@@ -848,28 +914,65 @@ void NumPadDialog::do_backspace() {
 }
 
 void NumPadDialog::update_display() {
-    int  val = text_.isEmpty() ? 0 : text_.toInt();
-    bool ok  = !text_.isEmpty() && val >= min_ && val <= max_;
-    bool red = !text_.isEmpty() && (val < min_ || val > max_);
     display_->setText(text_);
+
+    bool ok_btn = false;
+    bool red    = false;
+
+    if (text_.isEmpty()) {
+    } else if (text_ == '-' || text_ == '.' || text_ == '-.') {
+    } else {
+        bool ok_parse = false;
+        double val = text_.toDouble(&ok_parse);
+        if (!allow_decimal_ && text_.contains('.'))
+            ok_parse = false;
+        if (!allow_negative_ && (val < 0 || text_.startsWith('-')))
+            ok_parse = false;
+
+        if (ok_parse) {
+            if (val >= min_ && val <= max_)
+                ok_btn = true;
+            else
+                red = true;
+        } else {
+            red = true;
+        }
+    }
+
     display_->setStyleSheet(
         QString("background-color:#22223a; border:2px solid %1; border-radius:8px;"
                 "font-size:26px; font-weight:bold; color:%2; padding:0 12px;")
-        .arg(red ? "#cc3333" : "#3a3a5a")
-        .arg(red ? "#ff6666" : "#ffffff"));
-    btn_ok_->setEnabled(ok);
+            .arg(red ? "#cc3333" : "#3a3a5a")
+            .arg(red ? "#ff6666" : "#ffffff"));
+    btn_ok_->setEnabled(ok_btn);
 }
 
 std::optional<int> NumPadDialog::get_int(QWidget* parent, const QString& title,
                                           int initial, int min, int max)
 {
-    NumPadDialog dlg(title, initial, min, max, parent);
+    NumPadDialog dlg(title, QString::number(initial), static_cast<double>(min),
+                     static_cast<double>(max), true, false, parent);
     if (dlg.exec() != QDialog::Accepted || dlg.text_.isEmpty()) return std::nullopt;
-    int v = dlg.text_.toInt();
-    return (v >= min && v <= max) ? std::optional<int>(v) : std::nullopt;
+    bool ok = false;
+    double dv = dlg.text_.toDouble(&ok);
+    if (!ok) return std::nullopt;
+    int v = static_cast<int>(std::llround(dv));
+    if (std::fabs(dv - static_cast<double>(v)) > 1e-9) return std::nullopt;
+    if (v < min || v > max) return std::nullopt;
+    return v;
 }
 
-// ═════════════════════════════════════════════════════════════
+std::optional<double> NumPadDialog::get_double(QWidget* parent, const QString& title,
+                                                 double initial, double min, double max)
+{
+    NumPadDialog dlg(title, numpad_format_initial_double(initial), min, max, false, true, parent);
+    if (dlg.exec() != QDialog::Accepted || dlg.text_.isEmpty()) return std::nullopt;
+    bool ok = false;
+    double v = dlg.text_.toDouble(&ok);
+    if (!ok || v < min || v > max) return std::nullopt;
+    return v;
+}
+
 // PortWhitelistDialog: full-edit modal for game port whitelist
 // ═════════════════════════════════════════════════════════════
 PortWhitelistDialog::PortWhitelistDialog(QWidget* parent) : QDialog(parent) {
@@ -1537,18 +1640,18 @@ void DevicePage::refresh() {
         });
         // Tap label → NumPad direct entry
         connect(lbl_dl, &QPushButton::clicked, this, [this, idx]() {
-            auto v = NumPadDialog::get_int(this, "Download Limit (Mbps)",
-                                           static_cast<int>(rows_[idx].val_dl), 1, 10000);
+            auto v = NumPadDialog::get_double(this, "Download Limit (Mbps)",
+                                              rows_[idx].val_dl, 0.1, 10000.0);
             if (!v) return;
             rows_[idx].val_dl = *v;
-            rows_[idx].lbl_dl->setText(QString("↓ %1 Mbps").arg(*v));
+            rows_[idx].lbl_dl->setText(QString("↓ %1 Mbps").arg(*v, 0, 'f', 1));
         });
         connect(lbl_ul, &QPushButton::clicked, this, [this, idx]() {
-            auto v = NumPadDialog::get_int(this, "Upload Limit (Mbps)",
-                                           static_cast<int>(rows_[idx].val_ul), 1, 10000);
+            auto v = NumPadDialog::get_double(this, "Upload Limit (Mbps)",
+                                              rows_[idx].val_ul, 0.1, 10000.0);
             if (!v) return;
             rows_[idx].val_ul = *v;
-            rows_[idx].lbl_ul->setText(QString("↑ %1 Mbps").arg(*v));
+            rows_[idx].lbl_ul->setText(QString("↑ %1 Mbps").arg(*v, 0, 'f', 1));
         });
     }
 }
