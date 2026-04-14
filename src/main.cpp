@@ -188,9 +188,8 @@ int main(int argc, char* argv[]) {
                 selftest_done_efd = -1;
             }
 
-            // If user closed the window (no UNIX signal), request stop on Core 1 runner
-            if (!signal_received.exchange(true, std::memory_order_acq_rel))
-                (void)::eventfd_write(gui_stop_efd, 1);
+            (void)signal_received.exchange(true, std::memory_order_acq_rel);
+            app.stop();
 
             gui_shutdown_runner_quit.store(true, std::memory_order_relaxed);
             (void)::eventfd_write(gui_stop_efd, 1);
