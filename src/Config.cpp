@@ -2,6 +2,8 @@
 #include <print>
 #include <cstring>
 #include <cstdlib>
+#include <charconv>
+#include <string_view>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -9,9 +11,10 @@ namespace Scalpel::Config {
 
 // ── private helpers ──────────────────────────────────────────────────────────
 
-static unsigned long atoul(const char* s) {
-    unsigned long v = 0;
-    while (*s >= '0' && *s <= '9') v = v * 10 + static_cast<unsigned long>(*s++ - '0');
+static uint32_t parse_u32(const char* s) {
+    uint32_t v = 0;
+    std::string_view sv{s};
+    std::from_chars(sv.data(), sv.data() + sv.size(), v);
     return v;
 }
 
@@ -68,9 +71,9 @@ void load_config(const std::string& path) {
                     if (!bridge_iface_loaded) { clear_bridged(); bridge_iface_loaded = true; }
                     add_bridged(val);
                 }
-                else if (!strcmp(key, "LARGE_PACKET_THRESHOLD")) LARGE_PACKET_THRESHOLD_BYTES = static_cast<uint32_t>(atoul(val));
-                else if (!strcmp(key, "PUNISH_TRIGGER_COUNT"))   PUNISH_TRIGGER_COUNT   = static_cast<uint32_t>(atoul(val));
-                else if (!strcmp(key, "CLEANUP_INTERVAL"))       CLEANUP_INTERVAL_PKTS  = static_cast<uint32_t>(atoul(val));
+                else if (!strcmp(key, "LARGE_PACKET_THRESHOLD")) LARGE_PACKET_THRESHOLD_BYTES = parse_u32(val);
+                else if (!strcmp(key, "PUNISH_TRIGGER_COUNT"))   PUNISH_TRIGGER_COUNT   = parse_u32(val);
+                else if (!strcmp(key, "CLEANUP_INTERVAL"))       CLEANUP_INTERVAL_PKTS  = parse_u32(val);
                 else if (!strcmp(key, "enable_gui"))        global_state.enable_gui.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                 else if (!strcmp(key, "enable_nat"))        global_state.enable_nat.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                 else if (!strcmp(key, "enable_dhcp"))       global_state.enable_dhcp.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
@@ -80,7 +83,7 @@ void load_config(const std::string& path) {
                 else if (!strcmp(key, "enable_pppoe"))      global_state.enable_pppoe.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                 else if (!strcmp(key, "DHCP_POOL_START"))   DHCP_POOL_START = val;
                 else if (!strcmp(key, "DHCP_POOL_END"))     DHCP_POOL_END   = val;
-                else if (!strcmp(key, "DHCP_LEASE_SECONDS")) DHCP_LEASE_DURATION = std::chrono::seconds{static_cast<uint32_t>(atoul(val))};
+                else if (!strcmp(key, "DHCP_LEASE_SECONDS")) DHCP_LEASE_DURATION = std::chrono::seconds{parse_u32(val)};
                 else if (!strcmp(key, "DNS_UPSTREAM_PRIMARY"))   DNS_UPSTREAM_PRIMARY   = val;
                 else if (!strcmp(key, "DNS_UPSTREAM_SECONDARY")) DNS_UPSTREAM_SECONDARY = val;
                 else if (!strcmp(key, "DNS_REDIRECT_ENABLED")) DNS_REDIRECT_ENABLED.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
