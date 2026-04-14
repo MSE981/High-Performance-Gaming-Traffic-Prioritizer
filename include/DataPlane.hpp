@@ -9,8 +9,6 @@ namespace Scalpel::DataPlane {
 struct TxFrameOutput {
     enum class PacketTxTry : std::uint8_t { Complete = 0, Busy = 1, Error = 2 };
 
-    [[nodiscard]] static bool send_blocking(int tx_fd, std::span<const uint8_t> pkt) noexcept;
-
     // One non-blocking send(2) attempt (MSG_DONTWAIT). Busy = EAGAIN / ENOBUFS / EWOULDBLOCK.
     [[nodiscard]] static PacketTxTry try_send_packet_nonblocking(int tx_fd,
                                                                   std::span<const uint8_t> pkt) noexcept;
