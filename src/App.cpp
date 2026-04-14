@@ -856,6 +856,19 @@ void App::watchdog_loop() {
         if (dhcp_engine)     dhcp_engine->process_background_tasks(lan_fd_);
         if (firewall_engine) { firewall_engine->tick(); firewall_engine->cleanup(); }
 
+        // Global bandwidth caps from QoS page (Apply button)
+        if (tel.qos_global_bw_dirty.exchange(false, std::memory_order_acq_rel)) {
+            base_dl_mbps = tel.qos_global_dl_mbps_pending.load(std::memory_order_relaxed);
+            base_ul_mbps = tel.qos_global_ul_mbps_pending.load(std::memory_order_relaxed);
+            int pct = tel.qos_throttle_pct.load(std::memory_order_relaxed);
+            double factor = pct / 100.0;
+            if (shaper_dl) shaper_dl->set_rate_limit(Traffic::Mbps{base_dl_mbps * factor});
+            if (shaper_ul) shaper_ul->set_rate_limit(Traffic::Mbps{base_ul_mbps * factor});
+            last_throttle_pct = pct;
+            std::println("[QoS] Global limits applied — base DL {:.1f} / UL {:.1f} Mbps (throttle {}%)",
+                base_dl_mbps, base_ul_mbps, pct);
+        }
+
         // QoS throttle from GUI slider
         {
             int pct = tel.qos_throttle_pct.load(std::memory_order_relaxed);

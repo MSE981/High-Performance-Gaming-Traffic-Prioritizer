@@ -29,6 +29,10 @@ namespace HPGTP {
         std::atomic<bool> bridge_mode{ false };
         std::atomic<double> cpu_temp_celsius{ 0.0 };  // updated by Core 1 watchdog via timerfd, read by Qt UI
         std::atomic<int> qos_throttle_pct{ 85 };     // 0–100, written by GUI slider (Core 0), applied by Core 1 watchdog
+        // Global WAN shaper caps (Mbps): GUI writes pending + dirty; Core 1 watchdog applies to base_dl/ul + shapers.
+        std::atomic<bool> qos_global_bw_dirty{ false };
+        std::atomic<double> qos_global_dl_mbps_pending{ 500.0 };
+        std::atomic<double> qos_global_ul_mbps_pending{ 50.0 };
         std::atomic<bool> dhcp_config_dirty{ false }; // set by GUI (Core 0), consumed by Core 1 watchdog
         std::atomic<bool> dns_config_dirty{ false };  // set by GUI (Core 0), consumed by Core 1 watchdog
 

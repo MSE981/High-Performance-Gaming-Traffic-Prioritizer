@@ -636,6 +636,16 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     edit_ul_limit = new QLineEdit("50");
     bw_form->addRow("Download Limit (Mbps):", edit_dl_limit);
     bw_form->addRow("Upload Limit (Mbps):", edit_ul_limit);
+    {
+        auto* apply_row = new QHBoxLayout();
+        apply_row->addStretch();
+        auto* btn_apply_bw = new QPushButton("Apply");
+        btn_apply_bw->setObjectName("btn_primary");
+        btn_apply_bw->setFixedHeight(40);
+        connect(btn_apply_bw, &QPushButton::clicked, this, &QosPage::on_apply_global_bw);
+        apply_row->addWidget(btn_apply_bw);
+        bw_form->addRow(apply_row);
+    }
     layout->addWidget(bw_group);
 
     // Real-time throttle slider
@@ -729,6 +739,25 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     layout->addStretch();
 
     connect(btn_edit_wl, &QPushButton::clicked, this, &QosPage::on_edit_whitelist);
+}
+
+void QosPage::on_apply_global_bw() {
+    bool ok_dl = false, ok_ul = false;
+    double dl = edit_dl_limit->text().trimmed().toDouble(&ok_dl);
+    double ul = edit_ul_limit->text().trimmed().toDouble(&ok_ul);
+    constexpr double kMin = 0.1;
+    constexpr double kMax = 1e6;
+    if (!ok_dl || !ok_ul || dl < kMin || ul < kMin || dl > kMax || ul > kMax) {
+        QMessageBox::warning(this, "Invalid limits",
+            QStringLiteral("Enter download and upload between %1 and %2 Mbps.")
+                .arg(kMin, 0, 'g', 6)
+                .arg(kMax, 0, 'g', 6));
+        return;
+    }
+    auto& tel = Telemetry::instance();
+    tel.qos_global_dl_mbps_pending.store(dl, std::memory_order_relaxed);
+    tel.qos_global_ul_mbps_pending.store(ul, std::memory_order_relaxed);
+    tel.qos_global_bw_dirty.store(true, std::memory_order_release);
 }
 
 void QosPage::on_toggle_accel() {
