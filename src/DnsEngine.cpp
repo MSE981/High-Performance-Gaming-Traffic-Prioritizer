@@ -36,7 +36,12 @@ void DnsEngine::reload_static_records() {
 
 bool DnsEngine::do_bounce(Net::ParsedPacket& pkt, DnsHeader* dns, Net::UDPHeader* udp,
                           Net::IPv4Net ip, int bounce_fd) {
-    size_t old_len = pkt.raw_span.size();
+    if (!pkt.ipv4) return false;
+    const size_t eth_sz = sizeof(Net::EthernetHeader);
+    const uint16_t ip_tot = ntohs(pkt.ipv4->tot_len);
+    if (ip_tot < static_cast<uint16_t>(pkt.ihl)) return false;
+    size_t old_len = eth_sz + ip_tot;
+    if (old_len > pkt.raw_span.size()) return false;
     size_t new_len = old_len + 16;
     if (new_len > 1500) return false;
     if (pkt.raw_span.size() < new_len) return false;

@@ -1,4 +1,5 @@
 #include "SelfTest.hpp"
+#include <algorithm>
 #include <memory>
 #include <chrono>
 #include <cstdio>
@@ -221,8 +222,10 @@ void SelfTest::test_dns(Report& r) {
     Net::IPv4Net cli = Config::parse_ip_str("192.168.1.100");
     Net::IPv4Net srv = Config::parse_ip_str("8.8.8.8");
     auto dns_buf = make_dns_query(cli, srv, "test.local", pkt_len);
+    // Span must include tail room for DnsEngine::do_bounce (+16 bytes).
+    const size_t static_cap = std::min(pkt_len + 64, dns_buf.size());
     auto pkt_static = Net::ParsedPacket::parse(
-        std::span<uint8_t>{dns_buf.data(), pkt_len});
+        std::span<uint8_t>{dns_buf.data(), static_cap});
     // bounce_fd=-1: send() will fail (EBADF), increments dropped counter by 1 — acceptable
     bool static_pass = dns_static->process_query(pkt_static, -1);
     r.add("DNS_Static", static_pass,
