@@ -29,7 +29,9 @@
 #include <thread>
 #include <print>
 #include <algorithm>
+#include <array>
 #include <string_view>
+#include <vector>
 #include <cmath>
 #include <fcntl.h>
 #include <unistd.h>
@@ -726,7 +728,7 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     throttle_lay->addLayout(slider_row);
     layout->addWidget(throttle_group);
 
-    // Game port whitelist (read-only display — edit via dialog)
+    // Game port whitelist (backed by Config — edit via dialog, watchdog applies)
     auto* wl_group = new QGroupBox("Game Port Whitelist");
     auto* wl_lay = new QVBoxLayout(wl_group);
 
@@ -743,41 +745,23 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     whitelist_table->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     wl_lay->addWidget(whitelist_table);
 
-    struct PortEntry { const char* port; const char* proto; const char* desc; };
-    // 20 entries, sorted A-Z by description
-    static constexpr PortEntry defaults[] = {
-        {"1119",       "TCP/UDP", "Blizzard Battle.net"},
-        {"6112",       "TCP/UDP", "Blizzard / StarCraft"},
-        {"3074",       "UDP",     "Call of Duty"},
-        {"3659",       "UDP",     "EA / Origin"},
-        {"8080",       "TCP",     "Game HTTP services"},
-        {"7777-7778",  "UDP",     "Garena / Arena games"},
-        {"4380",       "UDP",     "Steam (In-Home Streaming)"},
-        {"27031-27036","UDP",     "Steam Remote Play"},
-        {"27015",      "UDP",     "Steam / Valve"},
-        {"443",        "TCP",     "HTTPS / Secure game APIs"},
-        {"25565",      "TCP",     "Minecraft Java Edition"},
-        {"19132-19133","UDP",     "Minecraft Bedrock Edition"},
-        {"9308",       "UDP",     "Nintendo Switch Online"},
-        {"1935",       "TCP",     "PS Remote Play / RTMP"},
-        {"3478-3480",  "UDP",     "PlayStation Network"},
-        {"5223",       "TCP",     "PlayStation Network (XMPP)"},
-        {"500",        "UDP",     "STUN / ICE (NAT traversal)"},
-        {"3658-3659",  "UDP",     "Xbox / EA cross-platform"},
-        {"3074",       "TCP",     "Xbox Live"},
-        {"53",         "UDP",     "DNS (game server lookup)"},
-    };
-    auto make_item = [](const char* text) {
+    auto make_item_qs = [](const QString& text) {
         auto* it = new QTableWidgetItem(text);
         it->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         return it;
     };
-    for (auto& e : defaults) {
+    std::array<Config::PortRange, Config::MAX_GAME_PORT_RANGES> wl_buf{};
+    const size_t wl_n = Config::copy_active_game_ports_for_display(wl_buf.data(), wl_buf.size());
+    for (size_t i = 0; i < wl_n; ++i) {
+        const auto& pr = wl_buf[i];
+        const QString port_str = (pr.start == pr.end)
+            ? QString::number(pr.start)
+            : QStringLiteral("%1-%2").arg(pr.start).arg(pr.end);
         int r = whitelist_table->rowCount();
         whitelist_table->insertRow(r);
-        whitelist_table->setItem(r, 0, make_item(e.port));
-        whitelist_table->setItem(r, 1, make_item(e.proto));
-        whitelist_table->setItem(r, 2, make_item(e.desc));
+        whitelist_table->setItem(r, 0, make_item_qs(port_str));
+        whitelist_table->setItem(r, 1, make_item_qs(QStringLiteral("TCP/UDP")));
+        whitelist_table->setItem(r, 2, make_item_qs(QString()));
     }
     // Size table to show all rows without internal scrolling
     {
@@ -1205,6 +1189,30 @@ void PortWhitelistDialog::on_remove_port() {
     if (row >= 0) table_->removeRow(row);
 }
 
+namespace {
+bool parse_whitelist_port_cell(const QString& text, Config::PortRange& out) {
+    const QString t = text.trimmed();
+    if (t.isEmpty()) return false;
+    if (t.contains(QLatin1Char('-'))) {
+        const auto parts = t.split(QLatin1Char('-'));
+        if (parts.size() != 2) return false;
+        bool ok1 = false, ok2 = false;
+        const int a = parts[0].trimmed().toInt(&ok1);
+        const int b = parts[1].trimmed().toInt(&ok2);
+        if (!ok1 || !ok2 || a < 0 || b < 0 || a > 65535 || b > 65535 || a > b)
+            return false;
+        out.start = static_cast<uint16_t>(a);
+        out.end   = static_cast<uint16_t>(b);
+        return true;
+    }
+    bool ok = false;
+    const int v = t.toInt(&ok);
+    if (!ok || v < 0 || v > 65535) return false;
+    out.start = out.end = static_cast<uint16_t>(v);
+    return true;
+}
+} // namespace
+
 void QosPage::on_edit_whitelist() {
     PortWhitelistDialog dlg(this);
     auto make_aligned = [](const QString& text) {
@@ -1223,6 +1231,23 @@ void QosPage::on_edit_whitelist() {
     }
     if (dlg.exec() != QDialog::Accepted) return;
 
+    std::vector<Config::PortRange> ranges;
+    ranges.reserve(static_cast<size_t>(dlg.table()->rowCount()));
+    for (int r = 0; r < dlg.table()->rowCount(); ++r) {
+        auto* cell = dlg.table()->item(r, 0);
+        if (!cell) continue;
+        Config::PortRange pr{};
+        if (parse_whitelist_port_cell(cell->text(), pr))
+            ranges.push_back(pr);
+    }
+    if (ranges.empty()) {
+        Dashboard::post_notification(
+            QStringLiteral("Whitelist"),
+            QStringLiteral("Add at least one valid port or range (0–65535)."));
+        return;
+    }
+    Config::request_game_ports_apply(ranges);
+
     // Sync back to page display table
     whitelist_table->setRowCount(0);
     for (int r = 0; r < dlg.table()->rowCount(); ++r) {
@@ -1239,6 +1264,10 @@ void QosPage::on_edit_whitelist() {
     int header_h = whitelist_table->horizontalHeader()->height();
     whitelist_table->verticalHeader()->setDefaultSectionSize(wl_row_h);
     whitelist_table->setMinimumHeight(header_h + rows_h + 4);
+
+    Dashboard::post_notification(
+        QStringLiteral("QoS"),
+        QStringLiteral("Game port whitelist will apply on the next control tick."));
 }
 
 void QosPage::on_throttle_changed(int value_pct) {
