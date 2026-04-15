@@ -4,6 +4,8 @@
 #include <atomic>
 #include <array>
 #include <chrono>
+#include <mutex>
+#include <span>
 #include <print>
 #include <format>
 #include <cstring>
@@ -136,9 +138,30 @@ namespace HPGTP::Config {
     inline uint32_t PUNISH_TRIGGER_COUNT = 30;
     inline uint32_t CLEANUP_INTERVAL_PKTS = 10000;
 
-    // Gaming protocol port whitelist
+    // Gaming protocol port whitelist (GUI + config.txt); dataplane reads active buffer only.
     struct PortRange { uint16_t start; uint16_t end; };
-    inline std::array<PortRange, 3> GAME_PORTS = {{ {3074, 3074}, {27015, 27015}, {12000, 12999} }};
+    static constexpr size_t MAX_GAME_PORT_RANGES = 64;
+    inline std::array<std::array<PortRange, MAX_GAME_PORT_RANGES>, 2> GAME_PORT_TABLE_DOUBLE{{
+        {{{3074, 3074}, {27015, 27015}, {12000, 12999}}},
+        {{{3074, 3074}, {27015, 27015}, {12000, 12999}}},
+    }};
+    inline std::array<size_t, 2> game_port_table_counts{{3, 3}};
+    inline std::atomic<size_t> game_port_active_idx{0};
+    inline std::mutex          game_ports_staging_mutex;
+    inline std::array<PortRange, MAX_GAME_PORT_RANGES> game_port_staging{};
+    inline size_t                game_port_staging_count = 0;
+    inline std::atomic<bool>     GAME_PORTS_DIRTY{false};
+
+    void request_game_ports_apply(std::span<const PortRange> ranges);
+    void apply_pended_game_ports();
+
+    inline size_t copy_active_game_ports_for_display(PortRange* out, size_t max_out) {
+        size_t ai = game_port_active_idx.load(std::memory_order_acquire);
+        size_t n  = game_port_table_counts[ai];
+        size_t c  = n < max_out ? n : max_out;
+        std::memcpy(out, GAME_PORT_TABLE_DOUBLE[ai].data(), c * sizeof(PortRange));
+        return c;
+    }
 
     // Per-device policy table (populated by GUI DevicePage, consumed by Core 1 watchdog)
     static constexpr size_t MAX_DEVICE_POLICIES = 64;
@@ -185,10 +208,13 @@ namespace HPGTP::Config {
         }
     }
 
-    // Helper: check if port is a game port
+    // Helper: check if port is a game port (hot path — read stable active snapshot only)
     inline bool is_game_port(uint16_t port) {
-        for (const auto& range : GAME_PORTS) {
-            if (port >= range.start && port <= range.end) return true;
+        size_t ai = game_port_active_idx.load(std::memory_order_acquire);
+        size_t n  = game_port_table_counts[ai];
+        for (size_t i = 0; i < n; ++i) {
+            const auto& r = GAME_PORT_TABLE_DOUBLE[ai][i];
+            if (port >= r.start && port <= r.end) return true;
         }
         return false;
     }

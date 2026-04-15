@@ -798,6 +798,10 @@ void App::watchdog_loop() {
         last_bytes[2] = bd;
         last_bytes[3] = bu;
 
+        // Game port whitelist (GUI staging → double-buffer swap)
+        if (Config::GAME_PORTS_DIRTY.exchange(false, std::memory_order_acq_rel))
+            Config::apply_pended_game_ports();
+
         // Device policy sync
         if (Config::DEVICE_POLICY_DIRTY.exchange(false, std::memory_order_acq_rel)) {
             if (firewall_engine) firewall_engine->sync_blocked_ips();
