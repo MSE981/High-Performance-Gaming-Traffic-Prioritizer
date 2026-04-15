@@ -207,8 +207,7 @@ Bandwidth application adjustments are dynamically written into inactive paramete
 - [x] Dynamic refresh management controls
 - [x] Integrated notification response interfaces
 - [ ] Remote network administration API configuration
-- [ ] IPv6 framework implementation
-- [ ] WireGuard security architecture integration
+
 
 ---
 
