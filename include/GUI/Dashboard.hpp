@@ -222,6 +222,7 @@ class QosPage : public QWidget {
     Q_OBJECT
 public:
     explicit QosPage(QWidget* parent = nullptr);
+    void refresh_whitelist_from_config();
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 private slots:
@@ -245,6 +246,8 @@ class DhcpConfigDialog : public QDialog {
     Q_OBJECT
 public:
     explicit DhcpConfigDialog(QWidget* parent = nullptr);
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 private slots:
     void on_apply();
 private:
@@ -262,6 +265,8 @@ class DnsConfigDialog : public QDialog {
     Q_OBJECT
 public:
     explicit DnsConfigDialog(QWidget* parent = nullptr);
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 private slots:
     void on_apply();
     void on_add_record();

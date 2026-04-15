@@ -22,22 +22,33 @@
 #include <QFormLayout>
 #include <QScrollArea>
 #include <QRegularExpressionValidator>
+#include <QDoubleValidator>
+#include <QLocale>
 #include <QDoubleSpinBox>
 #include <QMessageBox>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QTimer>
 #include <thread>
 #include <print>
 #include <algorithm>
 #include <array>
 #include <string_view>
 #include <vector>
+#include <optional>
 #include <cmath>
 #include <fcntl.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 
 namespace HPGTP::GUI {
+
+constexpr double k_qos_bw_min_mbps     = 0.1;
+constexpr double k_qos_bw_max_mbps     = 1e6;
+constexpr double k_device_bw_min_mbps  = 0.1;
+constexpr double k_device_bw_max_mbps  = 10000.0;
+constexpr int    k_port_min            = 1;
+constexpr int    k_port_max            = 65535;
 
 // ═════════════════════════════════════════════════════════════
 // NotificationPanel: iOS-style pull-down overlay
@@ -691,6 +702,16 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     edit_ul_limit = new QLineEdit("50");
     edit_dl_limit->setReadOnly(true);
     edit_ul_limit->setReadOnly(true);
+    {
+        auto attach_bw_validator = [](QLineEdit* le) {
+            auto* v = new QDoubleValidator(k_qos_bw_min_mbps, k_qos_bw_max_mbps, 12, le);
+            v->setNotation(QDoubleValidator::StandardNotation);
+            v->setLocale(QLocale::c());
+            le->setValidator(v);
+        };
+        attach_bw_validator(edit_dl_limit);
+        attach_bw_validator(edit_ul_limit);
+    }
     edit_dl_limit->installEventFilter(this);
     edit_ul_limit->installEventFilter(this);
     bw_form->addRow("Download Limit (Mbps):", edit_dl_limit);
@@ -745,30 +766,7 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     whitelist_table->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     wl_lay->addWidget(whitelist_table);
 
-    auto make_item_qs = [](const QString& text) {
-        auto* it = new QTableWidgetItem(text);
-        it->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-        return it;
-    };
-    std::array<Config::PortRange, Config::MAX_GAME_PORT_RANGES> wl_buf{};
-    const size_t wl_n = Config::copy_active_game_ports_for_display(wl_buf.data(), wl_buf.size());
-    for (size_t i = 0; i < wl_n; ++i) {
-        const auto& pr = wl_buf[i];
-        const QString port_str = (pr.start == pr.end)
-            ? QString::number(pr.start)
-            : QStringLiteral("%1-%2").arg(pr.start).arg(pr.end);
-        int r = whitelist_table->rowCount();
-        whitelist_table->insertRow(r);
-        whitelist_table->setItem(r, 0, make_item_qs(port_str));
-        whitelist_table->setItem(r, 1, make_item_qs(QStringLiteral("TCP/UDP")));
-        whitelist_table->setItem(r, 2, make_item_qs(QString()));
-    }
-    // Size table to show all rows without internal scrolling
-    {
-        int header_h = whitelist_table->horizontalHeader()->height();
-        int rows_h   = whitelist_table->rowCount() * wl_row_h;
-        whitelist_table->setMinimumHeight(header_h + rows_h + 4);
-    }
+    refresh_whitelist_from_config();
 
     auto* wl_btn_row = new QHBoxLayout();
     auto* btn_edit_wl = new QPushButton("Edit Whitelist…");
@@ -782,16 +780,43 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     connect(btn_edit_wl, &QPushButton::clicked, this, &QosPage::on_edit_whitelist);
 }
 
+void QosPage::refresh_whitelist_from_config() {
+    const int wl_row_h = qRound(whitelist_table->fontMetrics().height() * 1.2);
+    whitelist_table->verticalHeader()->setDefaultSectionSize(wl_row_h);
+    whitelist_table->setRowCount(0);
+
+    auto make_item_qs = [](const QString& text) {
+        auto* it = new QTableWidgetItem(text);
+        it->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        return it;
+    };
+    std::array<Config::PortRange, Config::MAX_GAME_PORT_RANGES> wl_buf{};
+    const size_t wl_n = Config::copy_active_game_ports_for_display(wl_buf.data(), wl_buf.size());
+    for (size_t i = 0; i < wl_n; ++i) {
+        const auto& pr = wl_buf[i];
+        const QString port_str = (pr.start == pr.end)
+            ? QString::number(pr.start)
+            : QStringLiteral("%1-%2").arg(pr.start).arg(pr.end);
+        const int r = whitelist_table->rowCount();
+        whitelist_table->insertRow(r);
+        whitelist_table->setItem(r, 0, make_item_qs(port_str));
+        whitelist_table->setItem(r, 1, make_item_qs(QStringLiteral("TCP/UDP")));
+        whitelist_table->setItem(r, 2, make_item_qs(QString()));
+    }
+    const int header_h = whitelist_table->horizontalHeader()->height();
+    const int rows_h   = whitelist_table->rowCount() * wl_row_h;
+    whitelist_table->setMinimumHeight(header_h + rows_h + 4);
+}
+
 bool QosPage::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::MouseButtonPress) {
-        constexpr double kMin = 0.1;
-        constexpr double kMax = 1e6;
         if (watched == edit_dl_limit) {
             bool ok = false;
             double cur = edit_dl_limit->text().trimmed().toDouble(&ok);
             if (!ok) cur = 500.0;
+            cur = std::clamp(cur, k_qos_bw_min_mbps, k_qos_bw_max_mbps);
             if (auto v = NumPadDialog::get_double(this, QStringLiteral("Download Limit (Mbps)"),
-                                                  cur, kMin, kMax))
+                                                  cur, k_qos_bw_min_mbps, k_qos_bw_max_mbps))
                 edit_dl_limit->setText(QString::number(*v, 'g', 12));
             return true;
         }
@@ -799,8 +824,9 @@ bool QosPage::eventFilter(QObject* watched, QEvent* event) {
             bool ok = false;
             double cur = edit_ul_limit->text().trimmed().toDouble(&ok);
             if (!ok) cur = 50.0;
+            cur = std::clamp(cur, k_qos_bw_min_mbps, k_qos_bw_max_mbps);
             if (auto v = NumPadDialog::get_double(this, QStringLiteral("Upload Limit (Mbps)"),
-                                                  cur, kMin, kMax))
+                                                  cur, k_qos_bw_min_mbps, k_qos_bw_max_mbps))
                 edit_ul_limit->setText(QString::number(*v, 'g', 12));
             return true;
         }
@@ -809,17 +835,24 @@ bool QosPage::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void QosPage::on_apply_global_bw() {
+    if (!edit_dl_limit->hasAcceptableInput() || !edit_ul_limit->hasAcceptableInput()) {
+        Dashboard::post_notification(
+            QStringLiteral("Invalid limits"),
+            QStringLiteral("Use the keypad: each value must be greater than 0 and at most %1 Mbps.")
+                .arg(k_qos_bw_max_mbps, 0, 'g', 6));
+        return;
+    }
     bool ok_dl = false, ok_ul = false;
     double dl = edit_dl_limit->text().trimmed().toDouble(&ok_dl);
     double ul = edit_ul_limit->text().trimmed().toDouble(&ok_ul);
-    constexpr double kMin = 0.1;
-    constexpr double kMax = 1e6;
-    if (!ok_dl || !ok_ul || dl < kMin || ul < kMin || dl > kMax || ul > kMax) {
+    if (!ok_dl || !ok_ul || dl <= 0.0 || ul <= 0.0
+        || dl < k_qos_bw_min_mbps || ul < k_qos_bw_min_mbps
+        || dl > k_qos_bw_max_mbps || ul > k_qos_bw_max_mbps) {
         Dashboard::post_notification(
             QStringLiteral("Invalid limits"),
             QStringLiteral("Enter download and upload between %1 and %2 Mbps.")
-                .arg(kMin, 0, 'g', 6)
-                .arg(kMax, 0, 'g', 6));
+                .arg(k_qos_bw_min_mbps, 0, 'g', 6)
+                .arg(k_qos_bw_max_mbps, 0, 'g', 6));
         return;
     }
     auto& tel = Telemetry::instance();
@@ -1007,6 +1040,9 @@ void NumPadDialog::update_display() {
         if (!allow_negative_ && (val < 0 || text_.startsWith('-')))
             ok_parse = false;
 
+        if (ok_parse && !allow_decimal_) {
+            if (std::trunc(val) != val) ok_parse = false;
+        }
         if (ok_parse) {
             if (val >= min_ && val <= max_)
                 ok_btn = true;
@@ -1028,8 +1064,9 @@ void NumPadDialog::update_display() {
 std::optional<int> NumPadDialog::get_int(QWidget* parent, const QString& title,
                                           int initial, int min, int max)
 {
+    initial = std::clamp(initial, min, max);
     NumPadDialog dlg(title, QString::number(initial), static_cast<double>(min),
-                     static_cast<double>(max), true, false, parent);
+                     static_cast<double>(max), false, false, parent);
     if (dlg.exec() != QDialog::Accepted || dlg.text_.isEmpty()) return std::nullopt;
     bool ok = false;
     double dv = dlg.text_.toDouble(&ok);
@@ -1043,11 +1080,12 @@ std::optional<int> NumPadDialog::get_int(QWidget* parent, const QString& title,
 std::optional<double> NumPadDialog::get_double(QWidget* parent, const QString& title,
                                                  double initial, double min, double max)
 {
+    initial = std::clamp(initial, min, max);
     NumPadDialog dlg(title, numpad_format_initial_double(initial), min, max, false, true, parent);
     if (dlg.exec() != QDialog::Accepted || dlg.text_.isEmpty()) return std::nullopt;
     bool ok = false;
     double v = dlg.text_.toDouble(&ok);
-    if (!ok || v < min || v > max) return std::nullopt;
+    if (!ok || v <= 0.0 || v < min || v > max) return std::nullopt;
     return v;
 }
 
@@ -1062,7 +1100,9 @@ PortWhitelistDialog::PortWhitelistDialog(QWidget* parent) : QDialog(parent) {
     lay->setContentsMargins(20, 16, 20, 16);
     lay->setSpacing(12);
 
-    auto* desc = new QLabel("Ports listed here receive highest scheduling priority.\nFormat: single port (27015) or range (3478-3480).");
+    auto* desc = new QLabel(
+        "Ports listed here receive highest scheduling priority.\n"
+        "Use the keypad: port 1–65535, or range start–end (start ≤ end).");
     desc->setStyleSheet("color: #808090; font-size: 13px;");
     desc->setWordWrap(true);
     lay->addWidget(desc);
@@ -1144,9 +1184,9 @@ void PortWhitelistDialog::on_add_port() {
     };
 
     // NumPad for port number(s)
-    auto start = NumPadDialog::get_int(this, "Port Number", 0, 0, 65535);
+    auto start = NumPadDialog::get_int(this, "Port Number", k_port_min, k_port_min, k_port_max);
     if (!start) return;
-    auto end = NumPadDialog::get_int(this, "Range End\n(same value = single port)", *start, *start, 65535);
+    auto end = NumPadDialog::get_int(this, "Range End\n(same value = single port)", *start, *start, k_port_max);
     QString port_str = (!end || *end <= *start)
                        ? QString::number(*start)
                        : QString("%1-%2").arg(*start).arg(*end);
@@ -1169,11 +1209,13 @@ void PortWhitelistDialog::on_cell_edit(int row, int col) {
         // Port column — NumPad
         auto* item = table_->item(row, col);
         QString cur = item ? item->text() : "0";
-        int cur_start = cur.section('-', 0, 0).toInt();
-        auto start = NumPadDialog::get_int(this, "Port Number", cur_start, 0, 65535);
+        int cur_start = std::clamp(cur.section('-', 0, 0).toInt(), k_port_min, k_port_max);
+        auto start = NumPadDialog::get_int(this, "Port Number", cur_start, k_port_min, k_port_max);
         if (!start) return;
-        int cur_end = cur.contains('-') ? cur.section('-', 1, 1).toInt() : *start;
-        auto end = NumPadDialog::get_int(this, "Range End\n(same value = single port)", cur_end, *start, 65535);
+        int cur_end = cur.contains('-')
+            ? std::clamp(cur.section('-', 1, 1).toInt(), *start, k_port_max)
+            : *start;
+        auto end = NumPadDialog::get_int(this, "Range End\n(same value = single port)", cur_end, *start, k_port_max);
         QString port_str = (!end || *end <= *start)
                            ? QString::number(*start)
                            : QString("%1-%2").arg(*start).arg(*end);
@@ -1199,7 +1241,7 @@ bool parse_whitelist_port_cell(const QString& text, Config::PortRange& out) {
         bool ok1 = false, ok2 = false;
         const int a = parts[0].trimmed().toInt(&ok1);
         const int b = parts[1].trimmed().toInt(&ok2);
-        if (!ok1 || !ok2 || a < 0 || b < 0 || a > 65535 || b > 65535 || a > b)
+        if (!ok1 || !ok2 || a < k_port_min || b < k_port_min || a > k_port_max || b > k_port_max || a > b)
             return false;
         out.start = static_cast<uint16_t>(a);
         out.end   = static_cast<uint16_t>(b);
@@ -1207,7 +1249,7 @@ bool parse_whitelist_port_cell(const QString& text, Config::PortRange& out) {
     }
     bool ok = false;
     const int v = t.toInt(&ok);
-    if (!ok || v < 0 || v > 65535) return false;
+    if (!ok || v < k_port_min || v > k_port_max) return false;
     out.start = out.end = static_cast<uint16_t>(v);
     return true;
 }
@@ -1243,7 +1285,7 @@ void QosPage::on_edit_whitelist() {
     if (ranges.empty()) {
         Dashboard::post_notification(
             QStringLiteral("Whitelist"),
-            QStringLiteral("Add at least one valid port or range (0–65535)."));
+            QStringLiteral("Add at least one valid port or range (1–65535)."));
         return;
     }
     Config::request_game_ports_apply(ranges);
@@ -1268,6 +1310,8 @@ void QosPage::on_edit_whitelist() {
     Dashboard::post_notification(
         QStringLiteral("QoS"),
         QStringLiteral("Game port whitelist will apply on the next control tick."));
+
+    QTimer::singleShot(1200, this, [this]() { refresh_whitelist_from_config(); });
 }
 
 void QosPage::on_throttle_changed(int value_pct) {
@@ -1275,6 +1319,44 @@ void QosPage::on_throttle_changed(int value_pct) {
     lbl_throttle->setText(QString("%1%").arg(value_pct));
 }
 
+
+namespace {
+constexpr int k_ip_octet_min = 0;
+constexpr int k_ip_octet_max = 255;
+
+bool parse_ipv4_quads(const QString& s, int out[4]) {
+    const auto parts = s.trimmed().split(QLatin1Char('.'));
+    if (parts.size() != 4) return false;
+    for (int i = 0; i < 4; ++i) {
+        bool ok = false;
+        const int v = parts[i].toInt(&ok);
+        if (!ok || v < k_ip_octet_min || v > k_ip_octet_max) return false;
+        out[i] = v;
+    }
+    return true;
+}
+
+QString format_ipv4_quads(const int q[4]) {
+    return QStringLiteral("%1.%2.%3.%4").arg(q[0]).arg(q[1]).arg(q[2]).arg(q[3]);
+}
+
+std::optional<QString> numpad_edit_ipv4(QWidget* parent, const QString& title, const QString& current) {
+    int q[4] = {192, 168, 1, 1};
+    if (!current.trimmed().isEmpty()) {
+        int parsed[4];
+        if (parse_ipv4_quads(current, parsed)) {
+            for (int i = 0; i < 4; ++i) q[i] = parsed[i];
+        }
+    }
+    for (int i = 0; i < 4; ++i) {
+        const QString oct_title = QStringLiteral("%1 — octet %2/4").arg(title).arg(i + 1);
+        auto v = NumPadDialog::get_int(parent, oct_title, q[i], k_ip_octet_min, k_ip_octet_max);
+        if (!v) return std::nullopt;
+        q[i] = *v;
+    }
+    return format_ipv4_quads(q);
+}
+} // namespace
 
 // ═════════════════════════════════════════════════════════════
 // DhcpConfigDialog
@@ -1293,25 +1375,50 @@ DhcpConfigDialog::DhcpConfigDialog(QWidget* parent) : QDialog(parent) {
 
     edit_pool_start = new QLineEdit(QString::fromStdString(Config::DHCP_POOL_START));
     edit_pool_start->setValidator(ip_validator);
-    edit_pool_start->setPlaceholderText("e.g. 192.168.1.50");
+    edit_pool_start->setReadOnly(true);
+    edit_pool_start->setPlaceholderText("Tap to enter (keypad)");
+    edit_pool_start->installEventFilter(this);
     form->addRow("Pool Start:", edit_pool_start);
 
     edit_pool_end = new QLineEdit(QString::fromStdString(Config::DHCP_POOL_END));
     edit_pool_end->setValidator(ip_validator);
-    edit_pool_end->setPlaceholderText("e.g. 192.168.1.249");
+    edit_pool_end->setReadOnly(true);
+    edit_pool_end->setPlaceholderText("Tap to enter (keypad)");
+    edit_pool_end->installEventFilter(this);
     form->addRow("Pool End:", edit_pool_end);
 
     auto* lease_row = new QHBoxLayout();
     spin_days = new QSpinBox(); spin_days->setRange(0, 365); spin_days->setSuffix(" d");
+    spin_days->setButtonSymbols(QAbstractSpinBox::NoButtons);
     spin_days->setValue(static_cast<int>(Config::DHCP_LEASE_DURATION.count() / 86400));
+    spin_days->setFocusPolicy(Qt::ClickFocus);
+    if (auto* le = spin_days->findChild<QLineEdit*>()) {
+        le->setReadOnly(true);
+        le->setObjectName(QStringLiteral("dhcp_lease_days"));
+        le->installEventFilter(this);
+    }
     spin_hours = new QSpinBox(); spin_hours->setRange(0, 24); spin_hours->setSuffix(" h");
+    spin_hours->setButtonSymbols(QAbstractSpinBox::NoButtons);
     spin_hours->setValue(static_cast<int>((Config::DHCP_LEASE_DURATION.count() % 86400) / 3600));
+    spin_hours->setFocusPolicy(Qt::ClickFocus);
+    if (auto* le = spin_hours->findChild<QLineEdit*>()) {
+        le->setReadOnly(true);
+        le->setObjectName(QStringLiteral("dhcp_lease_hours"));
+        le->installEventFilter(this);
+    }
     spin_minutes = new QSpinBox(); spin_minutes->setRange(0, 60); spin_minutes->setSuffix(" min");
+    spin_minutes->setButtonSymbols(QAbstractSpinBox::NoButtons);
     spin_minutes->setValue(static_cast<int>((Config::DHCP_LEASE_DURATION.count() % 3600) / 60));
+    spin_minutes->setFocusPolicy(Qt::ClickFocus);
+    if (auto* le = spin_minutes->findChild<QLineEdit*>()) {
+        le->setReadOnly(true);
+        le->setObjectName(QStringLiteral("dhcp_lease_minutes"));
+        le->installEventFilter(this);
+    }
     lease_row->addWidget(spin_days);
     lease_row->addWidget(spin_hours);
     lease_row->addWidget(spin_minutes);
-    form->addRow("Lease Duration:", lease_row);
+    form->addRow("Lease Duration (tap each):", lease_row);
     layout->addLayout(form);
 
     auto* btn_row = new QHBoxLayout();
@@ -1322,6 +1429,40 @@ DhcpConfigDialog::DhcpConfigDialog(QWidget* parent) : QDialog(parent) {
     layout->addLayout(btn_row);
 
     connect(btn_apply, &QPushButton::clicked, this, &DhcpConfigDialog::on_apply);
+}
+
+bool DhcpConfigDialog::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonPress) {
+        if (watched == edit_pool_start) {
+            if (auto ip = numpad_edit_ipv4(this, QStringLiteral("DHCP pool start"), edit_pool_start->text()))
+                edit_pool_start->setText(*ip);
+            return true;
+        }
+        if (watched == edit_pool_end) {
+            if (auto ip = numpad_edit_ipv4(this, QStringLiteral("DHCP pool end"), edit_pool_end->text()))
+                edit_pool_end->setText(*ip);
+            return true;
+        }
+        if (auto* le = qobject_cast<QLineEdit*>(watched)) {
+            const QString on = le->objectName();
+            if (on == QStringLiteral("dhcp_lease_days")) {
+                if (auto v = NumPadDialog::get_int(this, QStringLiteral("Lease days"), spin_days->value(), 0, 365))
+                    spin_days->setValue(*v);
+                return true;
+            }
+            if (on == QStringLiteral("dhcp_lease_hours")) {
+                if (auto v = NumPadDialog::get_int(this, QStringLiteral("Lease hours"), spin_hours->value(), 0, 24))
+                    spin_hours->setValue(*v);
+                return true;
+            }
+            if (on == QStringLiteral("dhcp_lease_minutes")) {
+                if (auto v = NumPadDialog::get_int(this, QStringLiteral("Lease minutes"), spin_minutes->value(), 0, 60))
+                    spin_minutes->setValue(*v);
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 void DhcpConfigDialog::on_apply() {
@@ -1376,13 +1517,25 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
 
     edit_dns_primary = new QLineEdit(QString::fromStdString(Config::DNS_UPSTREAM_PRIMARY));
     edit_dns_primary->setValidator(dns_ip_validator1);
-    edit_dns_primary->setPlaceholderText("e.g. 8.8.8.8");
+    edit_dns_primary->setReadOnly(true);
+    edit_dns_primary->setPlaceholderText("Tap to enter (keypad)");
+    edit_dns_primary->installEventFilter(this);
     form->addRow("Primary DNS:", edit_dns_primary);
 
     edit_dns_secondary = new QLineEdit(QString::fromStdString(Config::DNS_UPSTREAM_SECONDARY));
     edit_dns_secondary->setValidator(dns_ip_validator2);
-    edit_dns_secondary->setPlaceholderText("e.g. 8.8.4.4");
-    form->addRow("Secondary DNS:", edit_dns_secondary);
+    edit_dns_secondary->setReadOnly(true);
+    edit_dns_secondary->setPlaceholderText("Optional — tap to set");
+    edit_dns_secondary->installEventFilter(this);
+    auto* sec_dns_row = new QHBoxLayout();
+    sec_dns_row->addWidget(edit_dns_secondary, 1);
+    auto* btn_clear_dns2 = new QPushButton("Clear");
+    btn_clear_dns2->setToolTip("Remove secondary upstream");
+    connect(btn_clear_dns2, &QPushButton::clicked, this, [this]() { edit_dns_secondary->clear(); });
+    sec_dns_row->addWidget(btn_clear_dns2);
+    auto* sec_dns_wrap = new QWidget();
+    sec_dns_wrap->setLayout(sec_dns_row);
+    form->addRow("Secondary DNS:", sec_dns_wrap);
 
     auto* redirect_row = new QHBoxLayout();
     auto* lbl_redirect = new QLabel("Force all DNS queries to upstream server");
@@ -1397,8 +1550,10 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
     redirect_wrap->setLayout(redirect_row);
     form->addRow("", redirect_wrap);
 
-    auto* static_dns_label = new QLabel("Static DNS Records (hostname → IP, never expires, overrides cache)");
+    auto* static_dns_label = new QLabel(
+        "Static DNS — double-click hostname to type, IP for keypad (IPv4).");
     static_dns_label->setStyleSheet("color: #808090; font-size: 12px;");
+    static_dns_label->setWordWrap(true);
     form->addRow(static_dns_label);
 
     static_dns_table = new QTableWidget(0, 2);
@@ -1409,6 +1564,23 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
     static_dns_table->verticalHeader()->setDefaultSectionSize(52);
     static_dns_table->setFixedHeight(220);
     static_dns_table->setStyleSheet("QTableWidget { background: #1a1a2e; }");
+    static_dns_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    connect(static_dns_table, &QTableWidget::cellDoubleClicked, this,
+        [this](int row, int col) {
+            if (col == 0) {
+                if (auto* it = static_dns_table->item(row, 0))
+                    static_dns_table->editItem(it);
+            } else if (col == 1) {
+                auto* it = static_dns_table->item(row, 1);
+                const QString cur = it ? it->text() : QString();
+                if (auto ip = numpad_edit_ipv4(this, QStringLiteral("Static record IP"), cur)) {
+                    if (!it)
+                        static_dns_table->setItem(row, 1, new QTableWidgetItem(*ip));
+                    else
+                        it->setText(*ip);
+                }
+            }
+        });
 
     for (size_t i = 0; i < Config::STATIC_DNS_COUNT; ++i) {
         int row = static_dns_table->rowCount();
@@ -1441,6 +1613,22 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
     connect(btn_add,    &QPushButton::clicked, this, &DnsConfigDialog::on_add_record);
     connect(btn_remove, &QPushButton::clicked, this, &DnsConfigDialog::on_remove_record);
     connect(btn_apply,  &QPushButton::clicked, this, &DnsConfigDialog::on_apply);
+}
+
+bool DnsConfigDialog::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonPress) {
+        if (watched == edit_dns_primary) {
+            if (auto ip = numpad_edit_ipv4(this, QStringLiteral("Primary DNS"), edit_dns_primary->text()))
+                edit_dns_primary->setText(*ip);
+            return true;
+        }
+        if (watched == edit_dns_secondary) {
+            if (auto ip = numpad_edit_ipv4(this, QStringLiteral("Secondary DNS"), edit_dns_secondary->text()))
+                edit_dns_secondary->setText(*ip);
+            return true;
+        }
+    }
+    return false;
 }
 
 void DnsConfigDialog::on_apply() {
@@ -1769,32 +1957,32 @@ void DevicePage::refresh() {
         rows_.push_back(r);
 
         connect(btn_dl_m, &QPushButton::clicked, this, [this, idx]() {
-            rows_[idx].val_dl = std::max(0.1, rows_[idx].val_dl - 1.0);
+            rows_[idx].val_dl = std::max(k_device_bw_min_mbps, rows_[idx].val_dl - 1.0);
             rows_[idx].lbl_dl->setText(QString("↓ %1 Mbps").arg(rows_[idx].val_dl, 0, 'f', 1));
         });
         connect(btn_dl_p, &QPushButton::clicked, this, [this, idx]() {
-            rows_[idx].val_dl = std::min(10000.0, rows_[idx].val_dl + 1.0);
+            rows_[idx].val_dl = std::min(k_device_bw_max_mbps, rows_[idx].val_dl + 1.0);
             rows_[idx].lbl_dl->setText(QString("↓ %1 Mbps").arg(rows_[idx].val_dl, 0, 'f', 1));
         });
         connect(btn_ul_m, &QPushButton::clicked, this, [this, idx]() {
-            rows_[idx].val_ul = std::max(0.1, rows_[idx].val_ul - 1.0);
+            rows_[idx].val_ul = std::max(k_device_bw_min_mbps, rows_[idx].val_ul - 1.0);
             rows_[idx].lbl_ul->setText(QString("↑ %1 Mbps").arg(rows_[idx].val_ul, 0, 'f', 1));
         });
         connect(btn_ul_p, &QPushButton::clicked, this, [this, idx]() {
-            rows_[idx].val_ul = std::min(10000.0, rows_[idx].val_ul + 1.0);
+            rows_[idx].val_ul = std::min(k_device_bw_max_mbps, rows_[idx].val_ul + 1.0);
             rows_[idx].lbl_ul->setText(QString("↑ %1 Mbps").arg(rows_[idx].val_ul, 0, 'f', 1));
         });
         // Tap label → NumPad direct entry
         connect(lbl_dl, &QPushButton::clicked, this, [this, idx]() {
             auto v = NumPadDialog::get_double(this, "Download Limit (Mbps)",
-                                              rows_[idx].val_dl, 0.1, 10000.0);
+                                              rows_[idx].val_dl, k_device_bw_min_mbps, k_device_bw_max_mbps);
             if (!v) return;
             rows_[idx].val_dl = *v;
             rows_[idx].lbl_dl->setText(QString("↓ %1 Mbps").arg(*v, 0, 'f', 1));
         });
         connect(lbl_ul, &QPushButton::clicked, this, [this, idx]() {
             auto v = NumPadDialog::get_double(this, "Upload Limit (Mbps)",
-                                              rows_[idx].val_ul, 0.1, 10000.0);
+                                              rows_[idx].val_ul, k_device_bw_min_mbps, k_device_bw_max_mbps);
             if (!v) return;
             rows_[idx].val_ul = *v;
             rows_[idx].lbl_ul->setText(QString("↑ %1 Mbps").arg(*v, 0, 'f', 1));
@@ -2088,6 +2276,7 @@ void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
 
 void Dashboard::on_tab_clicked(int page_index) {
     page_stack->setCurrentIndex(page_index);
+    if (page_index == 2) page_qos->refresh_whitelist_from_config();
     if (page_index == 4) page_devices->refresh();
 }
 
