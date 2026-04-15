@@ -26,23 +26,43 @@
 #include <QValidator>
 #include <QRegularExpressionValidator>
 #include <QDialog>
+#include <QEvent>
+#include <QMouseEvent>
+#include <QPaintEvent>
 #include <QButtonGroup>
 #include <QTime>
 #include <QMenu>
 #include <array>
 #include <chrono>
 #include <string>
+#include <thread>
 #include <vector>
 #include "Telemetry.hpp"
-#include "ProbeManager.hpp"
 #include "SelfTest.hpp"
 
-namespace Scalpel::GUI {
+namespace HPGTP::GUI {
 
 // ═══════════════════════════════════════════
 // Notification panel: pull-down overlay (iOS-style)
 // Slides in from top via spring physics, driven by anim_timer
 // ═══════════════════════════════════════════
+// Pill-style on/off switch (track #0077ff on / #2a2a4a off, border #3a3a5a)
+class SwitchToggle : public QWidget {
+    Q_OBJECT
+public:
+    explicit SwitchToggle(QWidget* parent = nullptr);
+    bool isChecked() const { return checked_; }
+public slots:
+    void setChecked(bool on);
+signals:
+    void toggled(bool checked);
+protected:
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
+private:
+    bool checked_ = false;
+};
+
 class NotificationPanel : public QFrame {
     Q_OBJECT
 public:
@@ -106,7 +126,6 @@ private:
     RealTimePlot* pps_plot;
     RealTimePlot* bps_plot;
     QLabel* core_labels[4];
-    QLabel* lbl_cpu_capacity;
     QLabel* lbl_mode;
     // System info section
     QLabel* lbl_hostname;
@@ -141,8 +160,8 @@ private:
     std::array<RoleEntry, Telemetry::SystemInfo::MAX_IFACES> role_entries_{};
     size_t role_entries_count_ = 0;
 
-    QCheckBox*       chk_stp;
-    QCheckBox*       chk_igmp;
+    SwitchToggle*    sw_stp;
+    SwitchToggle*    sw_igmp;
     QPushButton*     btn_refresh = nullptr;
     QSocketNotifier* scan_done_notifier_ = nullptr;
 };
@@ -155,17 +174,29 @@ class NumPadDialog : public QDialog {
 public:
     static std::optional<int> get_int(QWidget* parent, const QString& title,
                                        int initial, int min, int max);
+    static std::optional<double> get_double(QWidget* parent, const QString& title,
+                                            double initial, double min, double max);
 private:
-    explicit NumPadDialog(const QString& title, int initial, int min, int max,
+    // Whitelist (get_int): allow_negative, no decimal. Bandwidth (get_double): decimal, no minus.
+    explicit NumPadDialog(const QString& title, QString initial_text,
+                          double min_val, double max_val,
+                          bool allow_negative, bool allow_decimal,
                           QWidget* parent = nullptr);
     void push_digit(char d);
+    void on_minus();
+    void on_dot();
     void do_backspace();
     void update_display();
 
-    QLabel*      display_;
-    QPushButton* btn_ok_;
-    QString      text_;
-    int          min_, max_;
+    QLabel*       display_;
+    QPushButton*  btn_ok_;
+    QPushButton*  btn_minus_ = nullptr;
+    QPushButton*  btn_dot_   = nullptr;
+    QString       text_;
+    double        min_;
+    double        max_;
+    bool          allow_negative_;
+    bool          allow_decimal_;
 };
 
 // ═══════════════════════════════════════════
@@ -191,12 +222,16 @@ class QosPage : public QWidget {
     Q_OBJECT
 public:
     explicit QosPage(QWidget* parent = nullptr);
+    void refresh_whitelist_from_config();
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 private slots:
     void on_edit_whitelist();
     void on_toggle_accel();
     void on_throttle_changed(int value_pct);
+    void on_apply_global_bw();
 private:
-    QCheckBox*    chk_acceleration;
+    SwitchToggle* sw_acceleration;
     QLineEdit*    edit_dl_limit;
     QLineEdit*    edit_ul_limit;
     QTableWidget* whitelist_table;
@@ -211,6 +246,8 @@ class DhcpConfigDialog : public QDialog {
     Q_OBJECT
 public:
     explicit DhcpConfigDialog(QWidget* parent = nullptr);
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 private slots:
     void on_apply();
 private:
@@ -228,6 +265,8 @@ class DnsConfigDialog : public QDialog {
     Q_OBJECT
 public:
     explicit DnsConfigDialog(QWidget* parent = nullptr);
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 private slots:
     void on_apply();
     void on_add_record();
@@ -235,7 +274,7 @@ private slots:
 private:
     QLineEdit*    edit_dns_primary;
     QLineEdit*    edit_dns_secondary;
-    QCheckBox*    chk_dns_redirect;
+    SwitchToggle*  sw_dns_redirect;
     QTableWidget* static_dns_table;
 };
 
@@ -249,9 +288,9 @@ public:
     void refresh_status();
 private:
     struct ServiceRow {
-        QCheckBox*   chk;
-        QLabel*      status_label;
-        QPushButton* btn_settings = nullptr;  // non-null only for DHCP and DNS rows
+        SwitchToggle* sw;
+        QLabel*       status_label;
+        QPushButton*  btn_settings = nullptr;  // non-null only for DHCP and DNS rows
     };
     ServiceRow rows[5]; // NAT, DHCP, DNS, Firewall, UPnP
 };
@@ -269,9 +308,8 @@ private:
 
     struct DeviceRow {
         Net::IPv4Net ip{};
-        std::array<uint8_t, 6> mac{};
-        QCheckBox* chk_allow;
-        QCheckBox* chk_rate;
+        SwitchToggle* sw_allow;
+        SwitchToggle* sw_rate;
         QPushButton* lbl_dl;
         QPushButton* lbl_ul;
         double     val_dl = 100.0;
@@ -294,7 +332,7 @@ public:
     // Thread-safe: callable from any thread (engine cores, network threads)
     static void post_notification(const QString& title, const QString& body);
     // Called on Qt main thread after async self-test completes
-    static void on_selftest_done(const Scalpel::SelfTest::Report& r);
+    static void on_selftest_done(const HPGTP::SelfTest::Report& r);
 protected:
     void timerEvent(QTimerEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
@@ -344,9 +382,13 @@ private:
     uint64_t plot_tick_ = 0;
     std::chrono::steady_clock::time_point plot_last_tick_ = std::chrono::steady_clock::now();
 
+    // Startup log reader: async file I/O off the GUI thread (PDF Ch.3).
+    // Auto-joins on Dashboard destruction; worker posts each line via invokeMethod.
+    std::jthread startup_log_reader_;
+
 private slots:
     void on_tab_clicked(int page_index);
     void on_shutdown_clicked();
 };
 
-} // namespace Scalpel::GUI
+} // namespace HPGTP::GUI

@@ -1,7 +1,7 @@
 #include "Scheduler.hpp"
 #include "DataPlane.hpp"
 
-namespace Scalpel::Traffic {
+namespace HPGTP::Traffic {
 
 static TxResult try_hardware_send(int fd, std::span<const uint8_t> pkt) {
     using DataPlane::TxFrameOutput;
@@ -39,4 +39,4 @@ void Shaper::process_queue(int tx_fd) {
     }
 }
 
-} // namespace Scalpel::Traffic
+} // namespace HPGTP::Traffic

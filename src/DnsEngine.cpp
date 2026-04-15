@@ -4,7 +4,7 @@
 #include <cstring>
 #include <print>
 
-namespace Scalpel::Logic {
+namespace HPGTP::Logic {
 
 static uint32_t hash_qname(const uint8_t* qname, size_t max_len) {
     uint32_t h = 2166136261U;
@@ -34,11 +34,17 @@ void DnsEngine::reload_static_records() {
     static_count.store(cnt, std::memory_order_release);
 }
 
-void DnsEngine::do_bounce(Net::ParsedPacket& pkt, DnsHeader* dns, Net::UDPHeader* udp,
+bool DnsEngine::do_bounce(Net::ParsedPacket& pkt, DnsHeader* dns, Net::UDPHeader* udp,
                           Net::IPv4Net ip, int bounce_fd) {
-    size_t old_len = pkt.raw_span.size();
+    if (!pkt.ipv4) return false;
+    const size_t eth_sz = sizeof(Net::EthernetHeader);
+    const uint16_t ip_tot = ntohs(pkt.ipv4->tot_len);
+    if (ip_tot < static_cast<uint16_t>(pkt.ihl)) return false;
+    size_t old_len = eth_sz + ip_tot;
+    if (old_len > pkt.raw_span.size()) return false;
     size_t new_len = old_len + 16;
-    if (new_len > 1500) return;
+    if (new_len > 1500) return false;
+    if (pkt.raw_span.size() < new_len) return false;
 
     dns->flags   = htons(ntohs(dns->flags) | 0x8180);
     dns->ancount = htons(1);
@@ -76,6 +82,7 @@ void DnsEngine::do_bounce(Net::ParsedPacket& pkt, DnsHeader* dns, Net::UDPHeader
         std::span<const uint8_t>(pkt.raw_span.data(), new_len),
         3,
         1);
+    return true;
 }
 
 void DnsEngine::rewrite_upstream(Net::ParsedPacket& pkt, Net::IPv4Net upstream_ip) {
@@ -110,19 +117,15 @@ bool DnsEngine::process_query(Net::ParsedPacket& pkt, int bounce_fd) {
 
     uint8_t scnt = static_count.load(std::memory_order_acquire);
     for (uint8_t i = 0; i < scnt; ++i) {
-        if (static_records[i].domain_hash == h) {
-            do_bounce(pkt, dns, udp, static_records[i].ip, bounce_fd);
-            return true;
-        }
+        if (static_records[i].domain_hash == h)
+            return do_bounce(pkt, dns, udp, static_records[i].ip, bounce_fd);
     }
 
     size_t idx = h % CACHE_SIZE;
     if (cache[idx].valid.load(std::memory_order_acquire)) {
         if (cache[idx].domain_hash == h &&
-            current_tick.load(std::memory_order_relaxed) <= cache[idx].expire_tick) {
-            do_bounce(pkt, dns, udp, cache[idx].ipv4_address, bounce_fd);
-            return true;
-        }
+            current_tick.load(std::memory_order_relaxed) <= cache[idx].expire_tick)
+            return do_bounce(pkt, dns, udp, cache[idx].ipv4_address, bounce_fd);
         cache[idx].valid.store(false, std::memory_order_relaxed);
     }
 
@@ -180,4 +183,4 @@ void DnsEngine::process_background_tasks() {
     }
 }
 
-} // namespace Scalpel::Logic
+} // namespace HPGTP::Logic

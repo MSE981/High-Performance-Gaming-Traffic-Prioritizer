@@ -5,7 +5,7 @@
 #include <cstring>
 #include <string>
 
-namespace Scalpel {
+namespace HPGTP {
 
 std::expected<void, std::string> Telemetry::SystemInfo::init_event_fds() {
     rescan_fd_ = ::eventfd(0, EFD_CLOEXEC);
@@ -45,4 +45,4 @@ void Telemetry::SystemInfo::signal_done() {
     if (done_fd_ >= 0) ::eventfd_write(done_fd_, 1);
 }
 
-} // namespace Scalpel
+} // namespace HPGTP

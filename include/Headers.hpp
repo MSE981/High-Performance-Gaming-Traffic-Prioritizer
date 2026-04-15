@@ -1,11 +1,12 @@
 #pragma once
+// HPGTP = High-Performance Gaming Traffic Prioritizer. This header defines HPGTP::Net wire types.
 #include <cstdint>
 #include <atomic>
 #include <array>
 #include <span>
 #include "NetworkTypes.hpp"
 
-namespace Scalpel::Net {
+namespace HPGTP::Net {
 
     inline constexpr uint16_t eth_proto_wire_to_host(uint16_t be) noexcept {
         return static_cast<uint16_t>((be << 8) | (be >> 8));

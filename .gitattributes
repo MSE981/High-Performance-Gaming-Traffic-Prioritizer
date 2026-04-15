@@ -5,6 +5,8 @@
 
 # Shell entrypoints must stay LF for Linux/Pi (CRLF breaks shebang).
 start.sh text eol=lf
+start_release.sh text eol=lf
+start_demo.sh text eol=lf
 
 ###############################################################################
 # Set default behavior for command prompt diff.

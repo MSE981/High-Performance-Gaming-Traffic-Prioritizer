@@ -3,13 +3,11 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace Scalpel::DataPlane {
+namespace HPGTP::DataPlane {
 
 // Single egress path for raw Ethernet frames from the data plane.
 struct TxFrameOutput {
     enum class PacketTxTry : std::uint8_t { Complete = 0, Busy = 1, Error = 2 };
-
-    [[nodiscard]] static bool send_blocking(int tx_fd, std::span<const uint8_t> pkt) noexcept;
 
     // One non-blocking send(2) attempt (MSG_DONTWAIT). Busy = EAGAIN / ENOBUFS / EWOULDBLOCK.
     [[nodiscard]] static PacketTxTry try_send_packet_nonblocking(int tx_fd,
@@ -22,4 +20,4 @@ struct TxFrameOutput {
     static void send_stream_blocking(int fd, std::span<const uint8_t> data);
 };
 
-} // namespace Scalpel::DataPlane
+} // namespace HPGTP::DataPlane

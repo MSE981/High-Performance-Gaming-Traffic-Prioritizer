@@ -17,24 +17,84 @@
 #include <QTimerEvent>
 #include <QResizeEvent>
 #include <QMouseEvent>
+#include <QEvent>
+#include <QPoint>
 #include <QFormLayout>
 #include <QScrollArea>
 #include <QRegularExpressionValidator>
+#include <QDoubleValidator>
+#include <QLocale>
 #include <QDoubleSpinBox>
 #include <QMessageBox>
+#include <QSignalBlocker>
+#include <QSizePolicy>
+#include <QTimer>
 #include <thread>
 #include <print>
 #include <algorithm>
+#include <array>
+#include <string_view>
+#include <vector>
+#include <optional>
+#include <cmath>
 #include <fcntl.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 
-namespace Scalpel::GUI {
+namespace HPGTP::GUI {
+
+constexpr double k_qos_bw_min_mbps     = 0.1;
+constexpr double k_qos_bw_max_mbps     = 1e6;
+constexpr double k_device_bw_min_mbps  = 0.1;
+constexpr double k_device_bw_max_mbps  = 10000.0;
+constexpr int    k_port_min            = 1;
+constexpr int    k_port_max            = 65535;
 
 // ═════════════════════════════════════════════════════════════
 // NotificationPanel: iOS-style pull-down overlay
 // Spring constants tuned for a snappy-but-not-bouncy feel
 // ═════════════════════════════════════════════════════════════
+// SwitchToggle: pill track + round thumb (accent #0077ff, muted track #2a2a4a)
+SwitchToggle::SwitchToggle(QWidget* parent) : QWidget(parent) {
+    setFixedSize(58, 32);
+    setCursor(Qt::PointingHandCursor);
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+}
+
+void SwitchToggle::setChecked(bool on) {
+    if (checked_ == on) return;
+    checked_ = on;
+    update();
+}
+
+void SwitchToggle::mouseReleaseEvent(QMouseEvent* e) {
+    if (e->button() == Qt::LeftButton && rect().contains(e->position().toPoint())) {
+        checked_ = !checked_;
+        update();
+        emit toggled(checked_);
+    }
+    QWidget::mouseReleaseEvent(e);
+}
+
+void SwitchToggle::paintEvent(QPaintEvent*) {
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QRect r = rect().adjusted(1, 1, -2, -2);
+    const QColor trackOn(0x00, 0x77, 0xff);
+    const QColor trackOff(0x2a, 0x2a, 0x4a);
+    const QColor border(0x3a, 0x3a, 0x5a);
+    const QColor thumb(0xee, 0xee, 0xf5);
+    p.setPen(QPen(border, 1));
+    p.setBrush(checked_ ? trackOn : trackOff);
+    p.drawRoundedRect(r, r.height() / 2.0, r.height() / 2.0);
+    const int diam = r.height() - 6;
+    const int x    = checked_ ? (r.right() - diam - 2) : (r.left() + 2);
+    const int y    = r.center().y() - diam / 2;
+    p.setPen(Qt::NoPen);
+    p.setBrush(thumb);
+    p.drawEllipse(QRect(x, y, diam, diam));
+}
+
 NotificationPanel::NotificationPanel(QWidget* parent) : QFrame(parent) {
     // Height set dynamically by Dashboard (full-screen overlay)
     setAttribute(Qt::WA_TranslucentBackground);
@@ -127,8 +187,8 @@ void NotificationPanel::mousePressEvent(QMouseEvent* event) {
 
 void NotificationPanel::mouseReleaseEvent(QMouseEvent* event) {
     int dy = event->pos().y() - swipe_start_y_;
-    // Upward swipe (dy < -24px) → collapse with fast-start kick
-    if (dy < -24) {
+    // Upward swipe (dy < -192px) → collapse with fast-start kick
+    if (dy < -192) {
         kick(-12.0);
         set_expanded(false);
     }
@@ -318,15 +378,12 @@ OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
     title->setObjectName("section_title");
     layout->addWidget(title);
 
-    // Mode and performance labels
+    // Mode label
     auto* info_row = new QHBoxLayout();
     lbl_mode = new QLabel("Mode: Acceleration");
-    lbl_cpu_capacity = new QLabel("CPU Capacity: --");
     lbl_mode->setStyleSheet("color: #00cc66; font-weight: bold; font-size: 15px;");
-    lbl_cpu_capacity->setStyleSheet("color: #ffaa00; font-weight: bold; font-size: 15px;");
     info_row->addWidget(lbl_mode);
     info_row->addStretch();
-    info_row->addWidget(lbl_cpu_capacity);
     layout->addLayout(info_row);
 
     // Dual chart row
@@ -406,8 +463,6 @@ void OverviewPage::refresh(const Telemetry& tel, const std::array<uint64_t, 4>& 
     bps_plot->update();
 
     lbl_mode->setText(tel.bridge_mode.load(std::memory_order_relaxed) ? "Mode: Bridge" : "Mode: Acceleration");
-    double cap = tel.internal_limit_mbps.load(std::memory_order_relaxed);
-    if (cap > 0) lbl_cpu_capacity->setText(QString("CPU Capacity: %1 Mbps").arg(cap, 0, 'f', 1));
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -438,12 +493,12 @@ InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
     // Advanced options
     auto* adv_group = new QGroupBox("Advanced Options");
     auto* adv_form = new QFormLayout(adv_group);
-    chk_stp = new QCheckBox("Enable STP");
-    chk_stp->setChecked(Config::ENABLE_STP.load(std::memory_order_relaxed));
-    adv_form->addRow("Spanning Tree Protocol:", chk_stp);
-    chk_igmp = new QCheckBox("Enable IGMP Snooping");
-    chk_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed));
-    adv_form->addRow("IGMP Snooping:", chk_igmp);
+    sw_stp = new SwitchToggle();
+    sw_stp->setChecked(Config::ENABLE_STP.load(std::memory_order_relaxed));
+    adv_form->addRow("Spanning Tree Protocol:", sw_stp);
+    sw_igmp = new SwitchToggle();
+    sw_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed));
+    adv_form->addRow("IGMP Snooping:", sw_igmp);
     layout->addWidget(adv_group);
 
     // Button row
@@ -541,8 +596,9 @@ void InterfacePage::scan_interfaces() {
 
         // Store entry
         if (role_entries_count_ < role_entries_.size()) {
-            strncpy(role_entries_[role_entries_count_].name.data(), name.c_str(), 15);
-            role_entries_[role_entries_count_].name[15] = '\0';
+            auto nn = std::string_view{name}.copy(
+                role_entries_[role_entries_count_].name.data(), 15);
+            role_entries_[role_entries_count_].name[nn] = '\0';
             role_entries_[role_entries_count_].group = btn_group;
             ++role_entries_count_;
         }
@@ -587,8 +643,8 @@ void InterfacePage::on_save_clicked() {
         if (role_entries_[i].group->checkedId() == 1) Config::add_bridged(role_entries_[i].name.data());
     Config::IFACE_LAN = Config::BRIDGED_IFACES_COUNT == 0 ? "" : std::string(Config::BRIDGED_INTERFACES[0].name.data());
 
-    Config::ENABLE_STP.store(chk_stp->isChecked(), std::memory_order_relaxed);
-    Config::ENABLE_IGMP_SNOOPING.store(chk_igmp->isChecked(), std::memory_order_relaxed);
+    Config::ENABLE_STP.store(sw_stp->isChecked(), std::memory_order_relaxed);
+    Config::ENABLE_IGMP_SNOOPING.store(sw_igmp->isChecked(), std::memory_order_relaxed);
     Config::ENABLE_ACCELERATION.store(true, std::memory_order_relaxed);
     Telemetry::instance().bridge_mode.store(true, std::memory_order_relaxed);
 
@@ -598,8 +654,8 @@ void InterfacePage::on_save_clicked() {
 
 void InterfacePage::on_reset_clicked() {
     scan_interfaces(); // Rebuilds table from Config::IFACE_ROLES
-    chk_stp->setChecked(Config::ENABLE_STP.load(std::memory_order_relaxed));
-    chk_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed));
+    sw_stp->setChecked(Config::ENABLE_STP.load(std::memory_order_relaxed));
+    sw_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed));
 }
 
 void InterfacePage::on_refresh_clicked() {
@@ -626,18 +682,50 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     layout->addWidget(title);
 
     // Acceleration toggle
-    chk_acceleration = new QCheckBox("Enable Gaming Traffic Acceleration (Heuristic Priority Scheduling)");
-    chk_acceleration->setChecked(Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed));
-    connect(chk_acceleration, &QCheckBox::toggled, this, &QosPage::on_toggle_accel);
-    layout->addWidget(chk_acceleration);
+    {
+        auto* accel_row = new QHBoxLayout();
+        auto* lbl_accel = new QLabel("Enable Gaming Traffic Acceleration (Heuristic Priority Scheduling)");
+        lbl_accel->setWordWrap(true);
+        lbl_accel->setStyleSheet("font-size: 15px; color: #e0e0e0;");
+        sw_acceleration = new SwitchToggle();
+        sw_acceleration->setChecked(Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed));
+        connect(sw_acceleration, &SwitchToggle::toggled, this, &QosPage::on_toggle_accel);
+        accel_row->addWidget(lbl_accel, 1);
+        accel_row->addWidget(sw_acceleration, 0, Qt::AlignVCenter);
+        layout->addLayout(accel_row);
+    }
 
     // Bandwidth limit
     auto* bw_group = new QGroupBox("Global Bandwidth Limits");
     auto* bw_form = new QFormLayout(bw_group);
     edit_dl_limit = new QLineEdit("500");
     edit_ul_limit = new QLineEdit("50");
+    edit_dl_limit->setReadOnly(true);
+    edit_ul_limit->setReadOnly(true);
+    {
+        auto attach_bw_validator = [](QLineEdit* le) {
+            auto* v = new QDoubleValidator(k_qos_bw_min_mbps, k_qos_bw_max_mbps, 12, le);
+            v->setNotation(QDoubleValidator::StandardNotation);
+            v->setLocale(QLocale::c());
+            le->setValidator(v);
+        };
+        attach_bw_validator(edit_dl_limit);
+        attach_bw_validator(edit_ul_limit);
+    }
+    edit_dl_limit->installEventFilter(this);
+    edit_ul_limit->installEventFilter(this);
     bw_form->addRow("Download Limit (Mbps):", edit_dl_limit);
     bw_form->addRow("Upload Limit (Mbps):", edit_ul_limit);
+    {
+        auto* apply_row = new QHBoxLayout();
+        apply_row->addStretch();
+        auto* btn_apply_bw = new QPushButton("Apply");
+        btn_apply_bw->setObjectName("btn_primary");
+        btn_apply_bw->setFixedHeight(40);
+        connect(btn_apply_bw, &QPushButton::clicked, this, &QosPage::on_apply_global_bw);
+        apply_row->addWidget(btn_apply_bw);
+        bw_form->addRow(apply_row);
+    }
     layout->addWidget(bw_group);
 
     // Real-time throttle slider
@@ -661,7 +749,7 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     throttle_lay->addLayout(slider_row);
     layout->addWidget(throttle_group);
 
-    // Game port whitelist (read-only display — edit via dialog)
+    // Game port whitelist (backed by Config — edit via dialog, watchdog applies)
     auto* wl_group = new QGroupBox("Game Port Whitelist");
     auto* wl_lay = new QVBoxLayout(wl_group);
 
@@ -678,48 +766,7 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     whitelist_table->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     wl_lay->addWidget(whitelist_table);
 
-    struct PortEntry { const char* port; const char* proto; const char* desc; };
-    // 20 entries, sorted A-Z by description
-    static constexpr PortEntry defaults[] = {
-        {"1119",       "TCP/UDP", "Blizzard Battle.net"},
-        {"6112",       "TCP/UDP", "Blizzard / StarCraft"},
-        {"3074",       "UDP",     "Call of Duty"},
-        {"3659",       "UDP",     "EA / Origin"},
-        {"8080",       "TCP",     "Game HTTP services"},
-        {"7777-7778",  "UDP",     "Garena / Arena games"},
-        {"4380",       "UDP",     "Steam (In-Home Streaming)"},
-        {"27031-27036","UDP",     "Steam Remote Play"},
-        {"27015",      "UDP",     "Steam / Valve"},
-        {"443",        "TCP",     "HTTPS / Secure game APIs"},
-        {"25565",      "TCP",     "Minecraft Java Edition"},
-        {"19132-19133","UDP",     "Minecraft Bedrock Edition"},
-        {"9308",       "UDP",     "Nintendo Switch Online"},
-        {"1935",       "TCP",     "PS Remote Play / RTMP"},
-        {"3478-3480",  "UDP",     "PlayStation Network"},
-        {"5223",       "TCP",     "PlayStation Network (XMPP)"},
-        {"500",        "UDP",     "STUN / ICE (NAT traversal)"},
-        {"3658-3659",  "UDP",     "Xbox / EA cross-platform"},
-        {"3074",       "TCP",     "Xbox Live"},
-        {"53",         "UDP",     "DNS (game server lookup)"},
-    };
-    auto make_item = [](const char* text) {
-        auto* it = new QTableWidgetItem(text);
-        it->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-        return it;
-    };
-    for (auto& e : defaults) {
-        int r = whitelist_table->rowCount();
-        whitelist_table->insertRow(r);
-        whitelist_table->setItem(r, 0, make_item(e.port));
-        whitelist_table->setItem(r, 1, make_item(e.proto));
-        whitelist_table->setItem(r, 2, make_item(e.desc));
-    }
-    // Size table to show all rows without internal scrolling
-    {
-        int header_h = whitelist_table->horizontalHeader()->height();
-        int rows_h   = whitelist_table->rowCount() * wl_row_h;
-        whitelist_table->setMinimumHeight(header_h + rows_h + 4);
-    }
+    refresh_whitelist_from_config();
 
     auto* wl_btn_row = new QHBoxLayout();
     auto* btn_edit_wl = new QPushButton("Edit Whitelist…");
@@ -733,8 +780,92 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     connect(btn_edit_wl, &QPushButton::clicked, this, &QosPage::on_edit_whitelist);
 }
 
+void QosPage::refresh_whitelist_from_config() {
+    const int wl_row_h = qRound(whitelist_table->fontMetrics().height() * 1.2);
+    whitelist_table->verticalHeader()->setDefaultSectionSize(wl_row_h);
+    whitelist_table->setRowCount(0);
+
+    auto make_item_qs = [](const QString& text) {
+        auto* it = new QTableWidgetItem(text);
+        it->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        return it;
+    };
+    std::array<Config::PortRange, Config::MAX_GAME_PORT_RANGES> wl_buf{};
+    const size_t wl_n = Config::copy_active_game_ports_for_display(wl_buf.data(), wl_buf.size());
+    for (size_t i = 0; i < wl_n; ++i) {
+        const auto& pr = wl_buf[i];
+        const QString port_str = (pr.start == pr.end)
+            ? QString::number(pr.start)
+            : QStringLiteral("%1-%2").arg(pr.start).arg(pr.end);
+        const int r = whitelist_table->rowCount();
+        whitelist_table->insertRow(r);
+        whitelist_table->setItem(r, 0, make_item_qs(port_str));
+        whitelist_table->setItem(r, 1, make_item_qs(QStringLiteral("TCP/UDP")));
+        whitelist_table->setItem(r, 2, make_item_qs(QString()));
+    }
+    const int header_h = whitelist_table->horizontalHeader()->height();
+    const int rows_h   = whitelist_table->rowCount() * wl_row_h;
+    whitelist_table->setMinimumHeight(header_h + rows_h + 4);
+}
+
+bool QosPage::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonPress) {
+        if (watched == edit_dl_limit) {
+            bool ok = false;
+            double cur = edit_dl_limit->text().trimmed().toDouble(&ok);
+            if (!ok) cur = 500.0;
+            cur = std::clamp(cur, k_qos_bw_min_mbps, k_qos_bw_max_mbps);
+            if (auto v = NumPadDialog::get_double(this, QStringLiteral("Download Limit (Mbps)"),
+                                                  cur, k_qos_bw_min_mbps, k_qos_bw_max_mbps))
+                edit_dl_limit->setText(QString::number(*v, 'g', 12));
+            return true;
+        }
+        if (watched == edit_ul_limit) {
+            bool ok = false;
+            double cur = edit_ul_limit->text().trimmed().toDouble(&ok);
+            if (!ok) cur = 50.0;
+            cur = std::clamp(cur, k_qos_bw_min_mbps, k_qos_bw_max_mbps);
+            if (auto v = NumPadDialog::get_double(this, QStringLiteral("Upload Limit (Mbps)"),
+                                                  cur, k_qos_bw_min_mbps, k_qos_bw_max_mbps))
+                edit_ul_limit->setText(QString::number(*v, 'g', 12));
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void QosPage::on_apply_global_bw() {
+    if (!edit_dl_limit->hasAcceptableInput() || !edit_ul_limit->hasAcceptableInput()) {
+        Dashboard::post_notification(
+            QStringLiteral("Invalid limits"),
+            QStringLiteral("Use the keypad: each value must be greater than 0 and at most %1 Mbps.")
+                .arg(k_qos_bw_max_mbps, 0, 'g', 6));
+        return;
+    }
+    bool ok_dl = false, ok_ul = false;
+    double dl = edit_dl_limit->text().trimmed().toDouble(&ok_dl);
+    double ul = edit_ul_limit->text().trimmed().toDouble(&ok_ul);
+    if (!ok_dl || !ok_ul || dl <= 0.0 || ul <= 0.0
+        || dl < k_qos_bw_min_mbps || ul < k_qos_bw_min_mbps
+        || dl > k_qos_bw_max_mbps || ul > k_qos_bw_max_mbps) {
+        Dashboard::post_notification(
+            QStringLiteral("Invalid limits"),
+            QStringLiteral("Enter download and upload between %1 and %2 Mbps.")
+                .arg(k_qos_bw_min_mbps, 0, 'g', 6)
+                .arg(k_qos_bw_max_mbps, 0, 'g', 6));
+        return;
+    }
+    auto& tel = Telemetry::instance();
+    tel.qos_global_dl_mbps_pending.store(dl, std::memory_order_relaxed);
+    tel.qos_global_ul_mbps_pending.store(ul, std::memory_order_relaxed);
+    tel.qos_global_bw_dirty.store(true, std::memory_order_release);
+    Dashboard::post_notification(
+        QStringLiteral("QoS"),
+        QStringLiteral("Parameters have been applied successfully."));
+}
+
 void QosPage::on_toggle_accel() {
-    bool on = chk_acceleration->isChecked();
+    bool on = sw_acceleration->isChecked();
     Config::ENABLE_ACCELERATION.store(on, std::memory_order_relaxed);
     Telemetry::instance().bridge_mode.store(!on, std::memory_order_relaxed);
     std::println("[GUI] Acceleration mode: {}", on ? "ON" : "OFF");
@@ -743,75 +874,148 @@ void QosPage::on_toggle_accel() {
 // ═════════════════════════════════════════════════════════════
 // NumPadDialog
 // ═════════════════════════════════════════════════════════════
-NumPadDialog::NumPadDialog(const QString& title, int initial,
-                           int min, int max, QWidget* parent)
-    : QDialog(parent), min_(min), max_(max)
+namespace {
+QString numpad_format_initial_double(double v) {
+    return QString::number(v, 'g', 12);
+}
+} // namespace
+
+NumPadDialog::NumPadDialog(const QString& title, QString initial_text,
+                           double min_val, double max_val,
+                           bool allow_negative, bool allow_decimal,
+                           QWidget* parent)
+    : QDialog(parent)
+    , min_(min_val)
+    , max_(max_val)
+    , allow_negative_(allow_negative)
+    , allow_decimal_(allow_decimal)
 {
+    btn_minus_ = nullptr;
+    btn_dot_   = nullptr;
     setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
-    setStyleSheet(Scalpel::GUI::DARK_STYLESHEET);
-    setFixedWidth(360);
+    setStyleSheet(HPGTP::GUI::DARK_STYLESHEET);
+    setFixedWidth(540);
 
     auto* lay = new QVBoxLayout(this);
-    lay->setContentsMargins(20, 20, 20, 20);
-    lay->setSpacing(10);
+    lay->setContentsMargins(30, 30, 30, 30);
+    lay->setSpacing(15);
 
     auto* lbl_title = new QLabel(title);
     lbl_title->setAlignment(Qt::AlignCenter);
-    lbl_title->setStyleSheet("font-size:16px; font-weight:bold; color:#ffffff; padding-bottom:4px;");
+    lbl_title->setWordWrap(true);
+    lbl_title->setStyleSheet("font-size:24px; font-weight:bold; color:#ffffff; padding-bottom:6px;");
     lay->addWidget(lbl_title);
 
     display_ = new QLabel();
     display_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    display_->setFixedHeight(58);
+    display_->setFixedHeight(87);
     lay->addWidget(display_);
 
     auto* grid = new QGridLayout();
-    grid->setSpacing(8);
+    grid->setSpacing(12);
+    grid->setColumnStretch(0, 1);
+    grid->setColumnStretch(1, 1);
+    grid->setColumnStretch(2, 1);
 
-    auto make_btn = [&](const QString& text, int row, int col,
-                        int rs = 1, int cs = 1) -> QPushButton* {
-        auto* b = new QPushButton(text);
-        b->setFixedHeight(62);
-        b->setStyleSheet("font-size:22px; font-weight:bold;");
+    auto make_btn = [&](const QString& t, int row, int col, int rs = 1, int cs = 1) -> QPushButton* {
+        auto* b = new QPushButton(t);
+        b->setFixedHeight(84);
+        b->setStyleSheet("font-size:33px; font-weight:bold;");
         grid->addWidget(b, row, col, rs, cs);
         return b;
     };
 
-    auto* b7  = make_btn("7", 0, 0); auto* b8 = make_btn("8", 0, 1); auto* b9 = make_btn("9", 0, 2);
-    auto* b4  = make_btn("4", 1, 0); auto* b5 = make_btn("5", 1, 1); auto* b6 = make_btn("6", 1, 2);
-    auto* b1  = make_btn("1", 2, 0); auto* b2 = make_btn("2", 2, 1); auto* b3 = make_btn("3", 2, 2);
-    auto* b0  = make_btn("0",   3, 0, 1, 2);
-    auto* del = make_btn("⌫",  3, 2);
+    auto* b7 = make_btn("7", 0, 0);
+    auto* b8 = make_btn("8", 0, 1);
+    auto* b9 = make_btn("9", 0, 2);
+    auto* b4 = make_btn("4", 1, 0);
+    auto* b5 = make_btn("5", 1, 1);
+    auto* b6 = make_btn("6", 1, 2);
+    auto* b1 = make_btn("1", 2, 0);
+    auto* b2 = make_btn("2", 2, 1);
+    auto* b3 = make_btn("3", 2, 2);
+
+    QPushButton* b0 = nullptr;
+    QPushButton* del = nullptr;
+
+    if (allow_negative_ && !allow_decimal_) {
+        b0         = make_btn("0", 3, 0);
+        btn_minus_ = make_btn(QStringLiteral("\u2212"), 3, 1);
+        del        = make_btn(QStringLiteral("\u232B"), 3, 2);
+    } else if (!allow_negative_ && allow_decimal_) {
+        b0       = make_btn("0", 3, 0);
+        btn_dot_ = make_btn(QStringLiteral("."), 3, 1);
+        del      = make_btn(QStringLiteral("\u232B"), 3, 2);
+    } else {
+        b0 = make_btn("0", 3, 0);
+        auto* row4_pad = new QWidget();
+        row4_pad->setFixedHeight(84);
+        row4_pad->setAttribute(Qt::WA_TransparentForMouseEvents);
+        grid->addWidget(row4_pad, 3, 1);
+        del = make_btn(QStringLiteral("\u232B"), 3, 2);
+    }
     del->setObjectName("btn_danger");
+
     lay->addLayout(grid);
 
     auto* btn_row = new QHBoxLayout();
-    btn_row->setSpacing(10);
+    btn_row->setSpacing(15);
     auto* cancel = new QPushButton("Cancel");
     btn_ok_ = new QPushButton("OK");
     btn_ok_->setObjectName("btn_primary");
+    {
+        QFont bf;
+        bf.setBold(true);
+        bf.setPixelSize(23);
+        cancel->setFont(bf);
+        btn_ok_->setFont(bf);
+        cancel->setFixedHeight(84);
+        btn_ok_->setFixedHeight(84);
+    }
     btn_row->addWidget(cancel, 1);
     btn_row->addWidget(btn_ok_, 1);
     lay->addLayout(btn_row);
 
-    text_ = initial > 0 ? QString::number(initial) : QString();
+    text_ = std::move(initial_text);
 
     for (auto [btn, ch] : std::initializer_list<std::pair<QPushButton*, char>>{
-            {b0,'0'},{b1,'1'},{b2,'2'},{b3,'3'},{b4,'4'},
-            {b5,'5'},{b6,'6'},{b7,'7'},{b8,'8'},{b9,'9'}})
-        connect(btn, &QPushButton::clicked, this, [this, ch](){ push_digit(ch); });
+             {b0, '0'}, {b1, '1'}, {b2, '2'}, {b3, '3'}, {b4, '4'},
+             {b5, '5'}, {b6, '6'}, {b7, '7'}, {b8, '8'}, {b9, '9'}}) {
+        if (btn)
+            connect(btn, &QPushButton::clicked, this, [this, ch]() { push_digit(ch); });
+    }
+    if (btn_minus_)
+        connect(btn_minus_, &QPushButton::clicked, this, &NumPadDialog::on_minus);
+    if (btn_dot_)
+        connect(btn_dot_, &QPushButton::clicked, this, &NumPadDialog::on_dot);
 
-    connect(del,     &QPushButton::clicked, this, &NumPadDialog::do_backspace);
+    connect(del, &QPushButton::clicked, this, &NumPadDialog::do_backspace);
     connect(btn_ok_, &QPushButton::clicked, this, &QDialog::accept);
-    connect(cancel,  &QPushButton::clicked, this, &QDialog::reject);
+    connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
 
     update_display();
 }
 
 void NumPadDialog::push_digit(char d) {
-    if (text_.length() >= 6) return;
-    if (d == '0' && text_.isEmpty()) return;
+    if (text_.length() >= 20) return;
     text_ += QChar(d);
+    update_display();
+}
+
+void NumPadDialog::on_minus() {
+    if (!allow_negative_) return;
+    if (!text_.isEmpty()) return;
+    text_ = '-';
+    update_display();
+}
+
+void NumPadDialog::on_dot() {
+    if (!allow_decimal_) return;
+    if (text_.contains('.')) return;
+    if (text_.isEmpty() || text_ == '-')
+        text_ += QStringLiteral("0.");
+    else
+        text_ += '.';
     update_display();
 }
 
@@ -821,40 +1025,84 @@ void NumPadDialog::do_backspace() {
 }
 
 void NumPadDialog::update_display() {
-    int  val = text_.isEmpty() ? 0 : text_.toInt();
-    bool ok  = !text_.isEmpty() && val >= min_ && val <= max_;
-    bool red = !text_.isEmpty() && (val < min_ || val > max_);
     display_->setText(text_);
+
+    bool ok_btn = false;
+    bool red    = false;
+
+    if (text_.isEmpty()) {
+    } else if (text_ == u'-' || text_ == u'.' || text_ == QStringLiteral("-.")) {
+    } else {
+        bool ok_parse = false;
+        double val = text_.toDouble(&ok_parse);
+        if (!allow_decimal_ && text_.contains('.'))
+            ok_parse = false;
+        if (!allow_negative_ && (val < 0 || text_.startsWith('-')))
+            ok_parse = false;
+
+        if (ok_parse && !allow_decimal_) {
+            if (std::trunc(val) != val) ok_parse = false;
+        }
+        if (ok_parse) {
+            if (val >= min_ && val <= max_)
+                ok_btn = true;
+            else
+                red = true;
+        } else {
+            red = true;
+        }
+    }
+
     display_->setStyleSheet(
-        QString("background-color:#22223a; border:2px solid %1; border-radius:8px;"
-                "font-size:26px; font-weight:bold; color:%2; padding:0 12px;")
-        .arg(red ? "#cc3333" : "#3a3a5a")
-        .arg(red ? "#ff6666" : "#ffffff"));
-    btn_ok_->setEnabled(ok);
+        QString("background-color:#22223a; border:3px solid %1; border-radius:12px;"
+                "font-size:39px; font-weight:bold; color:%2; padding:0 18px;")
+            .arg(red ? "#cc3333" : "#3a3a5a")
+            .arg(red ? "#ff6666" : "#ffffff"));
+    btn_ok_->setEnabled(ok_btn);
 }
 
 std::optional<int> NumPadDialog::get_int(QWidget* parent, const QString& title,
                                           int initial, int min, int max)
 {
-    NumPadDialog dlg(title, initial, min, max, parent);
+    initial = std::clamp(initial, min, max);
+    NumPadDialog dlg(title, QString::number(initial), static_cast<double>(min),
+                     static_cast<double>(max), false, false, parent);
     if (dlg.exec() != QDialog::Accepted || dlg.text_.isEmpty()) return std::nullopt;
-    int v = dlg.text_.toInt();
-    return (v >= min && v <= max) ? std::optional<int>(v) : std::nullopt;
+    bool ok = false;
+    double dv = dlg.text_.toDouble(&ok);
+    if (!ok) return std::nullopt;
+    int v = static_cast<int>(std::llround(dv));
+    if (std::fabs(dv - static_cast<double>(v)) > 1e-9) return std::nullopt;
+    if (v < min || v > max) return std::nullopt;
+    return v;
 }
 
-// ═════════════════════════════════════════════════════════════
+std::optional<double> NumPadDialog::get_double(QWidget* parent, const QString& title,
+                                                 double initial, double min, double max)
+{
+    initial = std::clamp(initial, min, max);
+    NumPadDialog dlg(title, numpad_format_initial_double(initial), min, max, false, true, parent);
+    if (dlg.exec() != QDialog::Accepted || dlg.text_.isEmpty()) return std::nullopt;
+    bool ok = false;
+    double v = dlg.text_.toDouble(&ok);
+    if (!ok || v <= 0.0 || v < min || v > max) return std::nullopt;
+    return v;
+}
+
 // PortWhitelistDialog: full-edit modal for game port whitelist
 // ═════════════════════════════════════════════════════════════
 PortWhitelistDialog::PortWhitelistDialog(QWidget* parent) : QDialog(parent) {
     setWindowTitle("Edit Game Port Whitelist");
     setMinimumSize(720, 900);
-    setStyleSheet(Scalpel::GUI::DARK_STYLESHEET);
+    setStyleSheet(HPGTP::GUI::DARK_STYLESHEET);
 
     auto* lay = new QVBoxLayout(this);
     lay->setContentsMargins(20, 16, 20, 16);
     lay->setSpacing(12);
 
-    auto* desc = new QLabel("Ports listed here receive highest scheduling priority.\nFormat: single port (27015) or range (3478-3480).");
+    auto* desc = new QLabel(
+        "Ports listed here receive highest scheduling priority.\n"
+        "Use the keypad: port 1–65535, or range start–end (start ≤ end).");
     desc->setStyleSheet("color: #808090; font-size: 13px;");
     desc->setWordWrap(true);
     lay->addWidget(desc);
@@ -892,7 +1140,7 @@ void PortWhitelistDialog::on_add_port() {
     QDialog dlg(this);
     dlg.setWindowTitle("Select Protocol");
     dlg.setFixedSize(560, 300);
-    dlg.setStyleSheet(Scalpel::GUI::DARK_STYLESHEET);
+    dlg.setStyleSheet(HPGTP::GUI::DARK_STYLESHEET);
 
     auto* lay = new QVBoxLayout(&dlg);
     lay->setContentsMargins(24, 20, 24, 20);
@@ -936,9 +1184,9 @@ void PortWhitelistDialog::on_add_port() {
     };
 
     // NumPad for port number(s)
-    auto start = NumPadDialog::get_int(this, "Port Number", 0, 0, 65535);
+    auto start = NumPadDialog::get_int(this, "Port Number", k_port_min, k_port_min, k_port_max);
     if (!start) return;
-    auto end = NumPadDialog::get_int(this, "Range End\n(same value = single port)", *start, *start, 65535);
+    auto end = NumPadDialog::get_int(this, "Range End\n(same value = single port)", *start, *start, k_port_max);
     QString port_str = (!end || *end <= *start)
                        ? QString::number(*start)
                        : QString("%1-%2").arg(*start).arg(*end);
@@ -961,11 +1209,13 @@ void PortWhitelistDialog::on_cell_edit(int row, int col) {
         // Port column — NumPad
         auto* item = table_->item(row, col);
         QString cur = item ? item->text() : "0";
-        int cur_start = cur.section('-', 0, 0).toInt();
-        auto start = NumPadDialog::get_int(this, "Port Number", cur_start, 0, 65535);
+        int cur_start = std::clamp(cur.section('-', 0, 0).toInt(), k_port_min, k_port_max);
+        auto start = NumPadDialog::get_int(this, "Port Number", cur_start, k_port_min, k_port_max);
         if (!start) return;
-        int cur_end = cur.contains('-') ? cur.section('-', 1, 1).toInt() : *start;
-        auto end = NumPadDialog::get_int(this, "Range End\n(same value = single port)", cur_end, *start, 65535);
+        int cur_end = cur.contains('-')
+            ? std::clamp(cur.section('-', 1, 1).toInt(), *start, k_port_max)
+            : *start;
+        auto end = NumPadDialog::get_int(this, "Range End\n(same value = single port)", cur_end, *start, k_port_max);
         QString port_str = (!end || *end <= *start)
                            ? QString::number(*start)
                            : QString("%1-%2").arg(*start).arg(*end);
@@ -980,6 +1230,30 @@ void PortWhitelistDialog::on_remove_port() {
     int row = table_->currentRow();
     if (row >= 0) table_->removeRow(row);
 }
+
+namespace {
+bool parse_whitelist_port_cell(const QString& text, Config::PortRange& out) {
+    const QString t = text.trimmed();
+    if (t.isEmpty()) return false;
+    if (t.contains(QLatin1Char('-'))) {
+        const auto parts = t.split(QLatin1Char('-'));
+        if (parts.size() != 2) return false;
+        bool ok1 = false, ok2 = false;
+        const int a = parts[0].trimmed().toInt(&ok1);
+        const int b = parts[1].trimmed().toInt(&ok2);
+        if (!ok1 || !ok2 || a < k_port_min || b < k_port_min || a > k_port_max || b > k_port_max || a > b)
+            return false;
+        out.start = static_cast<uint16_t>(a);
+        out.end   = static_cast<uint16_t>(b);
+        return true;
+    }
+    bool ok = false;
+    const int v = t.toInt(&ok);
+    if (!ok || v < k_port_min || v > k_port_max) return false;
+    out.start = out.end = static_cast<uint16_t>(v);
+    return true;
+}
+} // namespace
 
 void QosPage::on_edit_whitelist() {
     PortWhitelistDialog dlg(this);
@@ -999,6 +1273,23 @@ void QosPage::on_edit_whitelist() {
     }
     if (dlg.exec() != QDialog::Accepted) return;
 
+    std::vector<Config::PortRange> ranges;
+    ranges.reserve(static_cast<size_t>(dlg.table()->rowCount()));
+    for (int r = 0; r < dlg.table()->rowCount(); ++r) {
+        auto* cell = dlg.table()->item(r, 0);
+        if (!cell) continue;
+        Config::PortRange pr{};
+        if (parse_whitelist_port_cell(cell->text(), pr))
+            ranges.push_back(pr);
+    }
+    if (ranges.empty()) {
+        Dashboard::post_notification(
+            QStringLiteral("Whitelist"),
+            QStringLiteral("Add at least one valid port or range (1–65535)."));
+        return;
+    }
+    Config::request_game_ports_apply(ranges);
+
     // Sync back to page display table
     whitelist_table->setRowCount(0);
     for (int r = 0; r < dlg.table()->rowCount(); ++r) {
@@ -1015,6 +1306,12 @@ void QosPage::on_edit_whitelist() {
     int header_h = whitelist_table->horizontalHeader()->height();
     whitelist_table->verticalHeader()->setDefaultSectionSize(wl_row_h);
     whitelist_table->setMinimumHeight(header_h + rows_h + 4);
+
+    Dashboard::post_notification(
+        QStringLiteral("QoS"),
+        QStringLiteral("Game port whitelist will apply on the next control tick."));
+
+    QTimer::singleShot(1200, this, [this]() { refresh_whitelist_from_config(); });
 }
 
 void QosPage::on_throttle_changed(int value_pct) {
@@ -1022,6 +1319,44 @@ void QosPage::on_throttle_changed(int value_pct) {
     lbl_throttle->setText(QString("%1%").arg(value_pct));
 }
 
+
+namespace {
+constexpr int k_ip_octet_min = 0;
+constexpr int k_ip_octet_max = 255;
+
+bool parse_ipv4_quads(const QString& s, int out[4]) {
+    const auto parts = s.trimmed().split(QLatin1Char('.'));
+    if (parts.size() != 4) return false;
+    for (int i = 0; i < 4; ++i) {
+        bool ok = false;
+        const int v = parts[i].toInt(&ok);
+        if (!ok || v < k_ip_octet_min || v > k_ip_octet_max) return false;
+        out[i] = v;
+    }
+    return true;
+}
+
+QString format_ipv4_quads(const int q[4]) {
+    return QStringLiteral("%1.%2.%3.%4").arg(q[0]).arg(q[1]).arg(q[2]).arg(q[3]);
+}
+
+std::optional<QString> numpad_edit_ipv4(QWidget* parent, const QString& title, const QString& current) {
+    int q[4] = {192, 168, 1, 1};
+    if (!current.trimmed().isEmpty()) {
+        int parsed[4];
+        if (parse_ipv4_quads(current, parsed)) {
+            for (int i = 0; i < 4; ++i) q[i] = parsed[i];
+        }
+    }
+    for (int i = 0; i < 4; ++i) {
+        const QString oct_title = QStringLiteral("%1 — octet %2/4").arg(title).arg(i + 1);
+        auto v = NumPadDialog::get_int(parent, oct_title, q[i], k_ip_octet_min, k_ip_octet_max);
+        if (!v) return std::nullopt;
+        q[i] = *v;
+    }
+    return format_ipv4_quads(q);
+}
+} // namespace
 
 // ═════════════════════════════════════════════════════════════
 // DhcpConfigDialog
@@ -1040,25 +1375,50 @@ DhcpConfigDialog::DhcpConfigDialog(QWidget* parent) : QDialog(parent) {
 
     edit_pool_start = new QLineEdit(QString::fromStdString(Config::DHCP_POOL_START));
     edit_pool_start->setValidator(ip_validator);
-    edit_pool_start->setPlaceholderText("e.g. 192.168.1.50");
+    edit_pool_start->setReadOnly(true);
+    edit_pool_start->setPlaceholderText("Tap to enter (keypad)");
+    edit_pool_start->installEventFilter(this);
     form->addRow("Pool Start:", edit_pool_start);
 
     edit_pool_end = new QLineEdit(QString::fromStdString(Config::DHCP_POOL_END));
     edit_pool_end->setValidator(ip_validator);
-    edit_pool_end->setPlaceholderText("e.g. 192.168.1.249");
+    edit_pool_end->setReadOnly(true);
+    edit_pool_end->setPlaceholderText("Tap to enter (keypad)");
+    edit_pool_end->installEventFilter(this);
     form->addRow("Pool End:", edit_pool_end);
 
     auto* lease_row = new QHBoxLayout();
     spin_days = new QSpinBox(); spin_days->setRange(0, 365); spin_days->setSuffix(" d");
+    spin_days->setButtonSymbols(QAbstractSpinBox::NoButtons);
     spin_days->setValue(static_cast<int>(Config::DHCP_LEASE_DURATION.count() / 86400));
+    spin_days->setFocusPolicy(Qt::ClickFocus);
+    if (auto* le = spin_days->findChild<QLineEdit*>()) {
+        le->setReadOnly(true);
+        le->setObjectName(QStringLiteral("dhcp_lease_days"));
+        le->installEventFilter(this);
+    }
     spin_hours = new QSpinBox(); spin_hours->setRange(0, 24); spin_hours->setSuffix(" h");
+    spin_hours->setButtonSymbols(QAbstractSpinBox::NoButtons);
     spin_hours->setValue(static_cast<int>((Config::DHCP_LEASE_DURATION.count() % 86400) / 3600));
+    spin_hours->setFocusPolicy(Qt::ClickFocus);
+    if (auto* le = spin_hours->findChild<QLineEdit*>()) {
+        le->setReadOnly(true);
+        le->setObjectName(QStringLiteral("dhcp_lease_hours"));
+        le->installEventFilter(this);
+    }
     spin_minutes = new QSpinBox(); spin_minutes->setRange(0, 60); spin_minutes->setSuffix(" min");
+    spin_minutes->setButtonSymbols(QAbstractSpinBox::NoButtons);
     spin_minutes->setValue(static_cast<int>((Config::DHCP_LEASE_DURATION.count() % 3600) / 60));
+    spin_minutes->setFocusPolicy(Qt::ClickFocus);
+    if (auto* le = spin_minutes->findChild<QLineEdit*>()) {
+        le->setReadOnly(true);
+        le->setObjectName(QStringLiteral("dhcp_lease_minutes"));
+        le->installEventFilter(this);
+    }
     lease_row->addWidget(spin_days);
     lease_row->addWidget(spin_hours);
     lease_row->addWidget(spin_minutes);
-    form->addRow("Lease Duration:", lease_row);
+    form->addRow("Lease Duration (tap each):", lease_row);
     layout->addLayout(form);
 
     auto* btn_row = new QHBoxLayout();
@@ -1069,6 +1429,40 @@ DhcpConfigDialog::DhcpConfigDialog(QWidget* parent) : QDialog(parent) {
     layout->addLayout(btn_row);
 
     connect(btn_apply, &QPushButton::clicked, this, &DhcpConfigDialog::on_apply);
+}
+
+bool DhcpConfigDialog::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonPress) {
+        if (watched == edit_pool_start) {
+            if (auto ip = numpad_edit_ipv4(this, QStringLiteral("DHCP pool start"), edit_pool_start->text()))
+                edit_pool_start->setText(*ip);
+            return true;
+        }
+        if (watched == edit_pool_end) {
+            if (auto ip = numpad_edit_ipv4(this, QStringLiteral("DHCP pool end"), edit_pool_end->text()))
+                edit_pool_end->setText(*ip);
+            return true;
+        }
+        if (auto* le = qobject_cast<QLineEdit*>(watched)) {
+            const QString on = le->objectName();
+            if (on == QStringLiteral("dhcp_lease_days")) {
+                if (auto v = NumPadDialog::get_int(this, QStringLiteral("Lease days"), spin_days->value(), 0, 365))
+                    spin_days->setValue(*v);
+                return true;
+            }
+            if (on == QStringLiteral("dhcp_lease_hours")) {
+                if (auto v = NumPadDialog::get_int(this, QStringLiteral("Lease hours"), spin_hours->value(), 0, 24))
+                    spin_hours->setValue(*v);
+                return true;
+            }
+            if (on == QStringLiteral("dhcp_lease_minutes")) {
+                if (auto v = NumPadDialog::get_int(this, QStringLiteral("Lease minutes"), spin_minutes->value(), 0, 60))
+                    spin_minutes->setValue(*v);
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 void DhcpConfigDialog::on_apply() {
@@ -1123,21 +1517,43 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
 
     edit_dns_primary = new QLineEdit(QString::fromStdString(Config::DNS_UPSTREAM_PRIMARY));
     edit_dns_primary->setValidator(dns_ip_validator1);
-    edit_dns_primary->setPlaceholderText("e.g. 8.8.8.8");
+    edit_dns_primary->setReadOnly(true);
+    edit_dns_primary->setPlaceholderText("Tap to enter (keypad)");
+    edit_dns_primary->installEventFilter(this);
     form->addRow("Primary DNS:", edit_dns_primary);
 
     edit_dns_secondary = new QLineEdit(QString::fromStdString(Config::DNS_UPSTREAM_SECONDARY));
     edit_dns_secondary->setValidator(dns_ip_validator2);
-    edit_dns_secondary->setPlaceholderText("e.g. 8.8.4.4");
-    form->addRow("Secondary DNS:", edit_dns_secondary);
+    edit_dns_secondary->setReadOnly(true);
+    edit_dns_secondary->setPlaceholderText("Optional — tap to set");
+    edit_dns_secondary->installEventFilter(this);
+    auto* sec_dns_row = new QHBoxLayout();
+    sec_dns_row->addWidget(edit_dns_secondary, 1);
+    auto* btn_clear_dns2 = new QPushButton("Clear");
+    btn_clear_dns2->setToolTip("Remove secondary upstream");
+    connect(btn_clear_dns2, &QPushButton::clicked, this, [this]() { edit_dns_secondary->clear(); });
+    sec_dns_row->addWidget(btn_clear_dns2);
+    auto* sec_dns_wrap = new QWidget();
+    sec_dns_wrap->setLayout(sec_dns_row);
+    form->addRow("Secondary DNS:", sec_dns_wrap);
 
-    chk_dns_redirect = new QCheckBox("Force all DNS queries to upstream server");
-    chk_dns_redirect->setChecked(Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
-    chk_dns_redirect->setToolTip("When enabled, all LAN DNS queries (UDP 53) are forwarded to the configured upstream server");
-    form->addRow("", chk_dns_redirect);
+    auto* redirect_row = new QHBoxLayout();
+    auto* lbl_redirect = new QLabel("Force all DNS queries to upstream server");
+    lbl_redirect->setWordWrap(true);
+    lbl_redirect->setStyleSheet("color: #e0e0e0;");
+    sw_dns_redirect = new SwitchToggle();
+    sw_dns_redirect->setChecked(Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
+    sw_dns_redirect->setToolTip("When enabled, all LAN DNS queries (UDP 53) are forwarded to the configured upstream server");
+    redirect_row->addWidget(lbl_redirect, 1);
+    redirect_row->addWidget(sw_dns_redirect, 0, Qt::AlignVCenter);
+    auto* redirect_wrap = new QWidget();
+    redirect_wrap->setLayout(redirect_row);
+    form->addRow("", redirect_wrap);
 
-    auto* static_dns_label = new QLabel("Static DNS Records (hostname → IP, never expires, overrides cache)");
+    auto* static_dns_label = new QLabel(
+        "Static DNS — double-click hostname to type, IP for keypad (IPv4).");
     static_dns_label->setStyleSheet("color: #808090; font-size: 12px;");
+    static_dns_label->setWordWrap(true);
     form->addRow(static_dns_label);
 
     static_dns_table = new QTableWidget(0, 2);
@@ -1148,6 +1564,23 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
     static_dns_table->verticalHeader()->setDefaultSectionSize(52);
     static_dns_table->setFixedHeight(220);
     static_dns_table->setStyleSheet("QTableWidget { background: #1a1a2e; }");
+    static_dns_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    connect(static_dns_table, &QTableWidget::cellDoubleClicked, this,
+        [this](int row, int col) {
+            if (col == 0) {
+                if (auto* it = static_dns_table->item(row, 0))
+                    static_dns_table->editItem(it);
+            } else if (col == 1) {
+                auto* it = static_dns_table->item(row, 1);
+                const QString cur = it ? it->text() : QString();
+                if (auto ip = numpad_edit_ipv4(this, QStringLiteral("Static record IP"), cur)) {
+                    if (!it)
+                        static_dns_table->setItem(row, 1, new QTableWidgetItem(*ip));
+                    else
+                        it->setText(*ip);
+                }
+            }
+        });
 
     for (size_t i = 0; i < Config::STATIC_DNS_COUNT; ++i) {
         int row = static_dns_table->rowCount();
@@ -1182,6 +1615,22 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
     connect(btn_apply,  &QPushButton::clicked, this, &DnsConfigDialog::on_apply);
 }
 
+bool DnsConfigDialog::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonPress) {
+        if (watched == edit_dns_primary) {
+            if (auto ip = numpad_edit_ipv4(this, QStringLiteral("Primary DNS"), edit_dns_primary->text()))
+                edit_dns_primary->setText(*ip);
+            return true;
+        }
+        if (watched == edit_dns_secondary) {
+            if (auto ip = numpad_edit_ipv4(this, QStringLiteral("Secondary DNS"), edit_dns_secondary->text()))
+                edit_dns_secondary->setText(*ip);
+            return true;
+        }
+    }
+    return false;
+}
+
 void DnsConfigDialog::on_apply() {
     if (!edit_dns_primary->hasAcceptableInput()) {
         edit_dns_primary->setStyleSheet("border: 1px solid #cc3333;");
@@ -1197,7 +1646,7 @@ void DnsConfigDialog::on_apply() {
 
     Config::DNS_UPSTREAM_PRIMARY   = edit_dns_primary->text().toStdString();
     Config::DNS_UPSTREAM_SECONDARY = edit_dns_secondary->text().toStdString();
-    Config::DNS_REDIRECT_ENABLED.store(chk_dns_redirect->isChecked(), std::memory_order_relaxed);
+    Config::DNS_REDIRECT_ENABLED.store(sw_dns_redirect->isChecked(), std::memory_order_relaxed);
 
     Config::STATIC_DNS_COUNT = 0;
     for (int i = 0; i < static_dns_table->rowCount(); ++i) {
@@ -1213,7 +1662,7 @@ void DnsConfigDialog::on_apply() {
     Telemetry::instance().dns_config_dirty.store(true, std::memory_order_release);
     std::println("[GUI] DNS config updated: upstream {}→{}, redirect={}, static={} records",
         Config::DNS_UPSTREAM_PRIMARY, Config::DNS_UPSTREAM_SECONDARY,
-        chk_dns_redirect->isChecked(), Config::STATIC_DNS_COUNT);
+        sw_dns_redirect->isChecked(), Config::STATIC_DNS_COUNT);
     accept();
 }
 
@@ -1264,9 +1713,11 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
         row_frame->setStyleSheet("QFrame { background-color: #22223a; border: 1px solid #2a2a4a; border-radius: 6px; padding: 8px; margin: 2px 0px; }");
         auto* row_lay = new QHBoxLayout(row_frame);
 
-        rows[i].chk = new QCheckBox(defs[i].name);
-        rows[i].chk->setChecked(defs[i].state->load(std::memory_order_relaxed));
-        rows[i].chk->setStyleSheet("font-size: 15px; font-weight: bold;");
+        auto* name_lbl = new QLabel(defs[i].name);
+        name_lbl->setStyleSheet("font-size: 15px; font-weight: bold; color: #e0e0e0;");
+
+        rows[i].sw = new SwitchToggle();
+        rows[i].sw->setChecked(defs[i].state->load(std::memory_order_relaxed));
 
         auto* desc_lbl = new QLabel(defs[i].description);
         desc_lbl->setStyleSheet("color: #808090; font-size: 12px;");
@@ -1275,9 +1726,10 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
         rows[i].status_label->setStyleSheet("color: #00cc66; font-weight: bold;");
 
         auto* text_col = new QVBoxLayout();
-        text_col->addWidget(rows[i].chk);
+        text_col->addWidget(name_lbl);
         text_col->addWidget(desc_lbl);
         row_lay->addLayout(text_col, 1);
+        row_lay->addWidget(rows[i].sw, 0, Qt::AlignVCenter);
 
         // Settings button (DHCP / DNS only)
         if (defs[i].settings_label) {
@@ -1305,7 +1757,7 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
         auto* state_ptr  = defs[i].state;
         auto* status_lbl = rows[i].status_label;
         auto* btn_cfg    = rows[i].btn_settings;
-        connect(rows[i].chk, &QCheckBox::toggled, [state_ptr, status_lbl, btn_cfg](bool checked) {
+        connect(rows[i].sw, &SwitchToggle::toggled, [state_ptr, status_lbl, btn_cfg](bool checked) {
             state_ptr->store(checked, std::memory_order_relaxed);
             status_lbl->setText(checked ? "● Running" : "○ Stopped");
             status_lbl->setStyleSheet(checked ? "color: #00cc66; font-weight: bold;" : "color: #cc3333; font-weight: bold;");
@@ -1329,8 +1781,14 @@ void ServicePage::refresh_status() {
     };
     for (int i = 0; i < 5; ++i) {
         bool on = states[i]->load(std::memory_order_relaxed);
+        {
+            QSignalBlocker b(rows[i].sw);
+            rows[i].sw->setChecked(on);
+        }
         rows[i].status_label->setText(on ? "● Running" : "○ Stopped");
         rows[i].status_label->setStyleSheet(on ? "color: #00cc66; font-weight: bold;" : "color: #cc3333; font-weight: bold;");
+        if (rows[i].btn_settings)
+            rows[i].btn_settings->setEnabled(on);
     }
 }
 
@@ -1443,15 +1901,21 @@ void DevicePage::refresh() {
         lbl_info->setTextFormat(Qt::RichText);
         cl->addWidget(lbl_info);
 
-        // Row 1: checkboxes
+        // Row 1: allow / rate-limit switches
         auto* chk_row = new QHBoxLayout();
-        auto* chk_allow = new QCheckBox("Allow Access");
-        chk_allow->setChecked(!blocked);
-        auto* chk_rate = new QCheckBox("Rate Limit");
-        chk_rate->setChecked(rate_limited);
-        chk_row->addWidget(chk_allow);
+        auto* lbl_allow = new QLabel("Allow Access");
+        lbl_allow->setStyleSheet("color: #e0e0e0;");
+        auto* sw_allow = new SwitchToggle();
+        sw_allow->setChecked(!blocked);
+        auto* lbl_rate = new QLabel("Rate Limit");
+        lbl_rate->setStyleSheet("color: #e0e0e0;");
+        auto* sw_rate = new SwitchToggle();
+        sw_rate->setChecked(rate_limited);
+        chk_row->addWidget(lbl_allow);
+        chk_row->addWidget(sw_allow);
         chk_row->addSpacing(24);
-        chk_row->addWidget(chk_rate);
+        chk_row->addWidget(lbl_rate);
+        chk_row->addWidget(sw_rate);
         chk_row->addStretch();
         cl->addLayout(chk_row);
 
@@ -1483,49 +1947,45 @@ void DevicePage::refresh() {
         // Push row — capture index so lambdas can safely reference rows_[idx]
         DeviceRow r;
         r.ip        = ip;
-        r.chk_allow = chk_allow;
-        r.chk_rate  = chk_rate;
+        r.sw_allow = sw_allow;
+        r.sw_rate  = sw_rate;
         r.lbl_dl    = lbl_dl;
         r.lbl_ul    = lbl_ul;
         r.val_dl    = dl;
         r.val_ul    = ul;
-        unsigned int m[6]{};
-        if (sscanf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x",
-                   &m[0],&m[1],&m[2],&m[3],&m[4],&m[5]) == 6)
-            for (int k = 0; k < 6; ++k) r.mac[k] = static_cast<uint8_t>(m[k]);
         size_t idx = rows_.size();
         rows_.push_back(r);
 
         connect(btn_dl_m, &QPushButton::clicked, this, [this, idx]() {
-            rows_[idx].val_dl = std::max(0.1, rows_[idx].val_dl - 1.0);
+            rows_[idx].val_dl = std::max(k_device_bw_min_mbps, rows_[idx].val_dl - 1.0);
             rows_[idx].lbl_dl->setText(QString("↓ %1 Mbps").arg(rows_[idx].val_dl, 0, 'f', 1));
         });
         connect(btn_dl_p, &QPushButton::clicked, this, [this, idx]() {
-            rows_[idx].val_dl = std::min(10000.0, rows_[idx].val_dl + 1.0);
+            rows_[idx].val_dl = std::min(k_device_bw_max_mbps, rows_[idx].val_dl + 1.0);
             rows_[idx].lbl_dl->setText(QString("↓ %1 Mbps").arg(rows_[idx].val_dl, 0, 'f', 1));
         });
         connect(btn_ul_m, &QPushButton::clicked, this, [this, idx]() {
-            rows_[idx].val_ul = std::max(0.1, rows_[idx].val_ul - 1.0);
+            rows_[idx].val_ul = std::max(k_device_bw_min_mbps, rows_[idx].val_ul - 1.0);
             rows_[idx].lbl_ul->setText(QString("↑ %1 Mbps").arg(rows_[idx].val_ul, 0, 'f', 1));
         });
         connect(btn_ul_p, &QPushButton::clicked, this, [this, idx]() {
-            rows_[idx].val_ul = std::min(10000.0, rows_[idx].val_ul + 1.0);
+            rows_[idx].val_ul = std::min(k_device_bw_max_mbps, rows_[idx].val_ul + 1.0);
             rows_[idx].lbl_ul->setText(QString("↑ %1 Mbps").arg(rows_[idx].val_ul, 0, 'f', 1));
         });
         // Tap label → NumPad direct entry
         connect(lbl_dl, &QPushButton::clicked, this, [this, idx]() {
-            auto v = NumPadDialog::get_int(this, "Download Limit (Mbps)",
-                                           static_cast<int>(rows_[idx].val_dl), 1, 10000);
+            auto v = NumPadDialog::get_double(this, "Download Limit (Mbps)",
+                                              rows_[idx].val_dl, k_device_bw_min_mbps, k_device_bw_max_mbps);
             if (!v) return;
             rows_[idx].val_dl = *v;
-            rows_[idx].lbl_dl->setText(QString("↓ %1 Mbps").arg(*v));
+            rows_[idx].lbl_dl->setText(QString("↓ %1 Mbps").arg(*v, 0, 'f', 1));
         });
         connect(lbl_ul, &QPushButton::clicked, this, [this, idx]() {
-            auto v = NumPadDialog::get_int(this, "Upload Limit (Mbps)",
-                                           static_cast<int>(rows_[idx].val_ul), 1, 10000);
+            auto v = NumPadDialog::get_double(this, "Upload Limit (Mbps)",
+                                              rows_[idx].val_ul, k_device_bw_min_mbps, k_device_bw_max_mbps);
             if (!v) return;
             rows_[idx].val_ul = *v;
-            rows_[idx].lbl_ul->setText(QString("↑ %1 Mbps").arg(*v));
+            rows_[idx].lbl_ul->setText(QString("↑ %1 Mbps").arg(*v, 0, 'f', 1));
         });
     }
 }
@@ -1534,9 +1994,8 @@ void DevicePage::on_apply_all() {
     for (auto& r : rows_) {
         Config::DevicePolicy p{};
         p.ip           = r.ip;
-        std::memcpy(p.mac, r.mac.data(), 6);
-        p.blocked      = !r.chk_allow->isChecked();
-        p.rate_limited = r.chk_rate->isChecked();
+        p.blocked      = !r.sw_allow->isChecked();
+        p.rate_limited = r.sw_rate->isChecked();
         p.dl           = Traffic::Mbps{r.val_dl};
         p.ul           = Traffic::Mbps{r.val_ul};
         Config::upsert_device_policy(p);
@@ -1572,31 +2031,32 @@ void Dashboard::post_notification(const QString& title, const QString& body) {
     }, Qt::QueuedConnection);
 }
 
-void Dashboard::on_selftest_done(const Scalpel::SelfTest::Report& r) {
+void Dashboard::on_selftest_done(const HPGTP::SelfTest::Report& r) {
     if (!instance_) return;
-    // Hide overlay
-    if (instance_->testing_overlay_)
-        instance_->testing_overlay_->hide();
+    QMetaObject::invokeMethod(instance_, [r]() {
+        if (!instance_) return;
+        if (instance_->testing_overlay_)
+            instance_->testing_overlay_->hide();
 
-    // Post self-test results to notification panel
-    size_t failures = r.count - r.passed;
-    if (failures == 0) {
-        instance_->notif_panel_->push_notification(
-            "Self-Test Passed",
-            QString("All %1 checks passed. Data plane ready.").arg(r.count));
-    } else {
-        instance_->notif_panel_->push_notification(
-            QString("Self-Test: %1 failure(s)").arg(failures),
-            QString("%1/%2 checks passed.").arg(r.passed).arg(r.count));
-        for (size_t i = 0; i < r.count; ++i) {
-            if (!r.cases[i].pass)
-                instance_->notif_panel_->push_notification(
-                    QString("[FAIL] %1").arg(r.cases[i].name.data()),
-                    r.cases[i].detail.data());
+        size_t failures = r.count - r.passed;
+        if (failures == 0) {
+            instance_->notif_panel_->push_notification(
+                "Self-Test Passed",
+                QString("All %1 checks passed. Data plane ready.").arg(r.count));
+        } else {
+            instance_->notif_panel_->push_notification(
+                QString("Self-Test: %1 failure(s)").arg(failures),
+                QString("%1/%2 checks passed.").arg(r.passed).arg(r.count));
+            for (size_t i = 0; i < r.count; ++i) {
+                if (!r.cases[i].pass)
+                    instance_->notif_panel_->push_notification(
+                        QString("[FAIL] %1").arg(r.cases[i].name.data()),
+                        r.cases[i].detail.data());
+            }
         }
-    }
-    instance_->notif_panel_->push_notification(
-        "Engine Ready", "Data plane Cores 2/3 attached. Forwarding engine running.");
+        instance_->notif_panel_->push_notification(
+            "Engine Ready", "Data plane Cores 2/3 attached. Forwarding engine running.");
+    }, Qt::QueuedConnection);
 }
 
 void Dashboard::setup_ui() {
@@ -1677,21 +2137,26 @@ void Dashboard::setup_ui() {
     notif_panel_->setFixedSize(centralWidget()->width(), centralWidget()->height());
     notif_panel_->raise();
 
-    // Populate startup log entries written by start.sh
-    {
+    // Async startup log read — regular file I/O is offloaded off the GUI thread.
+    // Each line is queued back via invokeMethod; if Dashboard is destroyed before
+    // delivery, Qt silently drops the queued event (QObject receiver invalidation).
+    startup_log_reader_ = std::jthread([](std::stop_token st) {
         QFile log("/tmp/hpgtp_startup.log");
-        if (log.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QTextStream ts(&log);
-            while (!ts.atEnd()) {
-                QString line = ts.readLine().trimmed();
-                if (line.isEmpty()) continue;
-                int sep = line.indexOf('|');
-                QString title = (sep >= 0) ? line.left(sep)   : line;
-                QString body  = (sep >= 0) ? line.mid(sep + 1): QString();
-                notif_panel_->push_notification(title, body);
-            }
+        if (!log.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+        QTextStream ts(&log);
+        while (!ts.atEnd()) {
+            if (st.stop_requested()) return;
+            QString line = ts.readLine().trimmed();
+            if (line.isEmpty()) continue;
+            int sep = line.indexOf('|');
+            QString title = (sep >= 0) ? line.left(sep)   : line;
+            QString body  = (sep >= 0) ? line.mid(sep + 1): QString();
+            QMetaObject::invokeMethod(instance_, [title, body]() {
+                if (instance_ && instance_->notif_panel_)
+                    instance_->notif_panel_->push_notification(title, body);
+            }, Qt::QueuedConnection);
         }
-    }
+    });
 
     // Self-test results posted asynchronously via on_selftest_done() after worker completes.
 
@@ -1811,6 +2276,7 @@ void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
 
 void Dashboard::on_tab_clicked(int page_index) {
     page_stack->setCurrentIndex(page_index);
+    if (page_index == 2) page_qos->refresh_whitelist_from_config();
     if (page_index == 4) page_devices->refresh();
 }
 
@@ -1883,16 +2349,18 @@ bool Dashboard::eventFilter(QObject* obj, QEvent* event) {
         if (etype == QEvent::MouseButtonPress) {
             auto* me = static_cast<QMouseEvent*>(event);
             bool panel_active = notif_panel_->is_expanded() || !notif_panel_->is_settled();
-            bool in_pull_zone = me->globalPos().y() < height() * 15 / 100;
+            const QPoint gp = me->globalPosition().toPoint();
+            bool in_pull_zone = gp.y() < height() * 15 / 100;
             if (panel_active || in_pull_zone) {
-                notif_pull_y0_ = me->globalPos().y();
-                notif_pull_x0_ = me->globalPos().x();
+                notif_pull_y0_ = gp.y();
+                notif_pull_x0_ = gp.x();
             }
 
         } else if (etype == QEvent::MouseMove && notif_pull_y0_ >= 0) {
             auto* me = static_cast<QMouseEvent*>(event);
-            int dy = me->globalPos().y() - notif_pull_y0_;
-            int dx = std::abs(me->globalPos().x() - notif_pull_x0_);
+            const QPoint gp = me->globalPosition().toPoint();
+            int dy = gp.y() - notif_pull_y0_;
+            int dx = std::abs(gp.x() - notif_pull_x0_);
             // Horizontal intent wins — abandon notification tracking
             if (dx > 30) {
                 notif_pull_y0_ = notif_pull_x0_ = -1;
@@ -1906,14 +2374,14 @@ bool Dashboard::eventFilter(QObject* obj, QEvent* event) {
 
         } else if (etype == QEvent::MouseButtonRelease && notif_pull_y0_ >= 0) {
             auto* me = static_cast<QMouseEvent*>(event);
-            int dy = me->globalPos().y() - notif_pull_y0_;
+            int dy = me->globalPosition().toPoint().y() - notif_pull_y0_;
             // Interrupt / collapse: upward swipe when panel is opening or open.
             // Skip if touch is on the panel itself (NotificationPanel::mouseReleaseEvent
             // already handles that path — avoid double kick).
             bool panel_active = notif_panel_->is_expanded() || !notif_panel_->is_settled();
             auto* w = qobject_cast<QWidget*>(obj);
             bool on_panel = w && (w == notif_panel_ || notif_panel_->isAncestorOf(w));
-            if (panel_active && !on_panel && dy < -24) {
+            if (panel_active && !on_panel && dy < -192) {
                 notif_panel_->kick(-12.0);
                 notif_panel_->set_expanded(false);
             }
@@ -2020,4 +2488,4 @@ void Dashboard::timerEvent(QTimerEvent* event) {
     }
 }
 
-} // namespace Scalpel::GUI
+} // namespace HPGTP::GUI

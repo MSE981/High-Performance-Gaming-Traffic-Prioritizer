@@ -5,7 +5,7 @@
 #include "FirewallEngine.hpp"
 #include "Headers.hpp"
 
-namespace Net = Scalpel::Net;
+namespace Net = HPGTP::Net;
 
 #include <print>
 #include <cassert>
@@ -38,7 +38,7 @@ static std::array<uint8_t, 60> make_tcp_frame(
 int main() {
     std::println("=== Firewall Engine Demo ===");
 
-    Scalpel::Logic::FirewallEngine fw;
+    HPGTP::Logic::FirewallEngine fw;
 
     const uint32_t lan = htonl(0xC0A80101);  // 192.168.1.1
     const uint32_t srv = htonl(0x08080808);  // 8.8.8.8
@@ -74,9 +74,9 @@ int main() {
     {
         const Net::IPv4Net bad_ip{htonl(0xC0A801FE)};  // 192.168.1.254
         // Inject one blocked entry directly via Config
-        Scalpel::Config::DEVICE_POLICY_TABLE[0].ip      = bad_ip;
-        Scalpel::Config::DEVICE_POLICY_TABLE[0].blocked = true;
-        Scalpel::Config::DEVICE_POLICY_COUNT             = 1;
+        HPGTP::Config::DEVICE_POLICY_TABLE[0].ip      = bad_ip;
+        HPGTP::Config::DEVICE_POLICY_TABLE[0].blocked = true;
+        HPGTP::Config::DEVICE_POLICY_COUNT             = 1;
         fw.sync_blocked_ips();
 
         assert(fw.is_blocked_ip(bad_ip) && "Bad IP must be in block list");

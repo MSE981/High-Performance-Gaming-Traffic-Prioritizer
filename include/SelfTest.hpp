@@ -15,7 +15,7 @@
 
 #include "Headers.hpp"
 
-namespace Scalpel::SelfTest {
+namespace HPGTP::SelfTest {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test case row: name, pass flag, and short human-readable detail.
@@ -106,4 +106,4 @@ private:
 // Last self-test report — written once before GUI starts, read by Dashboard on init
 inline Report LAST_REPORT{};
 
-} // namespace Scalpel::SelfTest
+} // namespace HPGTP::SelfTest

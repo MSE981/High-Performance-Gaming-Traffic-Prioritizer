@@ -1,6 +1,6 @@
 #pragma once
-// C++ standard headers only — no POSIX C headers.
-// All POSIX C APIs (socket, timerfd, poll, dirent, …) are hidden in App.cpp.
+// C++ standard headers only -- no POSIX C headers.
+// All POSIX C APIs (socket, timerfd, poll, dirent, ...) are hidden in App.cpp.
 #include <thread>
 #include <atomic>
 #include <memory>
@@ -17,17 +17,18 @@
 #include "UpnpEngine.hpp"
 #include "SystemOptimizer.hpp"
 #include "Telemetry.hpp"
-#include "ProbeManager.hpp"
 #include "Scheduler.hpp"
 #include "FirewallEngine.hpp"
 
-namespace Scalpel {
+// HPGTP: High-Performance Gaming Traffic Prioritizer. Root namespace for all
+// product code (nested: Logic, Net, GUI, Traffic, Engine, ...).
+namespace HPGTP {
 
-// ─── Internal data-plane types ───────────────────────────────────────────────
+// Internal data-plane types
 // These are referenced by App's private members and must be layout-complete
 // here.  Their *implementations* live in App.cpp together with the POSIX APIs.
 
-// Zero-heap static hash table (FNV-1a) for IP → Shaper mapping.
+// Zero-heap static hash table (FNV-1a) for IP-to-Shaper mapping.
 // Template: must remain in the header.
 template<typename T, size_t Capacity = 256>
 class StaticIpMap {
@@ -111,7 +112,7 @@ struct PacketWorkerConfig {
     Net::IPv4Net gateway_ip{};
 };
 
-// ─── Application class ───────────────────────────────────────────────────────
+// Application class
 // Public interface: init / start / stop / wait_for_shutdown.
 // All POSIX I/O, packet pipeline, and watchdog implementations are in App.cpp.
 class App {
@@ -136,8 +137,6 @@ class App {
     std::thread       worker_downstream;
     std::thread       worker_upstream;
     std::thread       watchdog;
-    std::thread       stress_thread_{};
-    std::atomic<bool> stress_cancel_{false};
     std::atomic<bool> running_workers{false};
     std::atomic<bool> running_watchdog{false};
     std::promise<void> shutdown_promise;
@@ -149,10 +148,13 @@ class App {
         int stop_efd{-1};
     };
     std::array<WorkerPollSync, 2> worker_poll_{};
+    int watchdog_stop_efd_{-1};
 
     void open_worker_poll_fds_for_start();
     void close_worker_poll_fds();
     void wake_proc_threads_for_shutdown();
+    void wake_watchdog_for_shutdown();
+    void close_watchdog_stop_efd();
 
 public:
     App();
@@ -170,4 +172,4 @@ private:
     void watchdog_loop();
 };
 
-} // namespace Scalpel
+} // namespace HPGTP

@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 
-namespace Scalpel::Utils {
+namespace HPGTP::Utils {
     class Network {
     public:
         static std::string get_local_ip(const std::string& iface);

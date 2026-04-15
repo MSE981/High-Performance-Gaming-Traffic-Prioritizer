@@ -1,4 +1,5 @@
 #include "SelfTest.hpp"
+#include <algorithm>
 #include <memory>
 #include <chrono>
 #include <cstdio>
@@ -8,6 +9,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <string_view>
 
 #include "Config.hpp"
 #include "NatEngine.hpp"
@@ -16,7 +18,7 @@
 #include "FirewallEngine.hpp"
 #include "Processor.hpp"
 
-namespace Scalpel::SelfTest {
+namespace HPGTP::SelfTest {
 
 // Wire-format DHCP header — mirrors the internal layout used by DhcpEngine.
 // Defined locally here so DhcpEngine's private type stays confined to its TU.
@@ -220,8 +222,10 @@ void SelfTest::test_dns(Report& r) {
     Net::IPv4Net cli = Config::parse_ip_str("192.168.1.100");
     Net::IPv4Net srv = Config::parse_ip_str("8.8.8.8");
     auto dns_buf = make_dns_query(cli, srv, "test.local", pkt_len);
+    // Span must include tail room for DnsEngine::do_bounce (+16 bytes).
+    const size_t static_cap = std::min(pkt_len + 64, dns_buf.size());
     auto pkt_static = Net::ParsedPacket::parse(
-        std::span<uint8_t>{dns_buf.data(), pkt_len});
+        std::span<uint8_t>{dns_buf.data(), static_cap});
     // bounce_fd=-1: send() will fail (EBADF), increments dropped counter by 1 — acceptable
     bool static_pass = dns_static->process_query(pkt_static, -1);
     r.add("DNS_Static", static_pass,
@@ -296,7 +300,6 @@ void SelfTest::test_firewall(Report& r) {
     Config::DevicePolicy p{};
     p.ip      = block_ip;
     p.blocked = true;
-    // mac stays zero-initialized: firewall block logic only checks ip
     Config::upsert_device_policy(p);
     fw_block->sync_blocked_ips();
     bool block_pass = fw_block->is_blocked_ip(block_ip);
@@ -412,7 +415,7 @@ void SelfTest::test_system(Report& r) {
             struct dirent* de;
             while ((de = readdir(d)) != nullptr) {
                 if (de->d_name[0] == '.') continue;
-                if (strncmp(de->d_name, "lo", 3) == 0) continue;
+                if (std::string_view{de->d_name} == "lo") continue;
                 ++iface_count;
             }
             closedir(d);
@@ -423,4 +426,4 @@ void SelfTest::test_system(Report& r) {
     }
 }
 
-} // namespace Scalpel::SelfTest
+} // namespace HPGTP::SelfTest

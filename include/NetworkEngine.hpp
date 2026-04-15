@@ -7,7 +7,7 @@
 #include <string>
 #include "Headers.hpp"
 
-namespace Scalpel::Engine {
+namespace HPGTP::Engine {
     class RawSocketManager {
         RawSocketManager(const RawSocketManager&) = delete;
         RawSocketManager& operator=(const RawSocketManager&) = delete;

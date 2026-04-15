@@ -12,7 +12,7 @@
 #include <poll.h>
 #include <linux/if_packet.h>
 
-namespace Scalpel::Engine {
+namespace HPGTP::Engine {
 
 RawSocketManager::RawSocketManager(std::string_view iface_name) {
     iface_name.copy(iface.data(), IFACE_NAME_MAX - 1);
@@ -27,12 +27,16 @@ std::expected<void, std::string> RawSocketManager::init() {
     fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
     if (fd < 0) return std::unexpected(std::string("Socket creation failed: ") + strerror(errno));
 
+    std::string_view iface_sv{iface.data()};
+
     struct ifreq ifr{};
-    std::strncpy(ifr.ifr_name, iface.data(), IFNAMSIZ - 1);
+    auto n1 = iface_sv.copy(ifr.ifr_name, IFNAMSIZ - 1);
+    ifr.ifr_name[n1] = '\0';
     if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) return std::unexpected("Interface lookup failed");
 
     struct ifreq ifr_p{};
-    std::strncpy(ifr_p.ifr_name, iface.data(), IFNAMSIZ - 1);
+    auto n2 = iface_sv.copy(ifr_p.ifr_name, IFNAMSIZ - 1);
+    ifr_p.ifr_name[n2] = '\0';
     if (ioctl(fd, SIOCGIFFLAGS, &ifr_p) < 0)
         return std::unexpected("Failed to get interface flags");
 
@@ -66,10 +70,18 @@ std::expected<void, std::string> RawSocketManager::init() {
 }
 
 void RawSocketManager::do_poll(int timeout_ms) {
+    if (fd < 0) return;
     struct pollfd pfd{};
     pfd.fd     = fd;
     pfd.events = POLLIN;
-    poll(&pfd, 1, timeout_ms);
+    int r = ::poll(&pfd, 1, timeout_ms);
+    if (r < 0 && errno != EINTR) {
+        std::println(stderr,
+            "[Engine] poll failed on {}: {} — closing RX socket",
+            iface.data(), std::strerror(errno));
+        ::close(fd);
+        fd = -1;
+    }
 }
 
 bool RawSocketManager::peek_frame(std::span<uint8_t>& out) {
@@ -98,4 +110,4 @@ void RawSocketManager::advance_frame() {
     rx_idx = (rx_idx + 1) % FRAME_NR;
 }
 
-} // namespace Scalpel::Engine
+} // namespace HPGTP::Engine

@@ -17,9 +17,9 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
 # ── Raspberry Pi 5 (Cortex-A76) compile options ───────────────────────────────
-set(SCALPEL_COMPILE_OPTIONS "")
+set(PROJECT_ROUTER_COMPILE_OPTIONS "")
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    list(APPEND SCALPEL_COMPILE_OPTIONS
+    list(APPEND PROJECT_ROUTER_COMPILE_OPTIONS
         -O3
         -mcpu=cortex-a76
         -mtune=cortex-a76
@@ -29,7 +29,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang
         -fexceptions
     )
 elseif(MSVC)
-    list(APPEND SCALPEL_COMPILE_OPTIONS /std:c++latest)
+    list(APPEND PROJECT_ROUTER_COMPILE_OPTIONS /std:c++latest)
 endif()
 
 # ── Infrastructure utilities ──────────────────────────────────────────────────
@@ -51,7 +51,6 @@ target_link_libraries(engine_scheduler PRIVATE dataplane)
 
 # ── I/O engines ───────────────────────────────────────────────────────────────
 add_library(engine_net       src/NetworkEngine.cpp)
-add_library(engine_probe     src/ProbeManager.cpp)
 add_library(engine_upnp      src/UpnpEngine.cpp)
 
 target_link_libraries(engine_upnp PRIVATE dataplane)
@@ -60,14 +59,14 @@ target_link_libraries(engine_upnp PRIVATE dataplane)
 add_library(selftest         src/SelfTest.cpp)
 
 # Apply compile options and _GNU_SOURCE to every library
-set(ALL_SCALPEL_LIBS
+set(PROJECT_ROUTER_STATIC_LIBS
     utils_network utils_system config dataplane
     engine_nat engine_dns engine_dhcp engine_firewall engine_scheduler
-    engine_net engine_probe engine_upnp
+    engine_net engine_upnp
     selftest
 )
-foreach(lib IN LISTS ALL_SCALPEL_LIBS)
-    target_compile_options(${lib} PRIVATE ${SCALPEL_COMPILE_OPTIONS})
+foreach(lib IN LISTS PROJECT_ROUTER_STATIC_LIBS)
+    target_compile_options(${lib} PRIVATE ${PROJECT_ROUTER_COMPILE_OPTIONS})
     target_compile_definitions(${lib} PRIVATE _GNU_SOURCE)
 endforeach()
 
@@ -81,13 +80,13 @@ add_executable(GamingTrafficPrioritizer
 )
 
 target_link_libraries(GamingTrafficPrioritizer PRIVATE
-    ${ALL_SCALPEL_LIBS}
+    ${PROJECT_ROUTER_STATIC_LIBS}
     Qt6::Widgets
     Qt6::OpenGL
     Threads::Threads
 )
 
-target_compile_options(GamingTrafficPrioritizer PRIVATE ${SCALPEL_COMPILE_OPTIONS})
+target_compile_options(GamingTrafficPrioritizer PRIVATE ${PROJECT_ROUTER_COMPILE_OPTIONS})
 target_compile_definitions(GamingTrafficPrioritizer PRIVATE _GNU_SOURCE)
 
 # ── Demo programs (Phase 5) ───────────────────────────────────────────────────
@@ -97,16 +96,15 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/demo")
         demo/dns_demo.cpp
         demo/dhcp_demo.cpp
         demo/scheduler_demo.cpp
-        demo/firewall_demo.cpp
-        demo/probe_demo.cpp)
+        demo/firewall_demo.cpp)
         if(EXISTS "${CMAKE_SOURCE_DIR}/${demo_src}")
             get_filename_component(demo_name ${demo_src} NAME_WE)
             add_executable(${demo_name} ${demo_src})
             target_link_libraries(${demo_name} PRIVATE
-                ${ALL_SCALPEL_LIBS}
+                ${PROJECT_ROUTER_STATIC_LIBS}
                 Threads::Threads
             )
-            target_compile_options(${demo_name} PRIVATE ${SCALPEL_COMPILE_OPTIONS})
+            target_compile_options(${demo_name} PRIVATE ${PROJECT_ROUTER_COMPILE_OPTIONS})
             target_compile_definitions(${demo_name} PRIVATE _GNU_SOURCE)
         endif()
     endforeach()

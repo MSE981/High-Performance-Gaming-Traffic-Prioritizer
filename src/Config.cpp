@@ -2,16 +2,62 @@
 #include <print>
 #include <cstring>
 #include <cstdlib>
+#include <charconv>
+#include <string_view>
+#include <algorithm>
 #include <fcntl.h>
 #include <unistd.h>
 
-namespace Scalpel::Config {
+namespace HPGTP::Config {
+
+// ── game port load accumulator (single-threaded load_config) ─────────────────
+static std::array<PortRange, MAX_GAME_PORT_RANGES> g_load_game_ports{};
+static size_t                                      g_load_game_ports_n = 0;
+
+static void commit_loaded_game_ports_to_runtime() {
+    if (g_load_game_ports_n == 0) return;
+    size_t n = g_load_game_ports_n;
+    for (int b = 0; b < 2; ++b) {
+        std::memcpy(GAME_PORT_TABLE_DOUBLE[static_cast<size_t>(b)].data(),
+            g_load_game_ports.data(), n * sizeof(PortRange));
+        game_port_table_counts[static_cast<size_t>(b)] = n;
+    }
+    std::memcpy(game_port_staging.data(), g_load_game_ports.data(), n * sizeof(PortRange));
+    game_port_staging_count = n;
+    game_port_active_idx.store(0, std::memory_order_relaxed);
+}
+
+void request_game_ports_apply(std::span<const PortRange> ranges) {
+    size_t n = std::min(ranges.size(), MAX_GAME_PORT_RANGES);
+    std::lock_guard<std::mutex> lock(game_ports_staging_mutex);
+    for (size_t i = 0; i < n; ++i)
+        game_port_staging[i] = ranges[i];
+    game_port_staging_count = n;
+    GAME_PORTS_DIRTY.store(true, std::memory_order_release);
+}
+
+void apply_pended_game_ports() {
+    std::array<PortRange, MAX_GAME_PORT_RANGES> local{};
+    size_t n = 0;
+    {
+        std::lock_guard<std::mutex> lock(game_ports_staging_mutex);
+        n = game_port_staging_count;
+        std::memcpy(local.data(), game_port_staging.data(), n * sizeof(PortRange));
+    }
+    size_t cur  = game_port_active_idx.load(std::memory_order_relaxed);
+    size_t next = 1 - cur;
+    std::memcpy(GAME_PORT_TABLE_DOUBLE[next].data(), local.data(), n * sizeof(PortRange));
+    game_port_table_counts[next] = n;
+    game_port_active_idx.store(next, std::memory_order_release);
+    std::println("[QoS] Game port whitelist applied: {} range(s)", n);
+}
 
 // ── private helpers ──────────────────────────────────────────────────────────
 
-static unsigned long atoul(const char* s) {
-    unsigned long v = 0;
-    while (*s >= '0' && *s <= '9') v = v * 10 + static_cast<unsigned long>(*s++ - '0');
+static uint32_t parse_u32(const char* s) {
+    uint32_t v = 0;
+    std::string_view sv{s};
+    std::from_chars(sv.data(), sv.data() + sv.size(), v);
     return v;
 }
 
@@ -31,6 +77,8 @@ static bool parse_kv(const char* line, size_t len,
 // ── public API ────────────────────────────────────────────────────────────────
 
 void load_config(const std::string& path) {
+    g_load_game_ports_n = 0;
+
     int fd = ::open(path.c_str(), O_RDONLY);
     if (fd < 0) {
         std::println(stderr, "[Config] Warning: cannot open config file {}, using defaults.", path);
@@ -68,9 +116,9 @@ void load_config(const std::string& path) {
                     if (!bridge_iface_loaded) { clear_bridged(); bridge_iface_loaded = true; }
                     add_bridged(val);
                 }
-                else if (!strcmp(key, "LARGE_PACKET_THRESHOLD")) LARGE_PACKET_THRESHOLD_BYTES = static_cast<uint32_t>(atoul(val));
-                else if (!strcmp(key, "PUNISH_TRIGGER_COUNT"))   PUNISH_TRIGGER_COUNT   = static_cast<uint32_t>(atoul(val));
-                else if (!strcmp(key, "CLEANUP_INTERVAL"))       CLEANUP_INTERVAL_PKTS  = static_cast<uint32_t>(atoul(val));
+                else if (!strcmp(key, "LARGE_PACKET_THRESHOLD")) LARGE_PACKET_THRESHOLD_BYTES = parse_u32(val);
+                else if (!strcmp(key, "PUNISH_TRIGGER_COUNT"))   PUNISH_TRIGGER_COUNT   = parse_u32(val);
+                else if (!strcmp(key, "CLEANUP_INTERVAL"))       CLEANUP_INTERVAL_PKTS  = parse_u32(val);
                 else if (!strcmp(key, "enable_gui"))        global_state.enable_gui.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                 else if (!strcmp(key, "enable_nat"))        global_state.enable_nat.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                 else if (!strcmp(key, "enable_dhcp"))       global_state.enable_dhcp.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
@@ -80,7 +128,7 @@ void load_config(const std::string& path) {
                 else if (!strcmp(key, "enable_pppoe"))      global_state.enable_pppoe.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                 else if (!strcmp(key, "DHCP_POOL_START"))   DHCP_POOL_START = val;
                 else if (!strcmp(key, "DHCP_POOL_END"))     DHCP_POOL_END   = val;
-                else if (!strcmp(key, "DHCP_LEASE_SECONDS")) DHCP_LEASE_DURATION = std::chrono::seconds{static_cast<uint32_t>(atoul(val))};
+                else if (!strcmp(key, "DHCP_LEASE_SECONDS")) DHCP_LEASE_DURATION = std::chrono::seconds{parse_u32(val)};
                 else if (!strcmp(key, "DNS_UPSTREAM_PRIMARY"))   DNS_UPSTREAM_PRIMARY   = val;
                 else if (!strcmp(key, "DNS_UPSTREAM_SECONDARY")) DNS_UPSTREAM_SECONDARY = val;
                 else if (!strcmp(key, "DNS_REDIRECT_ENABLED")) DNS_REDIRECT_ENABLED.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
@@ -112,6 +160,23 @@ void load_config(const std::string& path) {
                         add_ip_limit(ip, Traffic::Mbps{atof(colon + 1)});
                     }
                 }
+                else if (!strcmp(key, "GAME_PORT")) {
+                    if (g_load_game_ports_n < MAX_GAME_PORT_RANGES) {
+                        char* dash = strchr(val, '-');
+                        uint32_t a = 0, b = 0;
+                        if (dash) {
+                            *dash = '\0';
+                            a = parse_u32(val);
+                            b = parse_u32(dash + 1);
+                            *dash = '-';
+                        } else {
+                            a = b = parse_u32(val);
+                        }
+                        if (a <= 65535u && b <= 65535u && a <= b)
+                            g_load_game_ports[g_load_game_ports_n++] = {
+                                static_cast<uint16_t>(a), static_cast<uint16_t>(b)};
+                    }
+                }
             } catch (...) {
                 std::println(stderr, "[Config] Error parsing line: {}={}", key, val);
             }
@@ -134,6 +199,7 @@ void load_config(const std::string& path) {
         if (BRIDGED_IFACES_COUNT > 0) IFACE_LAN = BRIDGED_INTERFACES[0].name.data();
     }
     IP_LIMIT_ACTIVE.store(IP_LIMIT_COUNT > 0, std::memory_order_release);
+    commit_loaded_game_ports_to_runtime();
     std::println("[Config] Config loaded: {}", path);
 }
 
@@ -182,6 +248,18 @@ void save_config(const std::string& path) {
             ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF,
             IP_LIMIT_TABLE[i].rate.value);
     }
+    {
+        size_t ai = game_port_active_idx.load(std::memory_order_acquire);
+        size_t n  = game_port_table_counts[ai];
+        for (size_t i = 0; i < n; ++i) {
+            const auto& r = GAME_PORT_TABLE_DOUBLE[ai][i];
+            if (r.start == r.end)
+                dprintf(fd, "GAME_PORT=%u\n", static_cast<unsigned>(r.start));
+            else
+                dprintf(fd, "GAME_PORT=%u-%u\n", static_cast<unsigned>(r.start),
+                    static_cast<unsigned>(r.end));
+        }
+    }
     dprintf(fd, "IFACE_GATEWAY=%s\n", IFACE_GATEWAY.c_str());
     for (size_t i = 0; i < IFACE_ROLES_COUNT; ++i) {
         const char* rs;
@@ -197,4 +275,4 @@ void save_config(const std::string& path) {
     std::println("[Config] Config saved: {}", path);
 }
 
-} // namespace Scalpel::Config
+} // namespace HPGTP::Config

@@ -6,7 +6,7 @@
 #include "Headers.hpp"
 #include "Processor.hpp"
 
-namespace Scalpel::Logic {
+namespace HPGTP::Logic {
     // True zero-copy user-space NAT engine
     class NatEngine {
         struct alignas(64) NatSession {

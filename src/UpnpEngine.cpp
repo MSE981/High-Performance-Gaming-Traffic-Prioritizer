@@ -14,40 +14,38 @@
 #include <string_view>
 #include <charconv>
 
-namespace Scalpel::Logic {
+namespace HPGTP::Logic {
 
 UpnpEngine::UpnpEngine(std::shared_ptr<NatEngine> nat, const std::string& ip)
     : nat_engine(nat), router_ip_str(ip) {
-    soap_job_notify_efd = -1;
-    for (int attempt = 0; attempt < 3; ++attempt) {
-        soap_job_notify_efd = ::eventfd(0, EFD_CLOEXEC);
-        if (soap_job_notify_efd >= 0) break;
-    }
-    if (soap_job_notify_efd < 0)
+    soap_job_notify_efd = ::eventfd(0, EFD_CLOEXEC);
+    shutdown_efd        = ::eventfd(0, EFD_CLOEXEC);
+    if (soap_job_notify_efd < 0 || shutdown_efd < 0) {
         std::println(stderr,
-            "[UPnP] soap job eventfd failed after retries ({}); SOAP runs on accept thread only.",
+            "[UPnP] eventfd init failed ({}); UPnP disabled.",
             std::strerror(errno));
+        if (soap_job_notify_efd >= 0) { ::close(soap_job_notify_efd); soap_job_notify_efd = -1; }
+        if (shutdown_efd        >= 0) { ::close(shutdown_efd);        shutdown_efd        = -1; }
+        return;
+    }
     running.store(true, std::memory_order_relaxed);
-    ssdp_thread = std::thread([this]() { run_ssdp_server(); });
-    if (soap_job_notify_efd >= 0)
-        soap_worker_thread = std::thread([this]() { run_soap_worker(); });
-    soap_thread = std::thread([this]() { run_soap_server(); });
+    ssdp_thread        = std::thread([this]() { run_ssdp_server(); });
+    soap_worker_thread = std::thread([this]() { run_soap_worker(); });
+    soap_thread        = std::thread([this]() { run_soap_server(); });
     std::println("[UPnP Engine] Startup complete. Listening for LAN SSDP broadcasts.");
 }
 
 UpnpEngine::~UpnpEngine() {
     running.store(false, std::memory_order_relaxed);
+    if (shutdown_efd >= 0)
+        (void)::eventfd_write(shutdown_efd, 1);
     if (soap_job_notify_efd >= 0)
         (void)::eventfd_write(soap_job_notify_efd, 1);
-    if (soap_listen_fd >= 0)
-        (void)::shutdown(soap_listen_fd, SHUT_RDWR);
-    if (soap_thread.joinable()) soap_thread.join();
+    if (soap_thread.joinable())        soap_thread.join();
     if (soap_worker_thread.joinable()) soap_worker_thread.join();
-    if (soap_job_notify_efd >= 0) {
-        ::close(soap_job_notify_efd);
-        soap_job_notify_efd = -1;
-    }
-    if (ssdp_thread.joinable()) ssdp_thread.join();
+    if (ssdp_thread.joinable())        ssdp_thread.join();
+    if (soap_job_notify_efd >= 0) { ::close(soap_job_notify_efd); soap_job_notify_efd = -1; }
+    if (shutdown_efd        >= 0) { ::close(shutdown_efd);        shutdown_efd        = -1; }
 }
 
 void UpnpEngine::run_ssdp_server() {
@@ -69,11 +67,17 @@ void UpnpEngine::run_ssdp_server() {
     mreq.imr_interface.s_addr = inet_addr(router_ip_str.c_str());
     setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
 
-    struct timeval tv{ .tv_sec = 1, .tv_usec = 0 };
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
     char buf[1024];
     while (running.load(std::memory_order_relaxed)) {
+        struct pollfd pfds[2]{
+            { fd,            POLLIN, 0 },
+            { shutdown_efd,  POLLIN, 0 },
+        };
+        int pr = ::poll(pfds, 2, -1);
+        if (pr < 0) { if (errno == EINTR) continue; break; }
+        if ((pfds[1].revents & POLLIN) != 0) break;
+        if ((pfds[0].revents & POLLIN) == 0) continue;
+
         sockaddr_in client{};
         socklen_t clen = sizeof(client);
         int n = recvfrom(fd, buf, sizeof(buf) - 1, 0,
@@ -235,10 +239,16 @@ void UpnpEngine::run_soap_server() {
     bind(soap_listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
     listen(soap_listen_fd, 10);
 
-    struct timeval tv{ .tv_sec = 1, .tv_usec = 0 };
-    setsockopt(soap_listen_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
     while (running.load(std::memory_order_relaxed)) {
+        struct pollfd pfds[2]{
+            { soap_listen_fd, POLLIN, 0 },
+            { shutdown_efd,   POLLIN, 0 },
+        };
+        int pr = ::poll(pfds, 2, -1);
+        if (pr < 0) { if (errno == EINTR) continue; break; }
+        if ((pfds[1].revents & POLLIN) != 0) break;
+        if ((pfds[0].revents & POLLIN) == 0) continue;
+
         sockaddr_in client{};
         socklen_t clen = sizeof(client);
         int cfd = accept(soap_listen_fd, reinterpret_cast<sockaddr*>(&client), &clen);
@@ -254,11 +264,6 @@ void UpnpEngine::run_soap_server() {
         int n = recv(cfd, buf, sizeof(buf) - 1, 0);
         if (n <= 0) {
             ::close(cfd);
-            continue;
-        }
-
-        if (soap_job_notify_efd < 0) {
-            dispatch_soap_http(cfd, std::string_view(buf, static_cast<size_t>(n)));
             continue;
         }
 
@@ -281,4 +286,4 @@ void UpnpEngine::run_soap_server() {
     }
 }
 
-} // namespace Scalpel::Logic
+} // namespace HPGTP::Logic

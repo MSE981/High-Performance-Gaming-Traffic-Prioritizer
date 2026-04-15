@@ -17,8 +17,9 @@
 #include <print>
 #include <iostream>
 #include <cerrno>
+#include <string_view>
 
-namespace Scalpel {
+namespace HPGTP {
 
 namespace {
 
@@ -287,8 +288,6 @@ App::App() {
 }
 
 App::~App() {
-    stress_cancel_.store(true, std::memory_order_relaxed);
-    if (stress_thread_.joinable()) stress_thread_.join();
     // Stop data-plane workers (Cores 2/3) before watchdog (Core 1) so
     // the watchdog does not read stale shaper state after workers exit.
     running_workers.store(false, std::memory_order_relaxed);
@@ -297,7 +296,9 @@ App::~App() {
     if (worker_upstream.joinable())   worker_upstream.join();
     close_worker_poll_fds();
     running_watchdog.store(false, std::memory_order_relaxed);
+    wake_watchdog_for_shutdown();
     if (watchdog.joinable()) watchdog.join();
+    close_watchdog_stop_efd();
 }
 
 void App::open_worker_poll_fds_for_start() {
@@ -334,10 +335,20 @@ void App::wake_proc_threads_for_shutdown() {
     }
 }
 
+void App::wake_watchdog_for_shutdown() {
+    if (watchdog_stop_efd_ >= 0)
+        (void)::eventfd_write(watchdog_stop_efd_, 1);
+}
+
+void App::close_watchdog_stop_efd() {
+    if (watchdog_stop_efd_ >= 0) {
+        ::close(watchdog_stop_efd_);
+        watchdog_stop_efd_ = -1;
+    }
+}
+
 void App::stop() {
     if (shutdown_sequence_started_.exchange(true, std::memory_order_acq_rel)) return;
-    stress_cancel_.store(true, std::memory_order_relaxed);
-    if (stress_thread_.joinable()) stress_thread_.join();
     running_workers.store(false, std::memory_order_relaxed);
     wake_proc_threads_for_shutdown();
     if (worker_downstream.joinable()) worker_downstream.join();
@@ -357,27 +368,24 @@ std::expected<void, std::string> App::init() {
 }
 
 void App::start() {
-    std::println("=== Scalpel High-Performance Software Router ===");
+    std::println("=== High-performance gaming traffic prioritizer (software router) ===");
     Telemetry::instance().bridge_mode.store(
         !Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed),
         std::memory_order_relaxed);
-    Scalpel::System::Optimizer::lock_cpu_frequency();
+    HPGTP::System::Optimizer::lock_cpu_frequency();
 
+    if (watchdog_stop_efd_ < 0) {
+        watchdog_stop_efd_ = ::eventfd(0, EFD_CLOEXEC);
+        if (watchdog_stop_efd_ < 0) {
+            std::println(stderr, "[Fatal] watchdog stop eventfd: {}",
+                std::strerror(errno));
+            std::exit(1);
+        }
+    }
     running_watchdog.store(true, std::memory_order_relaxed);
     watchdog = std::thread([this]() { watchdog_loop(); });
 
     Utils::Network::force_arp_resolution(Utils::Network::get_gateway_ip());
-
-    stress_cancel_.store(false, std::memory_order_relaxed);
-    stress_thread_ = std::thread([this]() {
-        Scalpel::System::Optimizer::set_current_thread_affinity(1);
-        Probe::Manager::run_internal_stress(
-            [](double mbps) {
-                Telemetry::instance().internal_limit_mbps.store(
-                    mbps, std::memory_order_relaxed);
-            },
-            &stress_cancel_);
-    });
 
     int fd_wan = iface_wan->get_fd();
     int fd_lan = iface_lan->get_fd();
@@ -438,8 +446,8 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
 
     std::thread rx_thread(
         [this, mgr = std::move(rx_mgr), &frame_q, &poll_sync, core = cfg.core_id]() mutable {
-            Scalpel::System::Optimizer::set_current_thread_affinity(core);
-            Scalpel::System::Optimizer::set_realtime_priority();
+            HPGTP::System::Optimizer::set_current_thread_affinity(core);
+            HPGTP::System::Optimizer::set_realtime_priority();
             const int sock_fd = mgr->get_fd();
             while (this->running_workers.load(std::memory_order_relaxed)) {
                 struct pollfd pfds_rx[2]{};
@@ -480,8 +488,8 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
         });
 
     std::thread proc_thread([this, &consumer, &frame_q, &poll_sync, cfg]() {
-        Scalpel::System::Optimizer::set_current_thread_affinity(cfg.core_id);
-        Scalpel::System::Optimizer::set_realtime_priority();
+        HPGTP::System::Optimizer::set_current_thread_affinity(cfg.core_id);
+        HPGTP::System::Optimizer::set_realtime_priority();
         while (this->running_workers.load(std::memory_order_relaxed)) {
             RxFrameCopy copy{};
             while (frame_q.pop(copy)) {
@@ -533,7 +541,7 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
 // ─── Watchdog loop (Core 1, 1 Hz timerfd) ────────────────────────────────────
 
 void App::watchdog_loop() {
-    Scalpel::System::Optimizer::set_current_thread_affinity(1);
+    HPGTP::System::Optimizer::set_current_thread_affinity(1);
     auto& tel = Telemetry::instance();
 
     int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
@@ -546,16 +554,12 @@ void App::watchdog_loop() {
 
     uint64_t expirations;
     uint64_t last_bytes[4]  = {};
-    uint64_t last_ticks[4]  = {};
     uint64_t stat_idle[4]   = {};
     uint64_t stat_total[4]  = {};
     uint64_t watchdog_tick  = 0;
     int      last_throttle_pct = 100;
 
     auto& si = tel.sys_info;
-    struct pollfd pfds[2]{};
-    pfds[0] = { tfd,          POLLIN, 0 };
-    pfds[1] = { si.rescan_poll_fd(), POLLIN, 0 };
 
     // Raw-fd sysfs reader — no heap, no ifstream
     auto read_sysfd = [](const char* path, std::span<char> out) {
@@ -579,10 +583,14 @@ void App::watchdog_loop() {
             struct dirent* de;
             while ((de = readdir(d)) != nullptr &&
                    cnt < Telemetry::SystemInfo::MAX_IFACES) {
-                if (de->d_name[0] == '.' || strncmp(de->d_name, "lo", 3) == 0)
+                if (de->d_name[0] == '.'
+                    || std::string_view{de->d_name} == "lo")
                     continue;
-                strncpy(si.ifaces[cnt].name.data(), de->d_name, 15);
-                si.ifaces[cnt].name[15] = '\0';
+                {
+                    std::string_view name_sv{de->d_name};
+                    auto nn = name_sv.copy(si.ifaces[cnt].name.data(), 15);
+                    si.ifaces[cnt].name[nn] = '\0';
+                }
                 char path[64];
                 snprintf(path, sizeof(path),
                     "/sys/class/net/%s/operstate", de->d_name);
@@ -593,9 +601,11 @@ void App::watchdog_loop() {
                     ::close(sfd);
                     if (n > 0 && sbuf[n - 1] == '\n') sbuf[n - 1] = '\0';
                 }
-                strncpy(si.ifaces[cnt].operstate.data(),
-                    sbuf[0] ? sbuf : "unknown", 7);
-                si.ifaces[cnt].operstate[7] = '\0';
+                {
+                    std::string_view op_sv{sbuf[0] ? sbuf : "unknown"};
+                    auto no = op_sv.copy(si.ifaces[cnt].operstate.data(), 7);
+                    si.ifaces[cnt].operstate[no] = '\0';
+                }
                 ++cnt;
             }
             closedir(d);
@@ -604,15 +614,33 @@ void App::watchdog_loop() {
     };
 
     while (running_watchdog.load(std::memory_order_relaxed)) {
-        int nfds = (si.rescan_poll_fd() >= 0) ? 2 : 1;
-        if (poll(pfds, nfds, 1000) <= 0) continue;
+        const int rescan_fd = si.rescan_poll_fd();
+        struct pollfd pfds[3]{};
+        pfds[0] = { tfd, POLLIN, 0 };
+        pfds[1] = { watchdog_stop_efd_, POLLIN, 0 };
+        int nfds = 2;
+        if (rescan_fd >= 0) {
+            pfds[2] = { rescan_fd, POLLIN, 0 };
+            nfds    = 3;
+        }
+        int pr = poll(pfds, nfds, -1);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+
+        if ((pfds[1].revents & POLLIN) != 0) {
+            uint64_t v;
+            (void)::eventfd_read(watchdog_stop_efd_, &v);
+            continue;
+        }
 
         bool timer_fired = (pfds[0].revents & POLLIN) != 0;
         bool force_scan  = false;
 
         if (timer_fired && ::read(tfd, &expirations, sizeof(expirations)) <= 0)
             timer_fired = false;
-        if (nfds == 2 && (pfds[1].revents & POLLIN)) {
+        if (nfds == 3 && (pfds[2].revents & POLLIN)) {
             si.consume_rescan();
             force_scan = true;
         }
@@ -742,8 +770,9 @@ void App::watchdog_loop() {
                                 Net::IPv4Net ip = Net::parse_ipv4(ip_str);
                                 if (ip.raw() != INADDR_NONE && strcmp(flags, "0x0") != 0) {
                                     tel.device_table[dcnt].ip = ip;
-                                    strncpy(tel.device_table[dcnt].mac.data(), mac, 17);
-                                    tel.device_table[dcnt].mac[17] = '\0';
+                                    std::string_view mac_sv{mac};
+                                    auto nm = mac_sv.copy(tel.device_table[dcnt].mac.data(), 17);
+                                    tel.device_table[dcnt].mac[nm] = '\0';
                                     ++dcnt;
                                 }
                             }
@@ -768,6 +797,10 @@ void App::watchdog_loop() {
             tel.bridge_mode.load(std::memory_order_relaxed) ? "Bridge" : "Accel");
         last_bytes[2] = bd;
         last_bytes[3] = bu;
+
+        // Game port whitelist (GUI staging → double-buffer swap)
+        if (Config::GAME_PORTS_DIRTY.exchange(false, std::memory_order_acq_rel))
+            Config::apply_pended_game_ports();
 
         // Device policy sync
         if (Config::DEVICE_POLICY_DIRTY.exchange(false, std::memory_order_acq_rel)) {
@@ -827,6 +860,19 @@ void App::watchdog_loop() {
         if (dhcp_engine)     dhcp_engine->process_background_tasks(lan_fd_);
         if (firewall_engine) { firewall_engine->tick(); firewall_engine->cleanup(); }
 
+        // Global bandwidth caps from QoS page (Apply button)
+        if (tel.qos_global_bw_dirty.exchange(false, std::memory_order_acq_rel)) {
+            base_dl_mbps = tel.qos_global_dl_mbps_pending.load(std::memory_order_relaxed);
+            base_ul_mbps = tel.qos_global_ul_mbps_pending.load(std::memory_order_relaxed);
+            int pct = tel.qos_throttle_pct.load(std::memory_order_relaxed);
+            double factor = pct / 100.0;
+            if (shaper_dl) shaper_dl->set_rate_limit(Traffic::Mbps{base_dl_mbps * factor});
+            if (shaper_ul) shaper_ul->set_rate_limit(Traffic::Mbps{base_ul_mbps * factor});
+            last_throttle_pct = pct;
+            std::println("[QoS] Global limits applied — base DL {:.1f} / UL {:.1f} Mbps (throttle {}%)",
+                base_dl_mbps, base_ul_mbps, pct);
+        }
+
         // QoS throttle from GUI slider
         {
             int pct = tel.qos_throttle_pct.load(std::memory_order_relaxed);
@@ -839,12 +885,9 @@ void App::watchdog_loop() {
                     pct, base_dl_mbps * factor, base_ul_mbps * factor);
             }
         }
-
-        // Heartbeat fault detection
-        last_ticks[2] = tel.core_metrics[2].last_heartbeat.load(std::memory_order_relaxed);
     }
 
     close(tfd);
 }
 
-} // namespace Scalpel
+} // namespace HPGTP

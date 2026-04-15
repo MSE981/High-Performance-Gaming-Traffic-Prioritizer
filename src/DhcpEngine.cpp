@@ -5,9 +5,10 @@
 #include <arpa/inet.h>
 #include <print>
 #include <algorithm>
+#include <cstring>
 #include <string>
 
-namespace Scalpel::Logic {
+namespace HPGTP::Logic {
 
 // DhcpHeader is an internal wire-format struct — hidden from all clients
 #pragma pack(push, 1)
@@ -51,16 +52,16 @@ std::expected<void, std::string> DhcpEngine::init_pool(Net::IPv4Net start_ip, Ne
     return {};
 }
 
-Net::IPv4Net DhcpEngine::find_or_assign_lease(const uint8_t* mac) {
+Net::IPv4Net DhcpEngine::find_or_assign_lease(std::span<const uint8_t, 6> mac) {
     auto now      = std::chrono::steady_clock::now();
     auto duration = lease_duration;
 
     for (size_t i = 0; i < pool_count; ++i)
-        if (leases[i].active && std::memcmp(leases[i].mac, mac, 6) == 0) return leases[i].ip;
+        if (leases[i].active && std::ranges::equal(leases[i].mac, mac)) return leases[i].ip;
 
     for (size_t i = 0; i < pool_count; ++i) {
         if (!leases[i].active || now > leases[i].lease_expiry) {
-            std::memcpy(leases[i].mac, mac, 6);
+            std::ranges::copy(mac, leases[i].mac.begin());
             leases[i].active       = true;
             leases[i].lease_expiry = now + duration;
             return leases[i].ip;
@@ -69,7 +70,7 @@ Net::IPv4Net DhcpEngine::find_or_assign_lease(const uint8_t* mac) {
     return Net::IPv4Net{};
 }
 
-void DhcpEngine::commit_lease(const uint8_t* mac, Net::IPv4Net ip) {
+void DhcpEngine::commit_lease(Net::IPv4Net ip) {
     auto duration = lease_duration;
     for (size_t i = 0; i < pool_count; ++i) {
         if (leases[i].ip == ip) {
@@ -184,15 +185,17 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
             0);
     };
 
+    std::span<const uint8_t, 6> mac_span{dhcp->chaddr, 6};
+
     if (msg_type == 1) { // DHCP Discover
-        Net::IPv4Net offered_ip = find_or_assign_lease(dhcp->chaddr);
+        Net::IPv4Net offered_ip = find_or_assign_lease(mac_span);
         if (offered_ip.raw() != 0) send_response(2, offered_ip);
     } else if (msg_type == 3) { // DHCP Request
         if (requested_ip.raw() == 0) requested_ip = Net::IPv4Net{dhcp->ciaddr};
-        Net::IPv4Net leased_ip = find_or_assign_lease(dhcp->chaddr);
+        Net::IPv4Net leased_ip = find_or_assign_lease(mac_span);
 
         if (leased_ip == requested_ip) {
-            commit_lease(dhcp->chaddr, leased_ip);
+            commit_lease(leased_ip);
             send_response(5, leased_ip);
             char ip_buf[INET_ADDRSTRLEN]{};
             uint32_t raw_ip = leased_ip.raw();
@@ -233,4 +236,4 @@ void DhcpEngine::process_background_tasks(int lan_fd) {
         handle_dhcp_request(msg, lan_fd);
 }
 
-} // namespace Scalpel::Logic
+} // namespace HPGTP::Logic

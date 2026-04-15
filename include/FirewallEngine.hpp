@@ -2,11 +2,10 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
-#include <cstring>
 #include "Headers.hpp"
 #include "Config.hpp"
 
-namespace Scalpel::Logic {
+namespace HPGTP::Logic {
 
     enum class ConnState : uint8_t {
         SYN_SENT    = 0,

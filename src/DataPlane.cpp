@@ -4,7 +4,7 @@
 #include <cerrno>
 #include <cstdint>
 
-namespace Scalpel::DataPlane {
+namespace HPGTP::DataPlane {
 
 TxFrameOutput::PacketTxTry TxFrameOutput::try_send_packet_nonblocking(
     int tx_fd, std::span<const uint8_t> pkt) noexcept {
@@ -18,21 +18,6 @@ TxFrameOutput::PacketTxTry TxFrameOutput::try_send_packet_nonblocking(
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS) return PacketTxTry::Busy;
         return PacketTxTry::Error;
     }
-}
-
-bool TxFrameOutput::send_blocking(int tx_fd, std::span<const uint8_t> pkt) noexcept {
-    const uint8_t* p   = pkt.data();
-    size_t         left = pkt.size();
-    while (left > 0) {
-        ssize_t n = ::send(tx_fd, p, left, 0);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return false;
-        }
-        p += static_cast<size_t>(n);
-        left -= static_cast<size_t>(n);
-    }
-    return true;
 }
 
 void TxFrameOutput::send_best_effort(int tx_fd, std::span<const uint8_t> pkt,
@@ -56,4 +41,4 @@ void TxFrameOutput::send_stream_blocking(int fd, std::span<const uint8_t> data) 
     }
 }
 
-} // namespace Scalpel::DataPlane
+} // namespace HPGTP::DataPlane

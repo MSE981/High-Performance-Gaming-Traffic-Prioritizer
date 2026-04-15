@@ -1,4 +1,4 @@
-# Scalpel Gaming Traffic Prioritizer — configuration file
+# High-performance gaming traffic prioritizer — router configuration
 # Place this file next to the GamingTrafficPrioritizer binary, or pass a path at startup.
 # All keys are optional. The program starts with built-in defaults if this file is absent.
 # The GUI writes changes back to this file on every clean exit.

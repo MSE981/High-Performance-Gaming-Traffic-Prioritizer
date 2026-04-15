@@ -6,7 +6,7 @@
 #include "Headers.hpp"
 #include "Config.hpp"
 
-namespace Scalpel::Logic {
+namespace HPGTP::Logic {
 
     // Big-endian wire uint16 → host (Pi 5 is little-endian). Avoids public <netinet/in.h> in this header.
     constexpr inline uint16_t net16_to_host(uint16_t be) noexcept {
