@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 
-set(CMAKE_CXX_COMPILER "g++-14")
-set(CMAKE_C_COMPILER "gcc-14")
+option(USE_GCC14 "Force GCC 14 as C and C++ compiler (gcc-14 / g++-14)" OFF)
+if(USE_GCC14)
+    set(CMAKE_C_COMPILER "gcc-14")
+    set(CMAKE_CXX_COMPILER "g++-14")
+endif()
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,7 +32,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang
         -fexceptions
     )
 elseif(MSVC)
-    list(APPEND PROJECT_ROUTER_COMPILE_OPTIONS /std:c++latest)
+    list(APPEND PROJECT_ROUTER_COMPILE_OPTIONS /std:c++latest /O2)
 endif()
 
 # ── Infrastructure utilities ──────────────────────────────────────────────────
