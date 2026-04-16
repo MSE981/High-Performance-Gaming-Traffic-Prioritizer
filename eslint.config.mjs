@@ -3,7 +3,8 @@ import pluginJs from "@eslint/js";
 
 export default [
   {
-    languageOptions: { 
+    files: ["server/**/*.js", "scripts/web/**/*.js", "public/**/*.js"],
+    languageOptions: {
       globals: {
         ...globals.node,
         ...globals.browser,
@@ -14,6 +15,7 @@ export default [
   },
   pluginJs.configs.recommended,
   {
+    files: ["server/**/*.js", "scripts/web/**/*.js", "public/**/*.js"],
     rules: {
       "semi": ["error", "always"],
       "quotes": ["warn", "single", { "avoidEscape": true }],

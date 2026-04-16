@@ -17,6 +17,7 @@ let extraFeaturesConfig = { dmz_ip: '', timezone: 'Asia/Shanghai' };
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // === NEW: Global Template Variables (Accessible in all .ejs files) ===
 app.locals.systemVersion = 'v1.0.4-gaming-core';
@@ -78,7 +79,7 @@ app.post('/api/ping', requireAuth, (req, res) => {
     // Sanitize target to prevent shell injection
     target = target.replace(/[^a-zA-Z0-9.-]/g, '');
     if (!target) return res.json({ status: 'error', output: 'Invalid target' });
-    
+
     const pingFlag = os.platform() === 'win32' ? '-n' : '-c';
     execFile('ping', [pingFlag, '4', target], (error, stdout, stderr) => {
         res.json({ status: error ? 'error' : 'success', output: stderr || stdout || error.message });
