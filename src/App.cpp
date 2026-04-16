@@ -19,6 +19,7 @@
 #include <cerrno>
 #include <string_view>
 #include <mutex>
+#include <string>
 
 namespace HPGTP {
 
@@ -302,18 +303,19 @@ App::~App() {
     close_watchdog_stop_efd();
 }
 
-void App::open_worker_poll_fds_for_start() {
+std::expected<void, std::string> App::open_worker_poll_fds_for_start() {
     close_worker_poll_fds();
     for (auto& w : worker_poll_) {
         w.frame_efd = ::eventfd(0, EFD_CLOEXEC);
         w.stop_efd  = ::eventfd(0, EFD_CLOEXEC);
         if (w.frame_efd < 0 || w.stop_efd < 0) {
-            std::println(stderr, "[App] eventfd for worker poll sync failed: {}",
-                std::strerror(errno));
+            int e = errno;
             close_worker_poll_fds();
-            return;
+            return std::unexpected(
+                std::string("eventfd for worker poll sync failed: ") + std::strerror(e));
         }
     }
+    return {};
 }
 
 void App::close_worker_poll_fds() {
@@ -355,7 +357,7 @@ void App::stop() {
     if (worker_downstream.joinable()) worker_downstream.join();
     if (worker_upstream.joinable()) worker_upstream.join();
     close_worker_poll_fds();
-    shutdown_promise.set_value();
+    std::call_once(shutdown_notify_once_, [this]() { shutdown_promise.set_value(); });
 }
 
 std::expected<void, std::string> App::init() {
@@ -375,6 +377,23 @@ void App::start() {
         std::memory_order_relaxed);
     HPGTP::System::Optimizer::lock_cpu_frequency();
 
+    int fd_wan = iface_wan->get_fd();
+    int fd_lan = iface_lan->get_fd();
+    lan_fd_ = fd_lan;
+
+    constexpr double dl = 500.0;
+    constexpr double ul = 50.0;
+    base_dl_mbps = dl;
+    base_ul_mbps = ul;
+    shaper_dl = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_dl_mbps});
+    shaper_ul = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_ul_mbps});
+
+    Net::IPv4Net gw_ip = Config::parse_ip_str(Config::ROUTER_IP);
+    if (auto pr = open_worker_poll_fds_for_start(); !pr) {
+        std::println(stderr, "[App] {}", pr.error());
+        return;
+    }
+
     if (watchdog_stop_efd_ < 0) {
         watchdog_stop_efd_ = ::eventfd(0, EFD_CLOEXEC);
         if (watchdog_stop_efd_ < 0) {
@@ -388,19 +407,6 @@ void App::start() {
 
     Utils::Network::force_arp_resolution(Utils::Network::get_gateway_ip());
 
-    int fd_wan = iface_wan->get_fd();
-    int fd_lan = iface_lan->get_fd();
-    lan_fd_ = fd_lan;
-
-    constexpr double dl = 500.0;
-    constexpr double ul = 50.0;
-    base_dl_mbps = dl;
-    base_ul_mbps = ul;
-    shaper_dl = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_dl_mbps});
-    shaper_ul = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_ul_mbps});
-
-    Net::IPv4Net gw_ip = Config::parse_ip_str(Config::ROUTER_IP);
-    open_worker_poll_fds_for_start();
     running_workers.store(true, std::memory_order_relaxed);
 
     worker_downstream = std::thread(
@@ -546,12 +552,23 @@ void App::watchdog_loop() {
     auto& tel = Telemetry::instance();
 
     int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
-    if (tfd == -1) return;
+    if (tfd == -1) {
+        std::println(stderr, "[App] Fatal: timerfd_create: {}", std::strerror(errno));
+        running_watchdog.store(false, std::memory_order_relaxed);
+        std::call_once(shutdown_notify_once_, [this]() { shutdown_promise.set_value(); });
+        return;
+    }
 
     struct itimerspec its{};
     its.it_value.tv_sec    = 1;
     its.it_interval.tv_sec = 1;
-    if (timerfd_settime(tfd, 0, &its, nullptr) == -1) { close(tfd); return; }
+    if (timerfd_settime(tfd, 0, &its, nullptr) == -1) {
+        std::println(stderr, "[App] Fatal: timerfd_settime: {}", std::strerror(errno));
+        ::close(tfd);
+        running_watchdog.store(false, std::memory_order_relaxed);
+        std::call_once(shutdown_notify_once_, [this]() { shutdown_promise.set_value(); });
+        return;
+    }
 
     uint64_t expirations;
     uint64_t last_bytes[4]  = {};

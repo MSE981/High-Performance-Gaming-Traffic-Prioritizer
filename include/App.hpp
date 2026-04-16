@@ -2,8 +2,10 @@
 // C++ standard headers only -- no POSIX C headers.
 // All POSIX C APIs (socket, timerfd, poll, dirent, ...) are hidden in App.cpp.
 #include <thread>
+#include <mutex>
 #include <atomic>
 #include <memory>
+#include <string>
 #include <expected>
 #include <future>
 #include <array>
@@ -142,6 +144,7 @@ class App {
     std::promise<void> shutdown_promise;
     std::future<void>  shutdown_future;
     std::atomic<bool>   shutdown_sequence_started_{false};
+    std::once_flag      shutdown_notify_once_;
 
     struct WorkerPollSync {
         int frame_efd{-1};
@@ -150,7 +153,7 @@ class App {
     std::array<WorkerPollSync, 2> worker_poll_{};
     int watchdog_stop_efd_{-1};
 
-    void open_worker_poll_fds_for_start();
+    std::expected<void, std::string> open_worker_poll_fds_for_start();
     void close_worker_poll_fds();
     void wake_proc_threads_for_shutdown();
     void wake_watchdog_for_shutdown();
