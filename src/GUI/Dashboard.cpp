@@ -2311,7 +2311,8 @@ void Dashboard::on_shutdown_clicked() {
 
     // Save settings then exit — skip redundant save in main()
     connect(btn_save, &QPushButton::clicked, &dlg, [&dlg]() {
-        Config::save_config("config/config.txt");
+        if (auto sr = Config::save_config("config/config.txt"); !sr)
+            std::println(stderr, "[GUI] {}", sr.error());
         Config::SAVE_ON_EXIT.store(false, std::memory_order_relaxed);
         dlg.accept();
         QApplication::quit();

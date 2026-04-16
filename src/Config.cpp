@@ -5,6 +5,7 @@
 #include <charconv>
 #include <string_view>
 #include <algorithm>
+#include <cerrno>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -76,19 +77,22 @@ static bool parse_kv(const char* line, size_t len,
 
 // ── public API ────────────────────────────────────────────────────────────────
 
-void load_config(const std::string& path) {
+std::expected<void, std::string> load_config(const std::string& path) {
     g_load_game_ports_n = 0;
-
     int fd = ::open(path.c_str(), O_RDONLY);
     if (fd < 0) {
-        std::println(stderr, "[Config] Warning: cannot open config file {}, using defaults.", path);
-        return;
+        if (errno == ENOENT) {
+            std::println(stderr, "[Config] Warning: cannot open config file {}, using defaults.", path);
+            return {};
+        }
+        return std::unexpected(
+            std::string("cannot open ") + path + ": " + std::strerror(errno));
     }
 
     char buf[8192]{};
     ssize_t n = ::read(fd, buf, sizeof(buf) - 1);
     ::close(fd);
-    if (n <= 0) return;
+    if (n <= 0) return {};
     buf[n] = '\0';
 
     bool bridge_iface_loaded = false;
@@ -201,13 +205,14 @@ void load_config(const std::string& path) {
     IP_LIMIT_ACTIVE.store(IP_LIMIT_COUNT > 0, std::memory_order_release);
     commit_loaded_game_ports_to_runtime();
     std::println("[Config] Config loaded: {}", path);
+    return {};
 }
 
-void save_config(const std::string& path) {
+std::expected<void, std::string> save_config(const std::string& path) {
     int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
-        std::println(stderr, "[Config] Error: cannot write config file {}", path);
-        return;
+        return std::unexpected(
+            std::string("cannot write ") + path + ": " + std::strerror(errno));
     }
     auto b = [](bool v) -> const char* { return v ? "true" : "false"; };
 
@@ -273,6 +278,7 @@ void save_config(const std::string& path) {
     }
     ::close(fd);
     std::println("[Config] Config saved: {}", path);
+    return {};
 }
 
 } // namespace HPGTP::Config
