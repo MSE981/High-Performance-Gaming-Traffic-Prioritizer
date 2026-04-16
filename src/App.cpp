@@ -352,11 +352,17 @@ void App::close_watchdog_stop_efd() {
 
 void App::stop() {
     if (shutdown_sequence_started_.exchange(true, std::memory_order_acq_rel)) return;
+    // Stop data-plane workers (Cores 2/3) before watchdog (Core 1) so
+    // the watchdog does not read stale shaper state after workers exit.
     running_workers.store(false, std::memory_order_relaxed);
     wake_proc_threads_for_shutdown();
     if (worker_downstream.joinable()) worker_downstream.join();
     if (worker_upstream.joinable()) worker_upstream.join();
     close_worker_poll_fds();
+    running_watchdog.store(false, std::memory_order_relaxed);
+    wake_watchdog_for_shutdown();
+    if (watchdog.joinable()) watchdog.join();
+    close_watchdog_stop_efd();
     std::call_once(shutdown_notify_once_, [this]() { shutdown_promise.set_value(); });
 }
 
