@@ -504,7 +504,7 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
             if (consumer.qos_config
                 && Config::IP_LIMIT_ACTIVE.load(std::memory_order_relaxed)) {
                 size_t ai =
-                    consumer.qos_config->active_idx.load(std::memory_order_relaxed);
+                    consumer.qos_config->active_idx.load(std::memory_order_acquire);
                 consumer.qos_config->buffers[ai].for_each_occupied([&](auto& shaper) {
                     shaper->process_queue(cfg.tx_fd);
                 });
@@ -810,7 +810,7 @@ void App::watchdog_loop() {
 
             auto rebuild_device_shaper = [&](std::shared_ptr<QoSConfig>& cfg_ptr, bool use_dl) {
                 if (!cfg_ptr) return;
-                size_t active   = cfg_ptr->active_idx.load(std::memory_order_relaxed);
+                size_t active   = cfg_ptr->active_idx.load(std::memory_order_acquire);
                 size_t inactive = 1 - active;
                 cfg_ptr->buffers[inactive] = {};
                 for (size_t i = 0; i < Config::DEVICE_POLICY_COUNT; ++i) {
