@@ -14,6 +14,7 @@
 #include <ctime>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <print>
 #include <iostream>
 #include <cerrno>
@@ -693,7 +694,11 @@ void App::watchdog_loop() {
                 if (n > 0) {
                     sbuf[n] = '\0';
                     const char* p = sbuf;
-                    for (int ci = 0; ci < 4; ++ci) {
+                    long nproc = ::sysconf(_SC_NPROCESSORS_ONLN);
+                    if (nproc < 1) nproc = 1;
+                    int max_ci = static_cast<int>(std::min<long>(
+                        nproc, static_cast<long>(tel.core_metrics.size())));
+                    for (int ci = 0; ci < max_ci; ++ci) {
                         char tag[8];
                         snprintf(tag, sizeof(tag), "cpu%d ", ci);
                         const char* ln = strstr(p, tag);
