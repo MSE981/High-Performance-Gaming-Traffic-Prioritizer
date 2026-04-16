@@ -110,6 +110,12 @@ namespace HPGTP::Traffic {
     class Shaper {
         ZeroAllocRingBuffer<8192> normal_queue;
         TokenBucket               bucket;
+        std::atomic_flag          spin_{};
+
+        void lock_spin() {
+            while (spin_.test_and_set(std::memory_order_acquire)) { }
+        }
+        void unlock_spin() { spin_.clear(std::memory_order_release); }
 
         using ResultHandler = void (*)(Shaper*, size_t);
         static constexpr std::array<ResultHandler, 3> result_handlers = {

@@ -104,7 +104,7 @@ struct QoSConfig {
 struct PacketWorkerConfig {
     int tx_fd;
     int core_id;
-    std::shared_ptr<Traffic::Shaper>       global_shaper;
+    std::shared_ptr<Traffic::Shaper>       route_shaper;
     std::shared_ptr<Logic::NatEngine>      nat_engine;
     std::shared_ptr<Logic::DnsEngine>      dns_engine;
     std::shared_ptr<QoSConfig>             qos_config;
@@ -120,7 +120,6 @@ struct PacketWorkerConfig {
 class App {
     std::unique_ptr<Engine::RawSocketManager> iface_wan;
     std::unique_ptr<Engine::RawSocketManager> iface_lan;
-    std::shared_ptr<Traffic::Shaper>          global_shaper;
     std::shared_ptr<Logic::NatEngine>         nat_engine;
     std::shared_ptr<Logic::DnsEngine>         dns_engine;
     std::shared_ptr<Logic::DhcpEngine>        dhcp_engine;
@@ -129,8 +128,8 @@ class App {
     std::shared_ptr<QoSConfig>                qos_config;
     int lan_fd_ = -1;
 
-    std::shared_ptr<Traffic::Shaper> shaper_dl;
-    std::shared_ptr<Traffic::Shaper> shaper_ul;
+    std::shared_ptr<Traffic::Shaper> global_shaper_dl;
+    std::shared_ptr<Traffic::Shaper> global_shaper_ul;
     double base_dl_mbps = 500.0;
     double base_ul_mbps = 50.0;
     std::shared_ptr<QoSConfig> device_shaper_dl;

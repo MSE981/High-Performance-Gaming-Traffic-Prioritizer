@@ -10,6 +10,7 @@ namespace HPGTP::Logic {
     // True zero-copy user-space NAT engine
     class NatEngine {
         struct alignas(64) NatSession {
+            std::atomic<uint32_t> seq{0};
             FlowKey internal_key;
             uint16_t external_port = 0;
             std::atomic<uint32_t> last_active_tick{0};
@@ -17,6 +18,7 @@ namespace HPGTP::Logic {
         };
 
         struct UpnpMapping {
+            std::atomic<uint32_t> seq{0};
             Net::IPv4Net internal_ip{};
             uint16_t     internal_port = 0;
             uint16_t     external_port = 0;
@@ -27,7 +29,7 @@ namespace HPGTP::Logic {
         static constexpr size_t MAX_SESSIONS = 65536;
 
         std::array<NatSession, MAX_SESSIONS> sessions;
-        std::array<int32_t, 65536> port_to_index{};
+        std::array<std::atomic<int32_t>, 65536> port_to_index{};
 
         std::array<UpnpMapping, 256> upnp_rules{};
         alignas(64) std::atomic<size_t> upnp_cursor{0};

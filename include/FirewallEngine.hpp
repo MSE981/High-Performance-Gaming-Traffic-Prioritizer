@@ -15,6 +15,7 @@ namespace HPGTP::Logic {
 
     class FirewallEngine {
         struct alignas(64) ConnTrackEntry {
+            std::atomic<uint32_t> seq{0};
             uint32_t  remote_ip   = 0;
             uint16_t  remote_port = 0;
             uint32_t  lan_ip      = 0;

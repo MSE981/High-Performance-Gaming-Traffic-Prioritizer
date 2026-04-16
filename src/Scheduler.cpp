@@ -18,6 +18,7 @@ void Shaper::set_rate_limit(Mbps limit) {
 }
 
 void Shaper::enqueue_normal(std::span<const uint8_t> pkt) {
+    lock_spin();
     if (!normal_queue.push(pkt)) {
         auto& tel = Telemetry::instance();
         if (pkt.size() > 2048)
@@ -25,16 +26,24 @@ void Shaper::enqueue_normal(std::span<const uint8_t> pkt) {
         else
             tel.shaper_queue_overflow_drops.fetch_add(1, std::memory_order_relaxed);
     }
+    unlock_spin();
 }
 
 void Shaper::process_queue(int tx_fd) {
-    while (!normal_queue.empty()) {
+    while (true) {
+        lock_spin();
+        if (normal_queue.empty()) {
+            unlock_spin();
+            break;
+        }
         auto pkt_span = normal_queue.front();
-        if (!bucket.try_consume(pkt_span.size())) break;
-
+        if (!bucket.try_consume(pkt_span.size())) {
+            unlock_spin();
+            break;
+        }
         TxResult res = try_hardware_send(tx_fd, pkt_span);
         result_handlers[static_cast<size_t>(res)](this, pkt_span.size());
-
+        unlock_spin();
         if (res == TxResult::Congested) break;
     }
 }

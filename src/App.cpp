@@ -79,7 +79,7 @@ public:
 
     PacketConsumer(int rx_fd_, const PacketWorkerConfig& cfg)
         : rx_fd(rx_fd_), tx_fd(cfg.tx_fd), core_id(cfg.core_id),
-          ctx{cfg.tx_fd, cfg.global_shaper},
+          ctx{cfg.tx_fd, cfg.route_shaper},
           nat_engine(cfg.nat_engine), dns_engine(cfg.dns_engine),
           qos_config(cfg.qos_config), device_shaper(cfg.device_shaper),
           dhcp_engine(cfg.dhcp_engine),
@@ -268,7 +268,6 @@ struct RxFrameCopy {
 
 App::App() {
     shutdown_future = shutdown_promise.get_future();
-    global_shaper   = std::make_shared<Traffic::Shaper>(Traffic::Mbps{100.0});
 
     // Service flags are loaded from config/config.txt before App is constructed;
     // do not override them here.
@@ -386,8 +385,8 @@ void App::start() {
     constexpr double ul = 50.0;
     base_dl_mbps = dl;
     base_ul_mbps = ul;
-    shaper_dl = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_dl_mbps});
-    shaper_ul = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_ul_mbps});
+    global_shaper_dl = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_dl_mbps});
+    global_shaper_ul = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_ul_mbps});
 
     Net::IPv4Net gw_ip = Config::parse_ip_str(Config::ROUTER_IP);
     if (auto pr = open_worker_poll_fds_for_start(); !pr) {
@@ -416,7 +415,7 @@ void App::start() {
             worker_event_loop(std::move(iface), std::move(cfg), *ps);
         },
         std::move(iface_wan),
-        PacketWorkerConfig{ fd_lan, 2, shaper_dl, nat_engine, dns_engine,
+        PacketWorkerConfig{ fd_lan, 2, global_shaper_dl, nat_engine, dns_engine,
                             qos_config, device_shaper_dl, dhcp_engine,
                             firewall_engine, gw_ip });
 
@@ -426,7 +425,7 @@ void App::start() {
             worker_event_loop(std::move(iface), std::move(cfg), *ps);
         },
         std::move(iface_lan),
-        PacketWorkerConfig{ fd_wan, 3, shaper_ul, nat_engine, dns_engine,
+        PacketWorkerConfig{ fd_wan, 3, global_shaper_ul, nat_engine, dns_engine,
                             qos_config, device_shaper_ul, dhcp_engine,
                             firewall_engine, gw_ip });
 
@@ -506,7 +505,7 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
                 consumer.on_packet_event(pkt);
             }
 
-            if (cfg.global_shaper) cfg.global_shaper->process_queue(cfg.tx_fd);
+            if (cfg.route_shaper) cfg.route_shaper->process_queue(cfg.tx_fd);
 
             if (consumer.qos_config
                 && Config::IP_LIMIT_ACTIVE.load(std::memory_order_relaxed)) {
@@ -890,8 +889,10 @@ void App::watchdog_loop() {
             base_ul_mbps = tel.qos_global_ul_mbps_pending.load(std::memory_order_relaxed);
             int pct = tel.qos_throttle_pct.load(std::memory_order_relaxed);
             double factor = pct / 100.0;
-            if (shaper_dl) shaper_dl->set_rate_limit(Traffic::Mbps{base_dl_mbps * factor});
-            if (shaper_ul) shaper_ul->set_rate_limit(Traffic::Mbps{base_ul_mbps * factor});
+            if (global_shaper_dl)
+                global_shaper_dl->set_rate_limit(Traffic::Mbps{base_dl_mbps * factor});
+            if (global_shaper_ul)
+                global_shaper_ul->set_rate_limit(Traffic::Mbps{base_ul_mbps * factor});
             last_throttle_pct = pct;
             std::println("[QoS] Global limits applied — base DL {:.1f} / UL {:.1f} Mbps (throttle {}%)",
                 base_dl_mbps, base_ul_mbps, pct);
@@ -903,8 +904,10 @@ void App::watchdog_loop() {
             if (pct != last_throttle_pct) {
                 last_throttle_pct = pct;
                 double factor = pct / 100.0;
-                if (shaper_dl) shaper_dl->set_rate_limit(Traffic::Mbps{base_dl_mbps * factor});
-                if (shaper_ul) shaper_ul->set_rate_limit(Traffic::Mbps{base_ul_mbps * factor});
+                if (global_shaper_dl)
+                    global_shaper_dl->set_rate_limit(Traffic::Mbps{base_dl_mbps * factor});
+                if (global_shaper_ul)
+                    global_shaper_ul->set_rate_limit(Traffic::Mbps{base_ul_mbps * factor});
                 std::println("[QoS] Throttle {}% — DL {:.1f} Mbps / UL {:.1f} Mbps",
                     pct, base_dl_mbps * factor, base_ul_mbps * factor);
             }

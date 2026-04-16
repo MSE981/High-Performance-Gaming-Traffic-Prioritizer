@@ -81,14 +81,23 @@ void FirewallEngine::track_outbound(const Net::ParsedPacket& pkt) {
         size_t idx = (h + i) % TABLE_SIZE;
         auto& e = table[idx];
 
+        uint32_t s0 = e.seq.load(std::memory_order_acquire);
+        if (s0 & 1u) continue;
+        uint32_t eri = e.remote_ip;
+        uint16_t erp = e.remote_port;
+        uint32_t eli = e.lan_ip;
+        uint16_t elp = e.lan_port;
+        uint8_t epr = e.protocol;
+        uint32_t s1 = e.seq.load(std::memory_order_acquire);
+        if (s0 != s1 || (s1 & 1u)) continue;
+
         if (!e.active.load(std::memory_order_acquire) || is_expired(e)) {
             if (free_slot == -1) free_slot = static_cast<int32_t>(idx);
             continue;
         }
 
-        if (e.remote_ip == remote_ip && e.remote_port == remote_port &&
-            e.lan_ip    == lan_ip    && e.lan_port    == lan_port    &&
-            e.protocol  == proto) {
+        if (eri == remote_ip && erp == remote_port &&
+            eli == lan_ip && elp == lan_port && epr == proto) {
 
             if (proto == 6) {
                 uint16_t flags = ntohs(pkt.tcp()->res1_doff_flags);
@@ -108,12 +117,14 @@ void FirewallEngine::track_outbound(const Net::ParsedPacket& pkt) {
     }
 
     if (free_slot == -1) return;
-    auto& ne      = table[free_slot];
+    auto& ne = table[free_slot];
+    ne.seq.fetch_add(1, std::memory_order_acq_rel);
     ne.remote_ip   = remote_ip;
     ne.remote_port = remote_port;
     ne.lan_ip      = lan_ip;
     ne.lan_port    = lan_port;
     ne.protocol    = proto;
+    ne.seq.fetch_add(1, std::memory_order_acq_rel);
     ne.last_tick.store(tick, std::memory_order_relaxed);
 
     if (proto == 6) {
@@ -154,8 +165,16 @@ bool FirewallEngine::check_inbound(const Net::ParsedPacket& pkt) {
         size_t idx = (h + i) % TABLE_SIZE;
         auto& e = table[idx];
 
-        if (!e.active.load(std::memory_order_acquire) || is_expired(e)) continue;
-        if (e.remote_ip != remote_ip || e.remote_port != sport || e.protocol != proto) continue;
+        uint32_t s0 = e.seq.load(std::memory_order_acquire);
+        if (s0 & 1u) continue;
+        bool act = e.active.load(std::memory_order_acquire);
+        uint32_t eri = e.remote_ip;
+        uint16_t erp = e.remote_port;
+        uint8_t epr = e.protocol;
+        uint32_t s1 = e.seq.load(std::memory_order_acquire);
+        if (s0 != s1 || (s1 & 1u)) continue;
+        if (!act || is_expired(e)) continue;
+        if (eri != remote_ip || erp != sport || epr != proto) continue;
 
         if (proto == 17) {
             e.last_tick.store(tick, std::memory_order_relaxed);
