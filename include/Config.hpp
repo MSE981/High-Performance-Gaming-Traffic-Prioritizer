@@ -140,53 +140,53 @@ namespace HPGTP::Config {
     inline uint32_t CLEANUP_INTERVAL_PKTS = 10000;
 
     // Gaming protocol port whitelist (GUI + config.txt); dataplane reads active buffer only.
-    struct PortRange { uint16_t start; uint16_t end; };
+    struct PortRange { uint16_t start; uint16_t end; char desc[32]; };
     static constexpr size_t MAX_GAME_PORT_RANGES = 64;
     // Compile-time defaults — overridden by config.txt GAME_PORT lines when present.
     inline std::array<std::array<PortRange, MAX_GAME_PORT_RANGES>, 2> GAME_PORT_TABLE_DOUBLE{{
         {{
-            {3478, 3480},   // PlayStation Network
-            {3074, 3074},   // Xbox Live
-            {27015, 27050}, // Steam
-            {5000, 5500},   // Riot Games (LoL, Valorant)
-            {26500, 26510}, // Overwatch / Blizzard
-            {9000, 9100},   // Fortnite / Epic
-            {1024, 1124},   // Apex Legends / EA
-            {3216, 3216},   // EA
-            {9960, 9969},   // EA
-            {18000, 18060}, // EA
-            {3074, 3080},   // Call of Duty
-            {25565, 25565}, // Minecraft Java
-            {19132, 19133}, // Minecraft Bedrock
-            {7000, 9000},   // Rocket League
-            {22101, 22102}, // Genshin Impact / HoYoverse
-            {7086, 7995},   // PUBG
-            {6015, 6015},   // Rainbow Six Siege
-            {17000, 17100}, // Escape from Tarkov
-            {9987, 9987},   // TeamSpeak
-            {50000, 50004}, // Discord voice
+            {3478, 3480, "PlayStation Network"},
+            {3074, 3074, "Xbox Live"},
+            {27015, 27050, "Steam"},
+            {5000, 5500, "Riot Games (LoL, Valorant)"},
+            {26500, 26510, "Overwatch / Blizzard"},
+            {9000, 9100, "Fortnite / Epic"},
+            {1024, 1124, "Apex Legends / EA"},
+            {3216, 3216, "EA"},
+            {9960, 9969, "EA"},
+            {18000, 18060, "EA"},
+            {3074, 3080, "Call of Duty"},
+            {25565, 25565, "Minecraft Java"},
+            {19132, 19133, "Minecraft Bedrock"},
+            {7000, 9000, "Rocket League"},
+            {22101, 22102, "Genshin Impact / HoYoverse"},
+            {7086, 7995, "PUBG"},
+            {6015, 6015, "Rainbow Six Siege"},
+            {17000, 17100, "Escape from Tarkov"},
+            {9987, 9987, "TeamSpeak"},
+            {50000, 50004, "Discord voice"},
         }},
         {{
-            {3478, 3480},
-            {3074, 3074},
-            {27015, 27050},
-            {5000, 5500},
-            {26500, 26510},
-            {9000, 9100},
-            {1024, 1124},
-            {3216, 3216},
-            {9960, 9969},
-            {18000, 18060},
-            {3074, 3080},
-            {25565, 25565},
-            {19132, 19133},
-            {7000, 9000},
-            {22101, 22102},
-            {7086, 7995},
-            {6015, 6015},
-            {17000, 17100},
-            {9987, 9987},
-            {50000, 50004},
+            {3478, 3480, "PlayStation Network"},
+            {3074, 3074, "Xbox Live"},
+            {27015, 27050, "Steam"},
+            {5000, 5500, "Riot Games (LoL, Valorant)"},
+            {26500, 26510, "Overwatch / Blizzard"},
+            {9000, 9100, "Fortnite / Epic"},
+            {1024, 1124, "Apex Legends / EA"},
+            {3216, 3216, "EA"},
+            {9960, 9969, "EA"},
+            {18000, 18060, "EA"},
+            {3074, 3080, "Call of Duty"},
+            {25565, 25565, "Minecraft Java"},
+            {19132, 19133, "Minecraft Bedrock"},
+            {7000, 9000, "Rocket League"},
+            {22101, 22102, "Genshin Impact / HoYoverse"},
+            {7086, 7995, "PUBG"},
+            {6015, 6015, "Rainbow Six Siege"},
+            {17000, 17100, "Escape from Tarkov"},
+            {9987, 9987, "TeamSpeak"},
+            {50000, 50004, "Discord voice"},
         }},
     }};
     inline std::array<size_t, 2> game_port_table_counts{{20, 20}};

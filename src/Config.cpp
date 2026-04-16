@@ -166,19 +166,27 @@ std::expected<void, std::string> load_config(const std::string& path) {
                 }
                 else if (!strcmp(key, "GAME_PORT")) {
                     if (g_load_game_ports_n < MAX_GAME_PORT_RANGES) {
+                        // Format: port or start-end, optionally followed by :description
+                        char desc_buf[32]{};
+                        char* colon = strchr(val, ':');
+                        if (colon) {
+                            *colon = '\0';
+                            std::strncpy(desc_buf, colon + 1, sizeof(desc_buf) - 1);
+                        }
                         char* dash = strchr(val, '-');
                         uint32_t a = 0, b = 0;
                         if (dash) {
                             *dash = '\0';
                             a = parse_u32(val);
                             b = parse_u32(dash + 1);
-                            *dash = '-';
                         } else {
                             a = b = parse_u32(val);
                         }
-                        if (a <= 65535u && b <= 65535u && a <= b)
-                            g_load_game_ports[g_load_game_ports_n++] = {
-                                static_cast<uint16_t>(a), static_cast<uint16_t>(b)};
+                        if (a <= 65535u && b <= 65535u && a <= b) {
+                            PortRange pr{static_cast<uint16_t>(a), static_cast<uint16_t>(b), {}};
+                            std::memcpy(pr.desc, desc_buf, sizeof(pr.desc));
+                            g_load_game_ports[g_load_game_ports_n++] = pr;
+                        }
                     }
                 }
             } catch (...) {
@@ -258,11 +266,19 @@ std::expected<void, std::string> save_config(const std::string& path) {
         size_t n  = game_port_table_counts[ai];
         for (size_t i = 0; i < n; ++i) {
             const auto& r = GAME_PORT_TABLE_DOUBLE[ai][i];
-            if (r.start == r.end)
-                dprintf(fd, "GAME_PORT=%u\n", static_cast<unsigned>(r.start));
-            else
-                dprintf(fd, "GAME_PORT=%u-%u\n", static_cast<unsigned>(r.start),
-                    static_cast<unsigned>(r.end));
+            if (r.start == r.end) {
+                if (r.desc[0])
+                    dprintf(fd, "GAME_PORT=%u:%s\n", static_cast<unsigned>(r.start), r.desc);
+                else
+                    dprintf(fd, "GAME_PORT=%u\n", static_cast<unsigned>(r.start));
+            } else {
+                if (r.desc[0])
+                    dprintf(fd, "GAME_PORT=%u-%u:%s\n", static_cast<unsigned>(r.start),
+                        static_cast<unsigned>(r.end), r.desc);
+                else
+                    dprintf(fd, "GAME_PORT=%u-%u\n", static_cast<unsigned>(r.start),
+                        static_cast<unsigned>(r.end));
+            }
         }
     }
     dprintf(fd, "IFACE_GATEWAY=%s\n", IFACE_GATEWAY.c_str());

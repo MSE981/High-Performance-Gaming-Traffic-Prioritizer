@@ -2,6 +2,7 @@
 #include "GUI/StyleSheet.hpp"
 #include "Config.hpp"
 #include "SelfTest.hpp"
+#include <cstring>
 #include "SystemOptimizer.hpp"
 #include <QApplication>
 #include <QScreen>
@@ -802,7 +803,7 @@ void QosPage::refresh_whitelist_from_config() {
         whitelist_table->insertRow(r);
         whitelist_table->setItem(r, 0, make_item_qs(port_str));
         whitelist_table->setItem(r, 1, make_item_qs(QStringLiteral("TCP/UDP")));
-        whitelist_table->setItem(r, 2, make_item_qs(QString()));
+        whitelist_table->setItem(r, 2, make_item_qs(QString::fromUtf8(pr.desc)));
     }
     const int header_h = whitelist_table->horizontalHeader()->height();
     const int rows_h   = whitelist_table->rowCount() * wl_row_h;
@@ -1280,8 +1281,14 @@ void QosPage::on_edit_whitelist() {
         auto* cell = dlg.table()->item(r, 0);
         if (!cell) continue;
         Config::PortRange pr{};
-        if (parse_whitelist_port_cell(cell->text(), pr))
-            ranges.push_back(pr);
+        if (!parse_whitelist_port_cell(cell->text(), pr)) continue;
+        auto* desc_cell = dlg.table()->item(r, 2);
+        if (desc_cell) {
+            QByteArray utf8 = desc_cell->text().toUtf8();
+            std::strncpy(pr.desc, utf8.constData(), sizeof(pr.desc) - 1);
+            pr.desc[sizeof(pr.desc) - 1] = '\0';
+        }
+        ranges.push_back(pr);
     }
     if (ranges.empty()) {
         Dashboard::post_notification(
