@@ -30,6 +30,7 @@
 #include <QSizePolicy>
 #include <QTimer>
 #include <thread>
+#include <mutex>
 #include <print>
 #include <algorithm>
 #include <array>
@@ -1874,13 +1875,16 @@ void DevicePage::refresh() {
         // Look up existing policy
         bool blocked = false, rate_limited = false;
         double dl = 100.0, ul = 10.0;
-        for (size_t j = 0; j < Config::DEVICE_POLICY_COUNT; ++j) {
-            if (Config::DEVICE_POLICY_TABLE[j].ip == ip) {
-                blocked      = Config::DEVICE_POLICY_TABLE[j].blocked;
-                rate_limited = Config::DEVICE_POLICY_TABLE[j].rate_limited;
-                dl           = Config::DEVICE_POLICY_TABLE[j].dl.value;
-                ul           = Config::DEVICE_POLICY_TABLE[j].ul.value;
-                break;
+        {
+            std::lock_guard<std::mutex> lk(Config::device_policy_mutex);
+            for (size_t j = 0; j < Config::DEVICE_POLICY_COUNT; ++j) {
+                if (Config::DEVICE_POLICY_TABLE[j].ip == ip) {
+                    blocked      = Config::DEVICE_POLICY_TABLE[j].blocked;
+                    rate_limited = Config::DEVICE_POLICY_TABLE[j].rate_limited;
+                    dl           = Config::DEVICE_POLICY_TABLE[j].dl.value;
+                    ul           = Config::DEVICE_POLICY_TABLE[j].ul.value;
+                    break;
+                }
             }
         }
 

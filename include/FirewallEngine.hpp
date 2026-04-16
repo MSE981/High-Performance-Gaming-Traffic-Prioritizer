@@ -45,6 +45,7 @@ namespace HPGTP::Logic {
     public:
         void tick();
         void sync_blocked_ips();
+        void sync_blocked_ips_locked();
         bool is_blocked_ip(Net::IPv4Net ip) const;
         void track_outbound(const Net::ParsedPacket& pkt);
         bool check_inbound(const Net::ParsedPacket& pkt);

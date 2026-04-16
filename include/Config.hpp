@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <atomic>
 #include <array>
+#include <mutex>
 #include <chrono>
 #include <mutex>
 #include <span>
@@ -175,8 +176,10 @@ namespace HPGTP::Config {
     inline std::array<DevicePolicy, MAX_DEVICE_POLICIES> DEVICE_POLICY_TABLE{};
     inline size_t DEVICE_POLICY_COUNT = 0;
     inline std::atomic<bool> DEVICE_POLICY_DIRTY{false};
+    inline std::mutex        device_policy_mutex;
 
     inline void upsert_device_policy(const DevicePolicy& policy) {
+        std::lock_guard<std::mutex> lk(device_policy_mutex);
         for (size_t i = 0; i < DEVICE_POLICY_COUNT; ++i) {
             if (DEVICE_POLICY_TABLE[i].ip == policy.ip) {
                 DEVICE_POLICY_TABLE[i] = policy;

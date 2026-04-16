@@ -12,6 +12,7 @@
 #include <string_view>
 
 #include "Config.hpp"
+#include <mutex>
 #include "NatEngine.hpp"
 #include "DnsEngine.hpp"
 #include "DhcpEngine.hpp"
@@ -292,7 +293,11 @@ void SelfTest::test_dhcp(Report& r) {
 
 void SelfTest::test_firewall(Report& r) {
     // make_unique: FirewallEngine has ~5 MB table — must be heap-allocated
-    size_t saved_policy_count = Config::DEVICE_POLICY_COUNT;
+    size_t saved_policy_count;
+    {
+        std::lock_guard<std::mutex> lk(Config::device_policy_mutex);
+        saved_policy_count = Config::DEVICE_POLICY_COUNT;
+    }
 
     // ── FW_Block ──
     auto fw_block = std::make_unique<Logic::FirewallEngine>();
@@ -306,7 +311,10 @@ void SelfTest::test_firewall(Report& r) {
     r.add("FW_Block", block_pass,
           block_pass ? "blocked IP correctly rejected" : "is_blocked_ip returned false");
 
-    Config::DEVICE_POLICY_COUNT = saved_policy_count; // restore global state
+    {
+        std::lock_guard<std::mutex> lk(Config::device_policy_mutex);
+        Config::DEVICE_POLICY_COUNT = saved_policy_count;
+    }
 
     // ── FW_Session ──
     auto fw_sess = std::make_unique<Logic::FirewallEngine>();

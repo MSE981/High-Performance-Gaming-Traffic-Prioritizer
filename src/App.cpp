@@ -18,6 +18,7 @@
 #include <iostream>
 #include <cerrno>
 #include <string_view>
+#include <mutex>
 
 namespace HPGTP {
 
@@ -804,7 +805,8 @@ void App::watchdog_loop() {
 
         // Device policy sync
         if (Config::DEVICE_POLICY_DIRTY.exchange(false, std::memory_order_acq_rel)) {
-            if (firewall_engine) firewall_engine->sync_blocked_ips();
+            const std::lock_guard<std::mutex> plk(Config::device_policy_mutex);
+            if (firewall_engine) firewall_engine->sync_blocked_ips_locked();
 
             auto rebuild_device_shaper = [&](std::shared_ptr<QoSConfig>& cfg_ptr, bool use_dl) {
                 if (!cfg_ptr) return;

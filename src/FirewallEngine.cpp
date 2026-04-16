@@ -1,4 +1,5 @@
 #include "FirewallEngine.hpp"
+#include <mutex>
 #include <netinet/in.h>
 
 namespace HPGTP::Logic {
@@ -30,13 +31,18 @@ bool FirewallEngine::is_expired(const ConnTrackEntry& e) const {
 
 void FirewallEngine::tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
 
-void FirewallEngine::sync_blocked_ips() {
+void FirewallEngine::sync_blocked_ips_locked() {
     uint8_t cnt = 0;
     for (size_t i = 0; i < Config::DEVICE_POLICY_COUNT && cnt < MAX_BLOCKED; ++i) {
         if (Config::DEVICE_POLICY_TABLE[i].blocked)
             blocked_ips[cnt++] = Config::DEVICE_POLICY_TABLE[i].ip;
     }
     blocked_count.store(cnt, std::memory_order_release);
+}
+
+void FirewallEngine::sync_blocked_ips() {
+    std::lock_guard<std::mutex> lk(Config::device_policy_mutex);
+    sync_blocked_ips_locked();
 }
 
 bool FirewallEngine::is_blocked_ip(Net::IPv4Net ip) const {

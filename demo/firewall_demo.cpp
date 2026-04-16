@@ -1,9 +1,11 @@
 // firewall_demo: verify conntrack state machine and blocked-IP enforcement
+// Single-process demo; do not run alongside a live router instance (global Config).
 //
 // Build: make firewall_demo
 // Run:   ./firewall_demo   (no root required)
 #include "FirewallEngine.hpp"
 #include "Headers.hpp"
+#include "Config.hpp"
 
 namespace Net = HPGTP::Net;
 
@@ -73,10 +75,10 @@ int main() {
     // ── 4. Blocked IP enforcement ─────────────────────────────────────────────
     {
         const Net::IPv4Net bad_ip{htonl(0xC0A801FE)};  // 192.168.1.254
-        // Inject one blocked entry directly via Config
-        HPGTP::Config::DEVICE_POLICY_TABLE[0].ip      = bad_ip;
-        HPGTP::Config::DEVICE_POLICY_TABLE[0].blocked = true;
-        HPGTP::Config::DEVICE_POLICY_COUNT             = 1;
+        HPGTP::Config::DevicePolicy pol{};
+        pol.ip      = bad_ip;
+        pol.blocked = true;
+        HPGTP::Config::upsert_device_policy(pol);
         fw.sync_blocked_ips();
 
         assert(fw.is_blocked_ip(bad_ip) && "Bad IP must be in block list");
