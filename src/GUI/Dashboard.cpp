@@ -2083,6 +2083,7 @@ Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("High-Performance Gaming Traffic Prioritizer");
     setStyleSheet(DARK_STYLESHEET);
     setup_ui();
+    run_page_enter_refresh(0);
     ui_timer_id_   = startTimer(16, Qt::PreciseTimer); // 60Hz: spring, badge, selftest overlay
     plot_timer_id_ = startTimer(40, Qt::PreciseTimer); // 25Hz: plots, header rates, page data
     qApp->installEventFilter(this); // global: 15% pull zone + mid-animation interrupt
@@ -2343,10 +2344,20 @@ void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
     root_layout->addWidget(bar);
 }
 
+void Dashboard::run_page_enter_refresh(int page_index) {
+    switch (page_index) {
+    case 0: page_overview->sync_bridge_mode_from_config(); break;
+    case 1: page_interfaces->refresh_from_backend(); break;
+    case 2: page_qos->refresh_from_backend(); break;
+    case 3: page_services->refresh_status(); break;
+    case 4: page_devices->refresh(); break;
+    default: break;
+    }
+}
+
 void Dashboard::on_tab_clicked(int page_index) {
     page_stack->setCurrentIndex(page_index);
-    if (page_index == 2) page_qos->refresh_whitelist_from_config();
-    if (page_index == 4) page_devices->refresh();
+    run_page_enter_refresh(page_index);
 }
 
 
