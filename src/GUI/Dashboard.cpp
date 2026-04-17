@@ -464,7 +464,20 @@ void OverviewPage::refresh(const Telemetry& tel, const std::array<uint64_t, 4>& 
     pps_plot->update();
     bps_plot->update();
 
-    lbl_mode->setText(tel.bridge_mode.load(std::memory_order_relaxed) ? "Mode: Bridge" : "Mode: Acceleration");
+    bool bridge = tel.bridge_mode.load(std::memory_order_relaxed);
+    lbl_mode->setText(bridge ? "Mode: Bridge" : "Mode: Acceleration");
+    lbl_mode->setStyleSheet(bridge
+        ? "color: #ffaa00; font-weight: bold; font-size: 15px;"
+        : "color: #00cc66; font-weight: bold; font-size: 15px;");
+}
+
+void OverviewPage::sync_bridge_mode_from_config() {
+    bool accel = Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed);
+    Telemetry::instance().bridge_mode.store(!accel, std::memory_order_relaxed);
+    lbl_mode->setText(accel ? "Mode: Acceleration" : "Mode: Bridge");
+    lbl_mode->setStyleSheet(accel
+        ? "color: #00cc66; font-weight: bold; font-size: 15px;"
+        : "color: #ffaa00; font-weight: bold; font-size: 15px;");
 }
 
 // ═════════════════════════════════════════════════════════════
