@@ -670,8 +670,6 @@ void InterfacePage::on_save_clicked() {
 
     Config::ENABLE_STP.store(sw_stp->isChecked(), std::memory_order_relaxed);
     Config::ENABLE_IGMP_SNOOPING.store(sw_igmp->isChecked(), std::memory_order_relaxed);
-    Config::ENABLE_ACCELERATION.store(true, std::memory_order_relaxed);
-    Telemetry::instance().bridge_mode.store(false, std::memory_order_relaxed);
 
     std::println("[GUI] Interface roles saved. Gateway: {}, LAN interfaces: {}",
         Config::IFACE_GATEWAY, Config::BRIDGED_IFACES_COUNT);
