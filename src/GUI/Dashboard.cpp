@@ -843,6 +843,25 @@ void QosPage::refresh_whitelist_from_config() {
     whitelist_table->setMinimumHeight(header_h + rows_h + 4);
 }
 
+void QosPage::refresh_from_backend() {
+    refresh_whitelist_from_config();
+    {
+        QSignalBlocker b(*sw_acceleration);
+        sw_acceleration->setChecked(Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed));
+    }
+    double dl = Telemetry::instance().qos_global_dl_mbps_pending.load(std::memory_order_relaxed);
+    double ul = Telemetry::instance().qos_global_ul_mbps_pending.load(std::memory_order_relaxed);
+    edit_dl_limit->setText(QString::number(dl, 'g', 12));
+    edit_ul_limit->setText(QString::number(ul, 'g', 12));
+    int pct = Telemetry::instance().qos_throttle_pct.load(std::memory_order_relaxed);
+    pct = std::clamp(pct, 0, 100);
+    {
+        QSignalBlocker b(*throttle_slider);
+        throttle_slider->setValue(pct);
+    }
+    lbl_throttle->setText(QString("%1%").arg(pct));
+}
+
 bool QosPage::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::MouseButtonPress) {
         if (watched == edit_dl_limit) {
