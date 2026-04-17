@@ -764,15 +764,21 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     auto* slider_row = new QHBoxLayout();
     slider_row->addWidget(new QLabel("0%"));
     slider_row->addStretch();
-    lbl_throttle = new QLabel("100%");
+    lbl_throttle = new QLabel("0%");
     slider_row->addWidget(lbl_throttle);
 
     throttle_slider = new QSlider(Qt::Horizontal);
     throttle_slider->setRange(0, 100);
-    throttle_slider->setValue(Telemetry::instance().qos_throttle_pct.load(std::memory_order_relaxed));
+    {
+        int init_pct = Telemetry::instance().qos_throttle_pct.load(std::memory_order_relaxed);
+        init_pct = std::clamp(init_pct, 0, 100);
+        throttle_slider->setValue(init_pct);
+        lbl_throttle->setText(QString("%1%").arg(init_pct));
+    }
     throttle_slider->setTickInterval(10);
     throttle_slider->setTickPosition(QSlider::TicksBelow);
-    connect(throttle_slider, &QSlider::valueChanged, this, &QosPage::on_throttle_changed);
+    connect(throttle_slider, &QSlider::valueChanged, this, &QosPage::on_throttle_label_only);
+    connect(throttle_slider, &QSlider::sliderReleased, this, &QosPage::on_throttle_committed);
 
     throttle_lay->addWidget(throttle_slider);
     throttle_lay->addLayout(slider_row);
@@ -1349,9 +1355,13 @@ void QosPage::on_edit_whitelist() {
     QTimer::singleShot(1200, this, [this]() { refresh_whitelist_from_config(); });
 }
 
-void QosPage::on_throttle_changed(int value_pct) {
-    Telemetry::instance().qos_throttle_pct.store(value_pct, std::memory_order_relaxed);
+void QosPage::on_throttle_label_only(int value_pct) {
     lbl_throttle->setText(QString("%1%").arg(value_pct));
+}
+
+void QosPage::on_throttle_committed() {
+    int value_pct = throttle_slider->value();
+    Telemetry::instance().qos_throttle_pct.store(value_pct, std::memory_order_relaxed);
 }
 
 
