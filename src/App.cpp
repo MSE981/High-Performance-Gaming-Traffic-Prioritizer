@@ -239,7 +239,7 @@ public:
         self.stats.bytes += pkt.raw_span.size();
         self.stats.prio_pkts[pi]++;
         self.stats.prio_bytes[pi] += pkt.raw_span.size();
-        size_t mode = Telemetry::instance().bridge_mode.load(std::memory_order_relaxed);
+        size_t mode = Telemetry::instance().effective_bridge_mode.load(std::memory_order_acquire) ? 1U : 0U;
         self.routes[mode][pi](self.ctx, pkt.raw_span, pi, self.core_id);
         return true;
     }
@@ -379,17 +379,43 @@ std::expected<void, std::string> App::init() {
 
 void App::start() {
     std::println("=== High-performance gaming traffic prioritizer (software router) ===");
-    Telemetry::instance().bridge_mode.store(
-        !Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed),
-        std::memory_order_relaxed);
+    auto& tel = Telemetry::instance();
+    const bool accel = Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed);
+    tel.acceleration_pending.store(accel, std::memory_order_relaxed);
+    tel.mode_config_dirty.store(false, std::memory_order_relaxed);
+    tel.effective_acceleration.store(accel, std::memory_order_release);
+    tel.effective_bridge_mode.store(!accel, std::memory_order_release);
+    tel.bridge_mode.store(!accel, std::memory_order_relaxed);
+    {
+        std::array<Config::StaticDnsRecord, Config::MAX_STATIC_DNS> dns_snapshot{};
+        size_t dns_count =
+            Config::copy_static_dns_snapshot(dns_snapshot.data(), dns_snapshot.size());
+        std::lock_guard<std::mutex> lock(tel.dns_pending_mutex);
+        tel.dns_upstream_primary_pending = Config::DNS_UPSTREAM_PRIMARY;
+        tel.dns_upstream_secondary_pending = Config::DNS_UPSTREAM_SECONDARY;
+        tel.dns_redirect_pending =
+            Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed);
+        tel.dns_static_pending_count = dns_count;
+        for (size_t i = 0; i < dns_count; ++i) {
+            std::strncpy(
+                tel.dns_static_pending[i].hostname.data(),
+                dns_snapshot[i].hostname.data(), 63);
+            tel.dns_static_pending[i].hostname[63] = '\0';
+            std::string ip = Config::ip_to_str(dns_snapshot[i].ip);
+            std::strncpy(tel.dns_static_pending[i].ip_str.data(), ip.c_str(), 15);
+            tel.dns_static_pending[i].ip_str[15] = '\0';
+        }
+    }
     HPGTP::System::Optimizer::lock_cpu_frequency();
 
     int fd_wan = iface_wan->get_fd();
     int fd_lan = iface_lan->get_fd();
     lan_fd_ = fd_lan;
 
-    base_dl_mbps = Telemetry::instance().qos_global_dl_mbps_pending.load(std::memory_order_relaxed);
-    base_ul_mbps = Telemetry::instance().qos_global_ul_mbps_pending.load(std::memory_order_relaxed);
+    base_dl_mbps = tel.qos_global_dl_mbps_pending.load(std::memory_order_relaxed);
+    base_ul_mbps = tel.qos_global_ul_mbps_pending.load(std::memory_order_relaxed);
+    tel.effective_qos_global_dl_mbps.store(base_dl_mbps, std::memory_order_release);
+    tel.effective_qos_global_ul_mbps.store(base_ul_mbps, std::memory_order_release);
     global_shaper_dl = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_dl_mbps});
     global_shaper_ul = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_ul_mbps});
 
@@ -831,13 +857,23 @@ void App::watchdog_loop() {
         if (force_scan && !did_iface_scan) scan_ifaces();
         if (force_scan) si.signal_done();
 
+        // Mode sync (GUI pending -> control-plane apply)
+        if (tel.mode_config_dirty.exchange(false, std::memory_order_acq_rel)) {
+            bool accel_on = tel.acceleration_pending.load(std::memory_order_relaxed);
+            Config::ENABLE_ACCELERATION.store(accel_on, std::memory_order_relaxed);
+            tel.effective_acceleration.store(accel_on, std::memory_order_release);
+            tel.effective_bridge_mode.store(!accel_on, std::memory_order_release);
+            tel.bridge_mode.store(!accel_on, std::memory_order_relaxed);
+            std::println("[Mode] Applied: {}", accel_on ? "Acceleration" : "Bridge");
+        }
+
         // Bandwidth (1 Hz)
         uint64_t bd = tel.core_metrics[2].bytes.load(std::memory_order_relaxed);
         uint64_t bu = tel.core_metrics[3].bytes.load(std::memory_order_relaxed);
         std::println("[Monitor] DL: {:.2f} Mbps | UL: {:.2f} Mbps | Mode: {}",
             (bd - last_bytes[2]) * 8.0 / 1e6,
             (bu - last_bytes[3]) * 8.0 / 1e6,
-            tel.bridge_mode.load(std::memory_order_relaxed) ? "Bridge" : "Accel");
+            tel.effective_bridge_mode.load(std::memory_order_acquire) ? "Bridge" : "Accel");
         last_bytes[2] = bd;
         last_bytes[3] = bu;
 
@@ -871,16 +907,47 @@ void App::watchdog_loop() {
 
         // DNS config sync
         if (dns_engine && tel.dns_config_dirty.exchange(false, std::memory_order_acq_rel)) {
+            std::string dns_primary;
+            std::string dns_secondary;
+            bool dns_redirect = false;
+            std::array<Telemetry::DnsPendingRecord, Config::MAX_STATIC_DNS> dns_records{};
+            size_t dns_record_count = 0;
+            {
+                std::lock_guard<std::mutex> lock(tel.dns_pending_mutex);
+                dns_primary = tel.dns_upstream_primary_pending;
+                dns_secondary = tel.dns_upstream_secondary_pending;
+                dns_redirect = tel.dns_redirect_pending;
+                dns_record_count =
+                    std::min(tel.dns_static_pending_count, dns_records.size());
+                for (size_t i = 0; i < dns_record_count; ++i)
+                    dns_records[i] = tel.dns_static_pending[i];
+            }
+
+            std::array<Config::StaticDnsRecord, Config::MAX_STATIC_DNS> dns_snapshot{};
+            for (size_t i = 0; i < dns_record_count; ++i) {
+                dns_snapshot[i].domain_hash =
+                    Config::dns_hash_hostname(dns_records[i].hostname.data());
+                dns_snapshot[i].ip = Config::parse_ip_str(dns_records[i].ip_str.data());
+                std::strncpy(
+                    dns_snapshot[i].hostname.data(),
+                    dns_records[i].hostname.data(), 63);
+                dns_snapshot[i].hostname[63] = '\0';
+            }
+
+            Config::DNS_UPSTREAM_PRIMARY = dns_primary;
+            Config::DNS_UPSTREAM_SECONDARY = dns_secondary;
+            Config::DNS_REDIRECT_ENABLED.store(dns_redirect, std::memory_order_relaxed);
+            Config::apply_static_dns_snapshot(dns_snapshot.data(), dns_record_count);
+
             dns_engine->set_upstream({
                 Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY),
                 Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY)});
-            dns_engine->set_redirect(
-                Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
+            dns_engine->set_redirect(dns_redirect);
             dns_engine->reload_static_records();
             std::println("[DNS] Config applied: upstream {} / {}, redirect={}, static={}",
                 Config::DNS_UPSTREAM_PRIMARY, Config::DNS_UPSTREAM_SECONDARY,
-                Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed) ? "on":"off",
-                Config::STATIC_DNS_COUNT);
+                dns_redirect ? "on":"off",
+                dns_record_count);
         }
 
         // DHCP config sync
@@ -908,6 +975,8 @@ void App::watchdog_loop() {
         if (tel.qos_global_bw_dirty.exchange(false, std::memory_order_acq_rel)) {
             base_dl_mbps = tel.qos_global_dl_mbps_pending.load(std::memory_order_relaxed);
             base_ul_mbps = tel.qos_global_ul_mbps_pending.load(std::memory_order_relaxed);
+            tel.effective_qos_global_dl_mbps.store(base_dl_mbps, std::memory_order_release);
+            tel.effective_qos_global_ul_mbps.store(base_ul_mbps, std::memory_order_release);
             int pct = tel.qos_throttle_pct.load(std::memory_order_relaxed);
             double factor = pct / 100.0;
             if (global_shaper_dl)

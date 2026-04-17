@@ -91,6 +91,7 @@ namespace HPGTP::Config {
         Net::IPv4Net  ip{};
         std::array<char, 64> hostname{};
     };
+    inline std::mutex static_dns_mutex;
     inline std::array<StaticDnsRecord, MAX_STATIC_DNS> STATIC_DNS_TABLE{};
     inline size_t STATIC_DNS_COUNT = 0;
 
@@ -284,8 +285,8 @@ namespace HPGTP::Config {
             v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF);
     }
 
-    // Insert or update a static DNS record (called by GUI)
-    inline void upsert_static_dns(const std::string& hostname, const std::string& ip_str) {
+    // Insert or update a static DNS record (callers must hold static_dns_mutex)
+    inline void upsert_static_dns_unlocked(const std::string& hostname, const std::string& ip_str) {
         uint32_t     hash = dns_hash_hostname(hostname);
         Net::IPv4Net ip   = parse_ip_str(ip_str);
         for (size_t i = 0; i < STATIC_DNS_COUNT; ++i) {
@@ -303,6 +304,34 @@ namespace HPGTP::Config {
             strncpy(e.hostname.data(), hostname.c_str(), 63);
             e.hostname[63] = '\0';
         }
+    }
+
+    inline void clear_static_dns_records() {
+        std::lock_guard<std::mutex> lock(static_dns_mutex);
+        STATIC_DNS_COUNT = 0;
+    }
+
+    // Insert or update a static DNS record.
+    inline void upsert_static_dns(const std::string& hostname, const std::string& ip_str) {
+        std::lock_guard<std::mutex> lock(static_dns_mutex);
+        upsert_static_dns_unlocked(hostname, ip_str);
+    }
+
+    inline void apply_static_dns_snapshot(const StaticDnsRecord* records, size_t count) {
+        std::lock_guard<std::mutex> lock(static_dns_mutex);
+        STATIC_DNS_COUNT = 0;
+        const size_t n = count < MAX_STATIC_DNS ? count : MAX_STATIC_DNS;
+        for (size_t i = 0; i < n; ++i) {
+            STATIC_DNS_TABLE[i] = records[i];
+        }
+        STATIC_DNS_COUNT = n;
+    }
+
+    inline size_t copy_static_dns_snapshot(StaticDnsRecord* out, size_t max_out) {
+        std::lock_guard<std::mutex> lock(static_dns_mutex);
+        const size_t c = STATIC_DNS_COUNT < max_out ? STATIC_DNS_COUNT : max_out;
+        for (size_t i = 0; i < c; ++i) out[i] = STATIC_DNS_TABLE[i];
+        return c;
     }
 
     // Load / save — implementations in Config.cpp (hide POSIX fd I/O from clients)

@@ -121,7 +121,6 @@ public:
     explicit OverviewPage(QWidget* parent = nullptr);
     void refresh(const Telemetry& tel, const std::array<uint64_t, 4>& last_pkts, const std::array<uint64_t, 4>& last_bytes);
     void refresh_info();
-    void sync_bridge_mode_from_config();
 private:
     // Overview section
     RealTimePlot* pps_plot;

@@ -138,7 +138,7 @@ std::expected<void, std::string> load_config(const std::string& path) {
                 else if (!strcmp(key, "DNS_REDIRECT_ENABLED")) DNS_REDIRECT_ENABLED.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                 else if (!strcmp(key, "STATIC_DNS")) {
                     char* colon = strchr(val, ':');
-                    if (colon && STATIC_DNS_COUNT < MAX_STATIC_DNS) {
+                    if (colon) {
                         *colon = '\0';
                         upsert_static_dns(val, colon + 1);
                     }
@@ -249,10 +249,12 @@ std::expected<void, std::string> save_config(const std::string& path) {
     dprintf(fd, "DNS_UPSTREAM_PRIMARY=%s\n",   DNS_UPSTREAM_PRIMARY.c_str());
     dprintf(fd, "DNS_UPSTREAM_SECONDARY=%s\n", DNS_UPSTREAM_SECONDARY.c_str());
     dprintf(fd, "DNS_REDIRECT_ENABLED=%s\n",   b(DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed)));
-    for (size_t i = 0; i < STATIC_DNS_COUNT; ++i) {
-        uint32_t ip = STATIC_DNS_TABLE[i].ip.raw();
+    std::array<StaticDnsRecord, MAX_STATIC_DNS> dns_snapshot{};
+    size_t dns_count = copy_static_dns_snapshot(dns_snapshot.data(), dns_snapshot.size());
+    for (size_t i = 0; i < dns_count; ++i) {
+        uint32_t ip = dns_snapshot[i].ip.raw();
         dprintf(fd, "STATIC_DNS=%s:%u.%u.%u.%u\n",
-            STATIC_DNS_TABLE[i].hostname.data(),
+            dns_snapshot[i].hostname.data(),
             ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF);
     }
     for (size_t i = 0; i < IP_LIMIT_COUNT; ++i) {

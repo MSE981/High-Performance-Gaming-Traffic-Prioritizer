@@ -464,20 +464,11 @@ void OverviewPage::refresh(const Telemetry& tel, const std::array<uint64_t, 4>& 
     pps_plot->update();
     bps_plot->update();
 
-    bool bridge = tel.bridge_mode.load(std::memory_order_relaxed);
+    bool bridge = tel.effective_bridge_mode.load(std::memory_order_acquire);
     lbl_mode->setText(bridge ? "Mode: Bridge" : "Mode: Acceleration");
     lbl_mode->setStyleSheet(bridge
         ? "color: #ffaa00; font-weight: bold; font-size: 15px;"
         : "color: #00cc66; font-weight: bold; font-size: 15px;");
-}
-
-void OverviewPage::sync_bridge_mode_from_config() {
-    bool accel = Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed);
-    Telemetry::instance().bridge_mode.store(!accel, std::memory_order_relaxed);
-    lbl_mode->setText(accel ? "Mode: Acceleration" : "Mode: Bridge");
-    lbl_mode->setStyleSheet(accel
-        ? "color: #00cc66; font-weight: bold; font-size: 15px;"
-        : "color: #ffaa00; font-weight: bold; font-size: 15px;");
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -711,7 +702,8 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
         lbl_accel->setWordWrap(true);
         lbl_accel->setStyleSheet("font-size: 15px; color: #e0e0e0;");
         sw_acceleration = new SwitchToggle();
-        sw_acceleration->setChecked(Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed));
+        sw_acceleration->setChecked(
+            Telemetry::instance().effective_acceleration.load(std::memory_order_acquire));
         connect(sw_acceleration, &SwitchToggle::toggled, this, &QosPage::on_toggle_accel);
         accel_row->addWidget(lbl_accel, 1);
         accel_row->addWidget(sw_acceleration, 0, Qt::AlignVCenter);
@@ -845,7 +837,8 @@ void QosPage::refresh_from_backend() {
     refresh_whitelist_from_config();
     {
         QSignalBlocker b(*sw_acceleration);
-        sw_acceleration->setChecked(Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed));
+        sw_acceleration->setChecked(
+            Telemetry::instance().effective_acceleration.load(std::memory_order_acquire));
     }
     double dl = Telemetry::instance().qos_global_dl_mbps_pending.load(std::memory_order_relaxed);
     double ul = Telemetry::instance().qos_global_ul_mbps_pending.load(std::memory_order_relaxed);
@@ -918,9 +911,10 @@ void QosPage::on_apply_global_bw() {
 
 void QosPage::on_toggle_accel() {
     bool on = sw_acceleration->isChecked();
-    Config::ENABLE_ACCELERATION.store(on, std::memory_order_relaxed);
-    Telemetry::instance().bridge_mode.store(!on, std::memory_order_relaxed);
-    std::println("[GUI] Acceleration mode: {}", on ? "ON" : "OFF");
+    auto& tel = Telemetry::instance();
+    tel.acceleration_pending.store(on, std::memory_order_relaxed);
+    tel.mode_config_dirty.store(true, std::memory_order_release);
+    std::println("[GUI] Pending acceleration mode: {}", on ? "ON" : "OFF");
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -1562,6 +1556,22 @@ void DhcpConfigDialog::on_apply() {
 // DnsConfigDialog
 // ═════════════════════════════════════════════════════════════
 DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
+    auto& tel = Telemetry::instance();
+    std::string dns_primary;
+    std::string dns_secondary;
+    bool dns_redirect = false;
+    std::array<Telemetry::DnsPendingRecord, 64> dns_records{};
+    size_t dns_record_count = 0;
+    {
+        std::lock_guard<std::mutex> lock(tel.dns_pending_mutex);
+        dns_primary = tel.dns_upstream_primary_pending;
+        dns_secondary = tel.dns_upstream_secondary_pending;
+        dns_redirect = tel.dns_redirect_pending;
+        dns_record_count = std::min(tel.dns_static_pending_count, dns_records.size());
+        for (size_t i = 0; i < dns_record_count; ++i)
+            dns_records[i] = tel.dns_static_pending[i];
+    }
+
     setWindowTitle("DNS Configuration");
     setMinimumSize(720, 900);
     auto* layout = new QVBoxLayout(this);
@@ -1577,14 +1587,14 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
             R"(^((25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$)"),
         this);
 
-    edit_dns_primary = new QLineEdit(QString::fromStdString(Config::DNS_UPSTREAM_PRIMARY));
+    edit_dns_primary = new QLineEdit(QString::fromStdString(dns_primary));
     edit_dns_primary->setValidator(dns_ip_validator1);
     edit_dns_primary->setReadOnly(true);
     edit_dns_primary->setPlaceholderText("Tap to enter (keypad)");
     edit_dns_primary->installEventFilter(this);
     form->addRow("Primary DNS:", edit_dns_primary);
 
-    edit_dns_secondary = new QLineEdit(QString::fromStdString(Config::DNS_UPSTREAM_SECONDARY));
+    edit_dns_secondary = new QLineEdit(QString::fromStdString(dns_secondary));
     edit_dns_secondary->setValidator(dns_ip_validator2);
     edit_dns_secondary->setReadOnly(true);
     edit_dns_secondary->setPlaceholderText("Optional — tap to set");
@@ -1604,7 +1614,7 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
     lbl_redirect->setWordWrap(true);
     lbl_redirect->setStyleSheet("color: #e0e0e0;");
     sw_dns_redirect = new SwitchToggle();
-    sw_dns_redirect->setChecked(Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
+    sw_dns_redirect->setChecked(dns_redirect);
     sw_dns_redirect->setToolTip("When enabled, all LAN DNS queries (UDP 53) are forwarded to the configured upstream server");
     redirect_row->addWidget(lbl_redirect, 1);
     redirect_row->addWidget(sw_dns_redirect, 0, Qt::AlignVCenter);
@@ -1644,17 +1654,13 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
             }
         });
 
-    for (size_t i = 0; i < Config::STATIC_DNS_COUNT; ++i) {
+    for (size_t i = 0; i < dns_record_count; ++i) {
         int row = static_dns_table->rowCount();
         static_dns_table->insertRow(row);
         static_dns_table->setItem(row, 0, new QTableWidgetItem(
-            QString::fromLatin1(Config::STATIC_DNS_TABLE[i].hostname.data())));
-        Net::IPv4Net ip = Config::STATIC_DNS_TABLE[i].ip;
-        const uint32_t r = ip.raw();
+            QString::fromLatin1(dns_records[i].hostname.data())));
         static_dns_table->setItem(row, 1, new QTableWidgetItem(
-            QString("%1.%2.%3.%4")
-                .arg((r >> 24) & 0xFF).arg((r >> 16) & 0xFF)
-                .arg((r >> 8) & 0xFF).arg(r & 0xFF)));
+            QString::fromLatin1(dns_records[i].ip_str.data())));
     }
     form->addRow(static_dns_table);
 
@@ -1706,11 +1712,8 @@ void DnsConfigDialog::on_apply() {
     }
     edit_dns_secondary->setStyleSheet("");
 
-    Config::DNS_UPSTREAM_PRIMARY   = edit_dns_primary->text().toStdString();
-    Config::DNS_UPSTREAM_SECONDARY = edit_dns_secondary->text().toStdString();
-    Config::DNS_REDIRECT_ENABLED.store(sw_dns_redirect->isChecked(), std::memory_order_relaxed);
-
-    Config::STATIC_DNS_COUNT = 0;
+    std::array<Telemetry::DnsPendingRecord, 64> dns_records{};
+    size_t dns_record_count = 0;
     for (int i = 0; i < static_dns_table->rowCount(); ++i) {
         auto* host_item = static_dns_table->item(i, 0);
         auto* ip_item   = static_dns_table->item(i, 1);
@@ -1718,13 +1721,29 @@ void DnsConfigDialog::on_apply() {
         std::string hostname = host_item->text().trimmed().toStdString();
         std::string ip_str   = ip_item->text().trimmed().toStdString();
         if (hostname.empty() || ip_str.empty()) continue;
-        Config::upsert_static_dns(hostname, ip_str);
+        if (dns_record_count >= dns_records.size()) break;
+        std::strncpy(dns_records[dns_record_count].hostname.data(), hostname.c_str(), 63);
+        dns_records[dns_record_count].hostname[63] = '\0';
+        std::strncpy(dns_records[dns_record_count].ip_str.data(), ip_str.c_str(), 15);
+        dns_records[dns_record_count].ip_str[15] = '\0';
+        ++dns_record_count;
     }
 
-    Telemetry::instance().dns_config_dirty.store(true, std::memory_order_release);
+    auto& tel = Telemetry::instance();
+    {
+        std::lock_guard<std::mutex> lock(tel.dns_pending_mutex);
+        tel.dns_upstream_primary_pending = edit_dns_primary->text().toStdString();
+        tel.dns_upstream_secondary_pending = edit_dns_secondary->text().toStdString();
+        tel.dns_redirect_pending = sw_dns_redirect->isChecked();
+        tel.dns_static_pending_count = dns_record_count;
+        for (size_t i = 0; i < dns_record_count; ++i)
+            tel.dns_static_pending[i] = dns_records[i];
+    }
+    tel.dns_config_dirty.store(true, std::memory_order_release);
     std::println("[GUI] DNS config updated: upstream {}→{}, redirect={}, static={} records",
-        Config::DNS_UPSTREAM_PRIMARY, Config::DNS_UPSTREAM_SECONDARY,
-        sw_dns_redirect->isChecked(), Config::STATIC_DNS_COUNT);
+        edit_dns_primary->text().toStdString(),
+        edit_dns_secondary->text().toStdString(),
+        sw_dns_redirect->isChecked(), dns_record_count);
     accept();
 }
 
@@ -2344,7 +2363,7 @@ void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
 
 void Dashboard::run_page_enter_refresh(int page_index) {
     switch (page_index) {
-    case 0: page_overview->sync_bridge_mode_from_config(); break;
+    case 0: break;
     case 1: page_interfaces->refresh_from_backend(); break;
     case 2: page_qos->refresh_from_backend(); break;
     case 3: page_services->refresh_status(); break;
