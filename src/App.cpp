@@ -359,7 +359,7 @@ void App::stop() {
     if (worker_downstream.joinable()) worker_downstream.join();
     if (worker_upstream.joinable()) worker_upstream.join();
     close_worker_poll_fds();
-    running_watchdog.store(false, std::memory_order_relaxed);
+    running_watchdog.store(false, std::memory_order_release);
     wake_watchdog_for_shutdown();
     if (watchdog.joinable()) watchdog.join();
     close_watchdog_stop_efd();
@@ -637,7 +637,7 @@ void App::watchdog_loop() {
         si.iface_count.store(cnt, std::memory_order_release);
     };
 
-    while (running_watchdog.load(std::memory_order_relaxed)) {
+    while (running_watchdog.load(std::memory_order_acquire)) {
         const int rescan_fd = si.rescan_poll_fd();
         struct pollfd pfds[3]{};
         pfds[0] = { tfd, POLLIN, 0 };
