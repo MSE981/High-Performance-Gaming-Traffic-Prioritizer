@@ -723,8 +723,12 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     // Bandwidth limit
     auto* bw_group = new QGroupBox("Global Bandwidth Limits");
     auto* bw_form = new QFormLayout(bw_group);
-    edit_dl_limit = new QLineEdit("500");
-    edit_ul_limit = new QLineEdit("50");
+    {
+        double idl = Telemetry::instance().qos_global_dl_mbps_pending.load(std::memory_order_relaxed);
+        double iul = Telemetry::instance().qos_global_ul_mbps_pending.load(std::memory_order_relaxed);
+        edit_dl_limit = new QLineEdit(QString::number(idl, 'g', 12));
+        edit_ul_limit = new QLineEdit(QString::number(iul, 'g', 12));
+    }
     edit_dl_limit->setReadOnly(true);
     edit_ul_limit->setReadOnly(true);
     {
