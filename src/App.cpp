@@ -1,5 +1,6 @@
 #include "App.hpp"
 #include "DataPlane.hpp"
+#include "GUI/Dashboard.hpp"
 // POSIX C headers — visible only in this translation unit, hidden from all
 // clients that include App.hpp.
 #include <sys/socket.h>
@@ -749,6 +750,22 @@ void App::watchdog_loop() {
         // System info refresh every 5 ticks (5 s)
         bool did_iface_scan = false;
         ++watchdog_tick;
+
+        // First tick: report UPnP bind errors to GUI
+        if (watchdog_tick == 1 && upnp_engine) {
+            uint8_t errs = upnp_engine->bind_errors.load(std::memory_order_relaxed);
+            if (errs) {
+                const char* detail =
+                    (errs & 3) == 3 ? "SSDP (1900) and SOAP (5000)" :
+                    (errs & 1)      ? "SSDP (1900)" :
+                    (errs & 2)      ? "SOAP (5000)" : "SOAP listen";
+                GUI::Dashboard::post_notification(
+                    QStringLiteral("UPnP"),
+                    QStringLiteral("Port bind failed: %1. UPnP is partially disabled.")
+                        .arg(detail));
+            }
+        }
+
         if (watchdog_tick % 5 == 0) {
             read_sysfd("/etc/hostname",   std::span<char>(si.hostname));
             read_sysfd("/proc/version",   std::span<char>(si.kernel_short));

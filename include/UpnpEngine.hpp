@@ -35,6 +35,9 @@ namespace HPGTP::Logic {
         void dispatch_soap_http(int cfd, std::string_view req);
 
     public:
+        // Bit 0 = SSDP bind failed, Bit 1 = SOAP bind failed, Bit 2 = SOAP listen failed
+        std::atomic<uint8_t> bind_errors{0};
+
         UpnpEngine(std::shared_ptr<NatEngine> nat, const std::string& ip);
         ~UpnpEngine();
     };
