@@ -219,6 +219,7 @@ namespace HPGTP::Config {
     inline std::array<DevicePolicy, MAX_DEVICE_POLICIES> DEVICE_POLICY_TABLE{};
     inline size_t DEVICE_POLICY_COUNT = 0;
     inline std::atomic<bool> DEVICE_POLICY_DIRTY{false};
+    inline std::atomic<uint64_t> DEVICE_POLICY_REVISION{0};
     inline std::mutex        device_policy_mutex;
 
     inline void upsert_device_policy(const DevicePolicy& policy) {
@@ -226,11 +227,14 @@ namespace HPGTP::Config {
         for (size_t i = 0; i < DEVICE_POLICY_COUNT; ++i) {
             if (DEVICE_POLICY_TABLE[i].ip == policy.ip) {
                 DEVICE_POLICY_TABLE[i] = policy;
+                DEVICE_POLICY_REVISION.fetch_add(1, std::memory_order_release);
                 return;
             }
         }
-        if (DEVICE_POLICY_COUNT < MAX_DEVICE_POLICIES)
+        if (DEVICE_POLICY_COUNT < MAX_DEVICE_POLICIES) {
             DEVICE_POLICY_TABLE[DEVICE_POLICY_COUNT++] = policy;
+            DEVICE_POLICY_REVISION.fetch_add(1, std::memory_order_release);
+        }
     }
 
     // Static IP rate limit table (max 256 entries, zero heap allocation)
