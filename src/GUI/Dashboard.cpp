@@ -2554,10 +2554,6 @@ void Dashboard::timerEvent(QTimerEvent* event) {
     if (plot_tick_ % 25 == 0)
         page_overview->refresh_info();
 
-    // Sync service page status indicators if visible
-    if (page_stack->currentIndex() == 3)
-        page_services->refresh_status();
-
     // Refresh device list if visible (checks device_count change internally, cheap if no change)
     if (page_stack->currentIndex() == 4)
         page_devices->refresh();
