@@ -1920,8 +1920,10 @@ DevicePage::DevicePage(QWidget* parent) : QWidget(parent) {
 void DevicePage::refresh() {
     auto& tel = Telemetry::instance();
     uint8_t cnt = tel.device_count.load(std::memory_order_acquire);
-    if (cnt == last_device_count) return;
+    uint64_t rev = Config::DEVICE_POLICY_REVISION.load(std::memory_order_acquire);
+    if (cnt == last_device_count && rev == last_device_policy_revision_) return;
     last_device_count = cnt;
+    last_device_policy_revision_ = rev;
 
     // Remove all existing cards (leave trailing stretch)
     rows_.clear();
