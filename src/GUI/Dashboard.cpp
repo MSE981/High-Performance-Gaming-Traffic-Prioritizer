@@ -635,6 +635,16 @@ void InterfacePage::on_role_changed(const QString& iface, int index) {
     }
 }
 
+void InterfacePage::refresh_from_backend() {
+    scan_interfaces();
+    {
+        QSignalBlocker b1(*sw_stp);
+        QSignalBlocker b2(*sw_igmp);
+        sw_stp->setChecked(Config::ENABLE_STP.load(std::memory_order_relaxed));
+        sw_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed));
+    }
+}
+
 void InterfacePage::on_save_clicked() {
     int gw_count = 0;
     std::string gw_iface;
@@ -661,7 +671,7 @@ void InterfacePage::on_save_clicked() {
     Config::ENABLE_STP.store(sw_stp->isChecked(), std::memory_order_relaxed);
     Config::ENABLE_IGMP_SNOOPING.store(sw_igmp->isChecked(), std::memory_order_relaxed);
     Config::ENABLE_ACCELERATION.store(true, std::memory_order_relaxed);
-    Telemetry::instance().bridge_mode.store(true, std::memory_order_relaxed);
+    Telemetry::instance().bridge_mode.store(false, std::memory_order_relaxed);
 
     std::println("[GUI] Interface roles saved. Gateway: {}, LAN interfaces: {}",
         Config::IFACE_GATEWAY, Config::BRIDGED_IFACES_COUNT);
