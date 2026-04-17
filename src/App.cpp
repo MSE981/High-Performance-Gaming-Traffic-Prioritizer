@@ -388,10 +388,8 @@ void App::start() {
     int fd_lan = iface_lan->get_fd();
     lan_fd_ = fd_lan;
 
-    constexpr double dl = 500.0;
-    constexpr double ul = 50.0;
-    base_dl_mbps = dl;
-    base_ul_mbps = ul;
+    base_dl_mbps = Telemetry::instance().qos_global_dl_mbps_pending.load(std::memory_order_relaxed);
+    base_ul_mbps = Telemetry::instance().qos_global_ul_mbps_pending.load(std::memory_order_relaxed);
     global_shaper_dl = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_dl_mbps});
     global_shaper_ul = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_ul_mbps});
 
