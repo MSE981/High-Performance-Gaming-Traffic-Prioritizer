@@ -5,6 +5,7 @@
 #include <cstring>
 #include "SystemOptimizer.hpp"
 #include <QApplication>
+#include <QPointer>
 #include <QScreen>
 #include <QMetaObject>
 #include <QButtonGroup>
@@ -2481,21 +2482,26 @@ void Dashboard::on_shutdown_clicked() {
     lay->addWidget(btn_nosave);
     lay->addWidget(btn_cancel);
 
-    // Save on a worker thread: Config::save_config does blocking write(2)/close;
-    // Core-0 Qt thread only joins (no disk syscalls here). UI may idle briefly.
+    // Save on a worker thread; quit only after save + SAVE_ON_EXIT clear (same order
+    // as join-based path) so main()'s tail save_config does not race. GUI thread
+    // never blocks on disk I/O or join.
     connect(btn_save, &QPushButton::clicked, &dlg,
         [&dlg, btn_save, btn_nosave, btn_cancel]() {
             btn_save->setEnabled(false);
             btn_nosave->setEnabled(false);
             btn_cancel->setEnabled(false);
-            std::thread worker([]() {
+            QPointer<QDialog> dlg_guard(&dlg);
+            auto*             qapp = QApplication::instance();
+            std::thread([dlg_guard, qapp]() {
                 if (auto sr = Config::save_config("config/config.txt"); !sr)
                     std::println(stderr, "[GUI] {}", sr.error());
                 Config::SAVE_ON_EXIT.store(false, std::memory_order_relaxed);
-            });
-            worker.join();
-            dlg.accept();
-            QApplication::quit();
+                if (!qapp) return;
+                QMetaObject::invokeMethod(qapp, [dlg_guard]() {
+                    if (dlg_guard) dlg_guard->accept();
+                    QApplication::quit();
+                }, Qt::QueuedConnection);
+            }).detach();
         });
     // Exit without saving
     connect(btn_nosave, &QPushButton::clicked, &dlg, [&dlg]() {
