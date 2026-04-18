@@ -54,7 +54,17 @@ namespace HPGTP::Config {
 
     inline void clear_roles() { IFACE_ROLES_COUNT = 0; }
 
-    inline std::string IFACE_GATEWAY = "eth0";
+    // Kernel interface names (gateway / WAN / LAN). Storage is private to Config.cpp;
+    // all updates go through set_iface_names (Ch.7 multi-field config struct).
+    struct IfaceNames {
+        std::string gateway;
+        std::string wan;
+        std::string lan;
+    };
+    void set_iface_names(const IfaceNames& names);
+    const std::string& iface_gateway();
+    const std::string& iface_wan();
+    const std::string& iface_lan();
 
     // Set to false by GUI shutdown dialog to skip the post-exit config save
     inline std::atomic<bool> SAVE_ON_EXIT{true};
@@ -71,9 +81,7 @@ namespace HPGTP::Config {
     };
     inline DynamicState global_state;
 
-    // Interface configuration
-    inline std::string IFACE_WAN = "eth0";
-    inline std::string IFACE_LAN = "eth1";
+    // Interface configuration (ROUTER_IP and below remain inline; IFACE_* live in Config.cpp)
     inline std::string ROUTER_IP = "192.168.1.100";
 
     // DHCP pool configuration

@@ -655,18 +655,22 @@ void InterfacePage::on_save_clicked() {
         Config::set_role(role_entries_[i].name.data(),
             static_cast<Config::IfaceRole>(role_entries_[i].group->checkedId()));
 
-    Config::IFACE_GATEWAY = gw_iface;
-    Config::IFACE_WAN     = gw_iface;
     Config::clear_bridged();
     for (size_t i = 0; i < role_entries_count_; ++i)
         if (role_entries_[i].group->checkedId() == 1) Config::add_bridged(role_entries_[i].name.data());
-    Config::IFACE_LAN = Config::BRIDGED_IFACES_COUNT == 0 ? "" : std::string(Config::BRIDGED_INTERFACES[0].name.data());
+
+    Config::IfaceNames iface{};
+    iface.gateway = gw_iface;
+    iface.wan     = gw_iface;
+    iface.lan     = Config::BRIDGED_IFACES_COUNT == 0
+        ? "" : std::string(Config::BRIDGED_INTERFACES[0].name.data());
+    Config::set_iface_names(iface);
 
     Config::ENABLE_STP.store(sw_stp->isChecked(), std::memory_order_relaxed);
     Config::ENABLE_IGMP_SNOOPING.store(sw_igmp->isChecked(), std::memory_order_relaxed);
 
     std::println("[GUI] Interface roles saved. Gateway: {}, LAN interfaces: {}",
-        Config::IFACE_GATEWAY, Config::BRIDGED_IFACES_COUNT);
+        Config::iface_gateway(), Config::BRIDGED_IFACES_COUNT);
 }
 
 void InterfacePage::on_reset_clicked() {

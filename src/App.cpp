@@ -378,10 +378,10 @@ void App::stop() {
 }
 
 std::expected<void, std::string> App::init() {
-    Utils::Network::disable_hardware_offloads(Config::IFACE_WAN);
-    Utils::Network::disable_hardware_offloads(Config::IFACE_LAN);
-    iface_wan = std::make_unique<Engine::RawSocketManager>(Config::IFACE_WAN);
-    iface_lan = std::make_unique<Engine::RawSocketManager>(Config::IFACE_LAN);
+    Utils::Network::disable_hardware_offloads(Config::iface_wan());
+    Utils::Network::disable_hardware_offloads(Config::iface_lan());
+    iface_wan = std::make_unique<Engine::RawSocketManager>(Config::iface_wan());
+    iface_lan = std::make_unique<Engine::RawSocketManager>(Config::iface_lan());
     if (auto r = iface_wan->init(); !r) return r;
     if (auto r = iface_lan->init(); !r) return r;
     return {};
