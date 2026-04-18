@@ -195,6 +195,8 @@ namespace HPGTP::Config {
     inline std::mutex          game_ports_staging_mutex;
     inline std::array<PortRange, MAX_GAME_PORT_RANGES> game_port_staging{};
     inline size_t                game_port_staging_count = 0;
+    // GUI sets GAME_PORTS_DIRTY (release). Exactly one consumer — Core 1 watchdog
+    // in App — must exchange(acq_rel) false then call apply_pended_game_ports().
     inline std::atomic<bool>     GAME_PORTS_DIRTY{false};
 
     void request_game_ports_apply(std::span<const PortRange> ranges);
@@ -247,9 +249,14 @@ namespace HPGTP::Config {
     inline std::array<IpLimitEntry, MAX_IP_LIMITS> IP_LIMIT_TABLE{};
     inline size_t IP_LIMIT_COUNT = 0;
     inline std::atomic<bool> IP_LIMIT_ACTIVE{false};
+    inline std::mutex ip_limit_mutex;
 
-    inline void clear_ip_limits() { IP_LIMIT_COUNT = 0; }
+    inline void clear_ip_limits() {
+        std::lock_guard<std::mutex> lk(ip_limit_mutex);
+        IP_LIMIT_COUNT = 0;
+    }
     inline void add_ip_limit(Net::IPv4Net ip, Traffic::Mbps rate) {
+        std::lock_guard<std::mutex> lk(ip_limit_mutex);
         for (size_t i = 0; i < IP_LIMIT_COUNT; ++i) {
             if (IP_LIMIT_TABLE[i].ip == ip) { IP_LIMIT_TABLE[i].rate = rate; return; }
         }

@@ -285,7 +285,10 @@ App::App() {
     qos_config       = std::make_shared<QoSConfig>();
     device_shaper_dl = std::make_shared<QoSConfig>();
     device_shaper_ul = std::make_shared<QoSConfig>();
-    qos_config->update(Config::IP_LIMIT_TABLE, Config::IP_LIMIT_COUNT);
+    {
+        std::lock_guard<std::mutex> lk(Config::ip_limit_mutex);
+        qos_config->update(Config::IP_LIMIT_TABLE, Config::IP_LIMIT_COUNT);
+    }
     nat_engine->set_wan_ip(Config::parse_ip_str(Config::ROUTER_IP));  // IPv4Net ✓
 }
 

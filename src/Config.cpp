@@ -210,7 +210,10 @@ std::expected<void, std::string> load_config(const std::string& path) {
         }
         if (BRIDGED_IFACES_COUNT > 0) IFACE_LAN = BRIDGED_INTERFACES[0].name.data();
     }
-    IP_LIMIT_ACTIVE.store(IP_LIMIT_COUNT > 0, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lk(ip_limit_mutex);
+        IP_LIMIT_ACTIVE.store(IP_LIMIT_COUNT > 0, std::memory_order_release);
+    }
     commit_loaded_game_ports_to_runtime();
     std::println("[Config] Config loaded: {}", path);
     return {};
@@ -257,11 +260,14 @@ std::expected<void, std::string> save_config(const std::string& path) {
             dns_snapshot[i].hostname.data(),
             ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF);
     }
-    for (size_t i = 0; i < IP_LIMIT_COUNT; ++i) {
-        uint32_t ip = IP_LIMIT_TABLE[i].ip.raw();
-        dprintf(fd, "IP_LIMIT=%u.%u.%u.%u:%.6g\n",
-            ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF,
-            IP_LIMIT_TABLE[i].rate.value);
+    {
+        std::lock_guard<std::mutex> lk(ip_limit_mutex);
+        for (size_t i = 0; i < IP_LIMIT_COUNT; ++i) {
+            uint32_t ip = IP_LIMIT_TABLE[i].ip.raw();
+            dprintf(fd, "IP_LIMIT=%u.%u.%u.%u:%.6g\n",
+                ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF,
+                IP_LIMIT_TABLE[i].rate.value);
+        }
     }
     {
         size_t ai = game_port_active_idx.load(std::memory_order_acquire);
