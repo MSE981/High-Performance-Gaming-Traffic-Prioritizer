@@ -1843,6 +1843,9 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
 
         row_lay->addWidget(rows[i].status_label);
 
+        // Service on/off is stored in Config::global_state.enable_* atomics alone.
+        // Control/data paths read them with atomic loads (relaxed in App.cpp); no
+        // *_dirty hand-off — unlike staged QoS/DHCP/DNS, there is no pending snapshot.
         // Connect toggle: update state + status label + settings button enabled
         auto* state_ptr  = defs[i].state;
         auto* status_lbl = rows[i].status_label;
