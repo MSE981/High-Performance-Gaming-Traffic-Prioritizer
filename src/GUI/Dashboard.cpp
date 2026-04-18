@@ -2,13 +2,13 @@
 #include "GUI/StyleSheet.hpp"
 #include "Config.hpp"
 #include "SelfTest.hpp"
+#include <cstring>
 #include "SystemOptimizer.hpp"
 #include <QApplication>
+#include <QPointer>
 #include <QScreen>
 #include <QMetaObject>
 #include <QButtonGroup>
-#include <QFile>
-#include <QTextStream>
 #include <QMenu>
 #include <QBoxLayout>
 #include <QPainter>
@@ -30,6 +30,7 @@
 #include <QSizePolicy>
 #include <QTimer>
 #include <thread>
+#include <mutex>
 #include <print>
 #include <algorithm>
 #include <array>
@@ -37,7 +38,11 @@
 #include <vector>
 #include <optional>
 #include <cmath>
+#include <cerrno>
 #include <fcntl.h>
+#include <poll.h>
+#include <string>
+#include <string_view>
 #include <unistd.h>
 #include <arpa/inet.h>
 
@@ -307,7 +312,7 @@ bool NotificationPanel::is_settled() const {
 }
 
 // ═════════════════════════════════════════════════════════════
-// RealTimePlot (retain Phase 3 physics engine)
+// RealTimePlot — shift-buffer sampling + spring-damper dynamics (see Dashboard.hpp)
 // ═════════════════════════════════════════════════════════════
 RealTimePlot::RealTimePlot(QWidget* parent) : QWidget(parent) {
     setMinimumSize(200, 300);
@@ -462,7 +467,11 @@ void OverviewPage::refresh(const Telemetry& tel, const std::array<uint64_t, 4>& 
     pps_plot->update();
     bps_plot->update();
 
-    lbl_mode->setText(tel.bridge_mode.load(std::memory_order_relaxed) ? "Mode: Bridge" : "Mode: Acceleration");
+    bool bridge = tel.effective_bridge_mode.load(std::memory_order_acquire);
+    lbl_mode->setText(bridge ? "Mode: Bridge" : "Mode: Acceleration");
+    lbl_mode->setStyleSheet(bridge
+        ? "color: #ffaa00; font-weight: bold; font-size: 15px;"
+        : "color: #00cc66; font-weight: bold; font-size: 15px;");
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -620,6 +629,16 @@ void InterfacePage::on_role_changed(const QString& iface, int index) {
     }
 }
 
+void InterfacePage::refresh_from_backend() {
+    scan_interfaces();
+    {
+        QSignalBlocker b1(*sw_stp);
+        QSignalBlocker b2(*sw_igmp);
+        sw_stp->setChecked(Config::ENABLE_STP.load(std::memory_order_relaxed));
+        sw_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed));
+    }
+}
+
 void InterfacePage::on_save_clicked() {
     int gw_count = 0;
     std::string gw_iface;
@@ -636,20 +655,22 @@ void InterfacePage::on_save_clicked() {
         Config::set_role(role_entries_[i].name.data(),
             static_cast<Config::IfaceRole>(role_entries_[i].group->checkedId()));
 
-    Config::IFACE_GATEWAY = gw_iface;
-    Config::IFACE_WAN     = gw_iface;
     Config::clear_bridged();
     for (size_t i = 0; i < role_entries_count_; ++i)
         if (role_entries_[i].group->checkedId() == 1) Config::add_bridged(role_entries_[i].name.data());
-    Config::IFACE_LAN = Config::BRIDGED_IFACES_COUNT == 0 ? "" : std::string(Config::BRIDGED_INTERFACES[0].name.data());
+
+    Config::IfaceNames iface{};
+    iface.gateway = gw_iface;
+    iface.wan     = gw_iface;
+    iface.lan     = Config::BRIDGED_IFACES_COUNT == 0
+        ? "" : std::string(Config::BRIDGED_INTERFACES[0].name.data());
+    Config::set_iface_names(iface);
 
     Config::ENABLE_STP.store(sw_stp->isChecked(), std::memory_order_relaxed);
     Config::ENABLE_IGMP_SNOOPING.store(sw_igmp->isChecked(), std::memory_order_relaxed);
-    Config::ENABLE_ACCELERATION.store(true, std::memory_order_relaxed);
-    Telemetry::instance().bridge_mode.store(true, std::memory_order_relaxed);
 
     std::println("[GUI] Interface roles saved. Gateway: {}, LAN interfaces: {}",
-        Config::IFACE_GATEWAY, Config::BRIDGED_IFACES_COUNT);
+        Config::iface_gateway(), Config::BRIDGED_IFACES_COUNT);
 }
 
 void InterfacePage::on_reset_clicked() {
@@ -688,7 +709,8 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
         lbl_accel->setWordWrap(true);
         lbl_accel->setStyleSheet("font-size: 15px; color: #e0e0e0;");
         sw_acceleration = new SwitchToggle();
-        sw_acceleration->setChecked(Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed));
+        sw_acceleration->setChecked(
+            Telemetry::instance().effective_acceleration.load(std::memory_order_acquire));
         connect(sw_acceleration, &SwitchToggle::toggled, this, &QosPage::on_toggle_accel);
         accel_row->addWidget(lbl_accel, 1);
         accel_row->addWidget(sw_acceleration, 0, Qt::AlignVCenter);
@@ -698,8 +720,12 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     // Bandwidth limit
     auto* bw_group = new QGroupBox("Global Bandwidth Limits");
     auto* bw_form = new QFormLayout(bw_group);
-    edit_dl_limit = new QLineEdit("500");
-    edit_ul_limit = new QLineEdit("50");
+    {
+        double idl = Telemetry::instance().qos_global_dl_mbps_pending.load(std::memory_order_relaxed);
+        double iul = Telemetry::instance().qos_global_ul_mbps_pending.load(std::memory_order_relaxed);
+        edit_dl_limit = new QLineEdit(QString::number(idl, 'g', 12));
+        edit_ul_limit = new QLineEdit(QString::number(iul, 'g', 12));
+    }
     edit_dl_limit->setReadOnly(true);
     edit_ul_limit->setReadOnly(true);
     {
@@ -735,15 +761,21 @@ QosPage::QosPage(QWidget* parent) : QWidget(parent) {
     auto* slider_row = new QHBoxLayout();
     slider_row->addWidget(new QLabel("0%"));
     slider_row->addStretch();
-    lbl_throttle = new QLabel("100%");
+    lbl_throttle = new QLabel("0%");
     slider_row->addWidget(lbl_throttle);
 
     throttle_slider = new QSlider(Qt::Horizontal);
     throttle_slider->setRange(0, 100);
-    throttle_slider->setValue(Telemetry::instance().qos_throttle_pct.load(std::memory_order_relaxed));
+    {
+        int init_pct = Telemetry::instance().qos_throttle_pct.load(std::memory_order_relaxed);
+        init_pct = std::clamp(init_pct, 0, 100);
+        throttle_slider->setValue(init_pct);
+        lbl_throttle->setText(QString("%1%").arg(init_pct));
+    }
     throttle_slider->setTickInterval(10);
     throttle_slider->setTickPosition(QSlider::TicksBelow);
-    connect(throttle_slider, &QSlider::valueChanged, this, &QosPage::on_throttle_changed);
+    connect(throttle_slider, &QSlider::valueChanged, this, &QosPage::on_throttle_label_only);
+    connect(throttle_slider, &QSlider::sliderReleased, this, &QosPage::on_throttle_committed);
 
     throttle_lay->addWidget(throttle_slider);
     throttle_lay->addLayout(slider_row);
@@ -801,11 +833,31 @@ void QosPage::refresh_whitelist_from_config() {
         whitelist_table->insertRow(r);
         whitelist_table->setItem(r, 0, make_item_qs(port_str));
         whitelist_table->setItem(r, 1, make_item_qs(QStringLiteral("TCP/UDP")));
-        whitelist_table->setItem(r, 2, make_item_qs(QString()));
+        whitelist_table->setItem(r, 2, make_item_qs(QString::fromUtf8(pr.desc)));
     }
     const int header_h = whitelist_table->horizontalHeader()->height();
     const int rows_h   = whitelist_table->rowCount() * wl_row_h;
     whitelist_table->setMinimumHeight(header_h + rows_h + 4);
+}
+
+void QosPage::refresh_from_backend() {
+    refresh_whitelist_from_config();
+    {
+        QSignalBlocker b(*sw_acceleration);
+        sw_acceleration->setChecked(
+            Telemetry::instance().effective_acceleration.load(std::memory_order_acquire));
+    }
+    double dl = Telemetry::instance().qos_global_dl_mbps_pending.load(std::memory_order_relaxed);
+    double ul = Telemetry::instance().qos_global_ul_mbps_pending.load(std::memory_order_relaxed);
+    edit_dl_limit->setText(QString::number(dl, 'g', 12));
+    edit_ul_limit->setText(QString::number(ul, 'g', 12));
+    int pct = Telemetry::instance().qos_throttle_pct.load(std::memory_order_relaxed);
+    pct = std::clamp(pct, 0, 100);
+    {
+        QSignalBlocker b(*throttle_slider);
+        throttle_slider->setValue(pct);
+    }
+    lbl_throttle->setText(QString("%1%").arg(pct));
 }
 
 bool QosPage::eventFilter(QObject* watched, QEvent* event) {
@@ -866,9 +918,10 @@ void QosPage::on_apply_global_bw() {
 
 void QosPage::on_toggle_accel() {
     bool on = sw_acceleration->isChecked();
-    Config::ENABLE_ACCELERATION.store(on, std::memory_order_relaxed);
-    Telemetry::instance().bridge_mode.store(!on, std::memory_order_relaxed);
-    std::println("[GUI] Acceleration mode: {}", on ? "ON" : "OFF");
+    auto& tel = Telemetry::instance();
+    tel.acceleration_pending.store(on, std::memory_order_relaxed);
+    tel.mode_config_dirty.store(true, std::memory_order_release);
+    std::println("[GUI] Pending acceleration mode: {}", on ? "ON" : "OFF");
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -1279,8 +1332,14 @@ void QosPage::on_edit_whitelist() {
         auto* cell = dlg.table()->item(r, 0);
         if (!cell) continue;
         Config::PortRange pr{};
-        if (parse_whitelist_port_cell(cell->text(), pr))
-            ranges.push_back(pr);
+        if (!parse_whitelist_port_cell(cell->text(), pr)) continue;
+        auto* desc_cell = dlg.table()->item(r, 2);
+        if (desc_cell) {
+            QByteArray utf8 = desc_cell->text().toUtf8();
+            std::strncpy(pr.desc, utf8.constData(), sizeof(pr.desc) - 1);
+            pr.desc[sizeof(pr.desc) - 1] = '\0';
+        }
+        ranges.push_back(pr);
     }
     if (ranges.empty()) {
         Dashboard::post_notification(
@@ -1314,9 +1373,13 @@ void QosPage::on_edit_whitelist() {
     QTimer::singleShot(1200, this, [this]() { refresh_whitelist_from_config(); });
 }
 
-void QosPage::on_throttle_changed(int value_pct) {
-    Telemetry::instance().qos_throttle_pct.store(value_pct, std::memory_order_relaxed);
+void QosPage::on_throttle_label_only(int value_pct) {
     lbl_throttle->setText(QString("%1%").arg(value_pct));
+}
+
+void QosPage::on_throttle_committed() {
+    int value_pct = throttle_slider->value();
+    Telemetry::instance().qos_throttle_pct.store(value_pct, std::memory_order_relaxed);
 }
 
 
@@ -1474,8 +1537,15 @@ void DhcpConfigDialog::on_apply() {
     edit_pool_start->setStyleSheet("");
     edit_pool_end->setStyleSheet("");
 
-    Net::IPv4Net start_ip = Config::parse_ip_str(edit_pool_start->text().toStdString());
-    Net::IPv4Net end_ip   = Config::parse_ip_str(edit_pool_end->text().toStdString());
+    auto start_e = Config::parse_ip_str(edit_pool_start->text().toStdString());
+    auto end_e   = Config::parse_ip_str(edit_pool_end->text().toStdString());
+    if (!start_e || !end_e) {
+        edit_pool_start->setStyleSheet("border: 1px solid #cc3333;");
+        edit_pool_end->setStyleSheet("border: 1px solid #cc3333;");
+        return;
+    }
+    Net::IPv4Net start_ip = *start_e;
+    Net::IPv4Net end_ip   = *end_e;
     if (ntohl(start_ip.raw()) >= ntohl(end_ip.raw())) {
         edit_pool_start->setStyleSheet("border: 1px solid #cc3333;");
         edit_pool_end->setStyleSheet("border: 1px solid #cc3333;");
@@ -1500,6 +1570,22 @@ void DhcpConfigDialog::on_apply() {
 // DnsConfigDialog
 // ═════════════════════════════════════════════════════════════
 DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
+    auto& tel = Telemetry::instance();
+    std::string dns_primary;
+    std::string dns_secondary;
+    bool dns_redirect = false;
+    std::array<Telemetry::DnsPendingRecord, 64> dns_records{};
+    size_t dns_record_count = 0;
+    {
+        std::lock_guard<std::mutex> lock(tel.dns_pending_mutex);
+        dns_primary = tel.dns_upstream_primary_pending;
+        dns_secondary = tel.dns_upstream_secondary_pending;
+        dns_redirect = tel.dns_redirect_pending;
+        dns_record_count = std::min(tel.dns_static_pending_count, dns_records.size());
+        for (size_t i = 0; i < dns_record_count; ++i)
+            dns_records[i] = tel.dns_static_pending[i];
+    }
+
     setWindowTitle("DNS Configuration");
     setMinimumSize(720, 900);
     auto* layout = new QVBoxLayout(this);
@@ -1515,14 +1601,14 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
             R"(^((25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$)"),
         this);
 
-    edit_dns_primary = new QLineEdit(QString::fromStdString(Config::DNS_UPSTREAM_PRIMARY));
+    edit_dns_primary = new QLineEdit(QString::fromStdString(dns_primary));
     edit_dns_primary->setValidator(dns_ip_validator1);
     edit_dns_primary->setReadOnly(true);
     edit_dns_primary->setPlaceholderText("Tap to enter (keypad)");
     edit_dns_primary->installEventFilter(this);
     form->addRow("Primary DNS:", edit_dns_primary);
 
-    edit_dns_secondary = new QLineEdit(QString::fromStdString(Config::DNS_UPSTREAM_SECONDARY));
+    edit_dns_secondary = new QLineEdit(QString::fromStdString(dns_secondary));
     edit_dns_secondary->setValidator(dns_ip_validator2);
     edit_dns_secondary->setReadOnly(true);
     edit_dns_secondary->setPlaceholderText("Optional — tap to set");
@@ -1542,7 +1628,7 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
     lbl_redirect->setWordWrap(true);
     lbl_redirect->setStyleSheet("color: #e0e0e0;");
     sw_dns_redirect = new SwitchToggle();
-    sw_dns_redirect->setChecked(Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
+    sw_dns_redirect->setChecked(dns_redirect);
     sw_dns_redirect->setToolTip("When enabled, all LAN DNS queries (UDP 53) are forwarded to the configured upstream server");
     redirect_row->addWidget(lbl_redirect, 1);
     redirect_row->addWidget(sw_dns_redirect, 0, Qt::AlignVCenter);
@@ -1582,17 +1668,13 @@ DnsConfigDialog::DnsConfigDialog(QWidget* parent) : QDialog(parent) {
             }
         });
 
-    for (size_t i = 0; i < Config::STATIC_DNS_COUNT; ++i) {
+    for (size_t i = 0; i < dns_record_count; ++i) {
         int row = static_dns_table->rowCount();
         static_dns_table->insertRow(row);
         static_dns_table->setItem(row, 0, new QTableWidgetItem(
-            QString::fromLatin1(Config::STATIC_DNS_TABLE[i].hostname.data())));
-        Net::IPv4Net ip = Config::STATIC_DNS_TABLE[i].ip;
-        const uint32_t r = ip.raw();
+            QString::fromLatin1(dns_records[i].hostname.data())));
         static_dns_table->setItem(row, 1, new QTableWidgetItem(
-            QString("%1.%2.%3.%4")
-                .arg((r >> 24) & 0xFF).arg((r >> 16) & 0xFF)
-                .arg((r >> 8) & 0xFF).arg(r & 0xFF)));
+            QString::fromLatin1(dns_records[i].ip_str.data())));
     }
     form->addRow(static_dns_table);
 
@@ -1644,11 +1726,8 @@ void DnsConfigDialog::on_apply() {
     }
     edit_dns_secondary->setStyleSheet("");
 
-    Config::DNS_UPSTREAM_PRIMARY   = edit_dns_primary->text().toStdString();
-    Config::DNS_UPSTREAM_SECONDARY = edit_dns_secondary->text().toStdString();
-    Config::DNS_REDIRECT_ENABLED.store(sw_dns_redirect->isChecked(), std::memory_order_relaxed);
-
-    Config::STATIC_DNS_COUNT = 0;
+    std::array<Telemetry::DnsPendingRecord, 64> dns_records{};
+    size_t dns_record_count = 0;
     for (int i = 0; i < static_dns_table->rowCount(); ++i) {
         auto* host_item = static_dns_table->item(i, 0);
         auto* ip_item   = static_dns_table->item(i, 1);
@@ -1656,13 +1735,29 @@ void DnsConfigDialog::on_apply() {
         std::string hostname = host_item->text().trimmed().toStdString();
         std::string ip_str   = ip_item->text().trimmed().toStdString();
         if (hostname.empty() || ip_str.empty()) continue;
-        Config::upsert_static_dns(hostname, ip_str);
+        if (dns_record_count >= dns_records.size()) break;
+        std::strncpy(dns_records[dns_record_count].hostname.data(), hostname.c_str(), 63);
+        dns_records[dns_record_count].hostname[63] = '\0';
+        std::strncpy(dns_records[dns_record_count].ip_str.data(), ip_str.c_str(), 15);
+        dns_records[dns_record_count].ip_str[15] = '\0';
+        ++dns_record_count;
     }
 
-    Telemetry::instance().dns_config_dirty.store(true, std::memory_order_release);
+    auto& tel = Telemetry::instance();
+    {
+        std::lock_guard<std::mutex> lock(tel.dns_pending_mutex);
+        tel.dns_upstream_primary_pending = edit_dns_primary->text().toStdString();
+        tel.dns_upstream_secondary_pending = edit_dns_secondary->text().toStdString();
+        tel.dns_redirect_pending = sw_dns_redirect->isChecked();
+        tel.dns_static_pending_count = dns_record_count;
+        for (size_t i = 0; i < dns_record_count; ++i)
+            tel.dns_static_pending[i] = dns_records[i];
+    }
+    tel.dns_config_dirty.store(true, std::memory_order_release);
     std::println("[GUI] DNS config updated: upstream {}→{}, redirect={}, static={} records",
-        Config::DNS_UPSTREAM_PRIMARY, Config::DNS_UPSTREAM_SECONDARY,
-        sw_dns_redirect->isChecked(), Config::STATIC_DNS_COUNT);
+        edit_dns_primary->text().toStdString(),
+        edit_dns_secondary->text().toStdString(),
+        sw_dns_redirect->isChecked(), dns_record_count);
     accept();
 }
 
@@ -1753,6 +1848,9 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
 
         row_lay->addWidget(rows[i].status_label);
 
+        // Service on/off is stored in Config::global_state.enable_* atomics alone.
+        // Control/data paths read them with atomic loads (relaxed in App.cpp); no
+        // *_dirty hand-off — unlike staged QoS/DHCP/DNS, there is no pending snapshot.
         // Connect toggle: update state + status label + settings button enabled
         auto* state_ptr  = defs[i].state;
         auto* status_lbl = rows[i].status_label;
@@ -1856,8 +1954,12 @@ DevicePage::DevicePage(QWidget* parent) : QWidget(parent) {
 void DevicePage::refresh() {
     auto& tel = Telemetry::instance();
     uint8_t cnt = tel.device_count.load(std::memory_order_acquire);
-    if (cnt == last_device_count) return;
+    uint64_t rev = Config::DEVICE_POLICY_REVISION.load(std::memory_order_acquire);
+    // Cheap path: device list + policy revision gate. Do not remove — the plot timer
+    // calls refresh at 25 Hz; without this, cards rebuild every tick.
+    if (cnt == last_device_count && rev == last_device_policy_revision_) return;
     last_device_count = cnt;
+    last_device_policy_revision_ = rev;
 
     // Remove all existing cards (leave trailing stretch)
     rows_.clear();
@@ -1874,13 +1976,16 @@ void DevicePage::refresh() {
         // Look up existing policy
         bool blocked = false, rate_limited = false;
         double dl = 100.0, ul = 10.0;
-        for (size_t j = 0; j < Config::DEVICE_POLICY_COUNT; ++j) {
-            if (Config::DEVICE_POLICY_TABLE[j].ip == ip) {
-                blocked      = Config::DEVICE_POLICY_TABLE[j].blocked;
-                rate_limited = Config::DEVICE_POLICY_TABLE[j].rate_limited;
-                dl           = Config::DEVICE_POLICY_TABLE[j].dl.value;
-                ul           = Config::DEVICE_POLICY_TABLE[j].ul.value;
-                break;
+        {
+            std::lock_guard<std::mutex> lk(Config::device_policy_mutex);
+            for (size_t j = 0; j < Config::DEVICE_POLICY_COUNT; ++j) {
+                if (Config::DEVICE_POLICY_TABLE[j].ip == ip) {
+                    blocked      = Config::DEVICE_POLICY_TABLE[j].blocked;
+                    rate_limited = Config::DEVICE_POLICY_TABLE[j].rate_limited;
+                    dl           = Config::DEVICE_POLICY_TABLE[j].dl.value;
+                    ul           = Config::DEVICE_POLICY_TABLE[j].ul.value;
+                    break;
+                }
             }
         }
 
@@ -2007,6 +2112,10 @@ void DevicePage::on_apply_all() {
 // ═════════════════════════════════════════════════════════════
 // Dashboard: main control panel frame
 // ═════════════════════════════════════════════════════════════
+// Cross-thread UI delivery only: worker code must not dereference this except by passing
+// it as the QObject* context to QMetaObject::invokeMethod(..., QueuedConnection). Qt
+// drops queued calls if the receiver is destroyed; call sites guard with if (!instance_)
+// before queueing. Set to this in ctor and nullptr in dtor — not a general-purpose singleton.
 Dashboard* Dashboard::instance_ = nullptr;
 
 Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
@@ -2014,6 +2123,7 @@ Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("High-Performance Gaming Traffic Prioritizer");
     setStyleSheet(DARK_STYLESHEET);
     setup_ui();
+    run_page_enter_refresh(0);
     ui_timer_id_   = startTimer(16, Qt::PreciseTimer); // 60Hz: spring, badge, selftest overlay
     plot_timer_id_ = startTimer(40, Qt::PreciseTimer); // 25Hz: plots, header rates, page data
     qApp->installEventFilter(this); // global: 15% pull zone + mid-animation interrupt
@@ -2021,6 +2131,83 @@ Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
 
 Dashboard::~Dashboard() {
     instance_ = nullptr;
+}
+
+void Dashboard::run_startup_log_reader(std::stop_token st) {
+    constexpr int poll_timeout_ms = 200;
+    int fd = ::open("/tmp/hpgtp_startup.log", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return;
+
+    std::string pending;
+    std::array<char, 4096> buf{};
+
+    auto flush_line = [](std::string_view raw) {
+        QString line = QString::fromUtf8(raw.data(), static_cast<int>(raw.size())).trimmed();
+        if (line.isEmpty()) return;
+        int sep       = line.indexOf('|');
+        QString title = (sep >= 0) ? line.left(sep) : line;
+        QString body  = (sep >= 0) ? line.mid(sep + 1) : QString();
+        if (!instance_) return;
+        QMetaObject::invokeMethod(instance_, [title, body]() {
+            if (instance_ && instance_->notif_panel_)
+                instance_->notif_panel_->push_notification(title, body);
+        }, Qt::QueuedConnection);
+    };
+
+    auto drain_lines = [&] {
+        for (;;) {
+            auto nl = pending.find('\n');
+            if (nl == std::string::npos) break;
+            flush_line(std::string_view(pending).substr(0, nl));
+            pending.erase(0, nl + 1);
+        }
+    };
+
+    while (!st.stop_requested()) {
+        struct pollfd pfd{};
+        pfd.fd     = fd;
+        pfd.events = POLLIN;
+        int pr     = ::poll(&pfd, 1, poll_timeout_ms);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (pr == 0) continue;
+
+        if (pfd.revents & (POLLERR | POLLNVAL)) break;
+
+        if (pfd.revents & (POLLIN | POLLHUP)) {
+            bool eof = false;
+            for (;;) {
+                ssize_t n = ::read(fd, buf.data(), buf.size());
+                if (n < 0) {
+                    if (errno == EINTR) continue;
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                    ::close(fd);
+                    return;
+                }
+                if (n == 0) {
+                    eof = true;
+                    break;
+                }
+                pending.append(buf.data(), static_cast<size_t>(n));
+                drain_lines();
+            }
+            if (eof) {
+                drain_lines();
+                if (!pending.empty()) flush_line(pending);
+                pending.clear();
+                break;
+            }
+        }
+        if (pfd.revents & POLLHUP) {
+            drain_lines();
+            if (!pending.empty()) flush_line(pending);
+            pending.clear();
+            break;
+        }
+    }
+    ::close(fd);
 }
 
 void Dashboard::post_notification(const QString& title, const QString& body) {
@@ -2137,26 +2324,10 @@ void Dashboard::setup_ui() {
     notif_panel_->setFixedSize(centralWidget()->width(), centralWidget()->height());
     notif_panel_->raise();
 
-    // Async startup log read — regular file I/O is offloaded off the GUI thread.
-    // Each line is queued back via invokeMethod; if Dashboard is destroyed before
-    // delivery, Qt silently drops the queued event (QObject receiver invalidation).
-    startup_log_reader_ = std::jthread([](std::stop_token st) {
-        QFile log("/tmp/hpgtp_startup.log");
-        if (!log.open(QIODevice::ReadOnly | QIODevice::Text)) return;
-        QTextStream ts(&log);
-        while (!ts.atEnd()) {
-            if (st.stop_requested()) return;
-            QString line = ts.readLine().trimmed();
-            if (line.isEmpty()) continue;
-            int sep = line.indexOf('|');
-            QString title = (sep >= 0) ? line.left(sep)   : line;
-            QString body  = (sep >= 0) ? line.mid(sep + 1): QString();
-            QMetaObject::invokeMethod(instance_, [title, body]() {
-                if (instance_ && instance_->notif_panel_)
-                    instance_->notif_panel_->push_notification(title, body);
-            }, Qt::QueuedConnection);
-        }
-    });
+    // Async startup log read — I/O off the GUI thread. poll() + non-blocking
+    // read so FIFOs or slow writers cannot block past jthread stop (P5-001).
+    // Lines are queued via invokeMethod; Qt drops undelivered events if Dashboard is gone.
+    startup_log_reader_ = std::jthread(Dashboard::run_startup_log_reader);
 
     // Self-test results posted asynchronously via on_selftest_done() after worker completes.
 
@@ -2274,10 +2445,20 @@ void Dashboard::setup_tabbar(QBoxLayout* root_layout) {
     root_layout->addWidget(bar);
 }
 
+void Dashboard::run_page_enter_refresh(int page_index) {
+    switch (page_index) {
+    case 0: break;
+    case 1: page_interfaces->refresh_from_backend(); break;
+    case 2: page_qos->refresh_from_backend(); break;
+    case 3: page_services->refresh_status(); break;
+    case 4: page_devices->refresh(); break;
+    default: break;
+    }
+}
+
 void Dashboard::on_tab_clicked(int page_index) {
     page_stack->setCurrentIndex(page_index);
-    if (page_index == 2) page_qos->refresh_whitelist_from_config();
-    if (page_index == 4) page_devices->refresh();
+    run_page_enter_refresh(page_index);
 }
 
 
@@ -2305,13 +2486,27 @@ void Dashboard::on_shutdown_clicked() {
     lay->addWidget(btn_nosave);
     lay->addWidget(btn_cancel);
 
-    // Save settings then exit — skip redundant save in main()
-    connect(btn_save, &QPushButton::clicked, &dlg, [&dlg]() {
-        Config::save_config("config/config.txt");
-        Config::SAVE_ON_EXIT.store(false, std::memory_order_relaxed);
-        dlg.accept();
-        QApplication::quit();
-    });
+    // Save on a worker thread; quit only after save + SAVE_ON_EXIT clear (same order
+    // as join-based path) so main()'s tail save_config does not race. GUI thread
+    // never blocks on disk I/O or join.
+    connect(btn_save, &QPushButton::clicked, &dlg,
+        [&dlg, btn_save, btn_nosave, btn_cancel]() {
+            btn_save->setEnabled(false);
+            btn_nosave->setEnabled(false);
+            btn_cancel->setEnabled(false);
+            QPointer<QDialog> dlg_guard(&dlg);
+            auto*             qapp = QApplication::instance();
+            std::thread([dlg_guard, qapp]() {
+                if (auto sr = Config::save_config("config/config.txt"); !sr)
+                    std::println(stderr, "[GUI] {}", sr.error());
+                Config::SAVE_ON_EXIT.store(false, std::memory_order_relaxed);
+                if (!qapp) return;
+                QMetaObject::invokeMethod(qapp, [dlg_guard]() {
+                    if (dlg_guard) dlg_guard->accept();
+                    QApplication::quit();
+                }, Qt::QueuedConnection);
+            }).detach();
+        });
     // Exit without saving
     connect(btn_nosave, &QPushButton::clicked, &dlg, [&dlg]() {
         Config::SAVE_ON_EXIT.store(false, std::memory_order_relaxed);
@@ -2472,10 +2667,6 @@ void Dashboard::timerEvent(QTimerEvent* event) {
         page_overview->refresh(tel, last_pkts, last_bytes);
     if (plot_tick_ % 25 == 0)
         page_overview->refresh_info();
-
-    // Sync service page status indicators if visible
-    if (page_stack->currentIndex() == 3)
-        page_services->refresh_status();
 
     // Refresh device list if visible (checks device_count change internally, cheap if no change)
     if (page_stack->currentIndex() == 4)

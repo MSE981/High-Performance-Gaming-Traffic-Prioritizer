@@ -368,6 +368,7 @@ MigrationBackup/
 FodyWeavers.xsd
 
 #special files
+nohup.out
 *.md
 !docs/FUTURE_PLAN.md
 *.pdf

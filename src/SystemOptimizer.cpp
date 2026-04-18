@@ -1,22 +1,25 @@
 #include "SystemOptimizer.hpp"
 #include <print>
 #include <cstdio>
+#include <unistd.h>
 #include <pthread.h>
 #include <sched.h>
 #include <fcntl.h>
-#include <unistd.h>
 
 namespace HPGTP::System::Optimizer {
 
 void lock_cpu_frequency() {
-    for (int i = 0; i < 4; ++i) {
+    long n = ::sysconf(_SC_NPROCESSORS_ONLN);
+    if (n < 1) n = 4;
+    for (long i = 0; i < n; ++i) {
         char path[80];
         snprintf(path, sizeof(path),
-            "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_governor", i);
+            "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_governor",
+            static_cast<int>(i));
         int fd = ::open(path, O_WRONLY);
         if (fd >= 0) {
             if (::write(fd, "performance", 11) < 0)
-                std::println(stderr, "[System] Warning: failed to set governor for cpu{}", i);
+                std::println(stderr, "[System] Warning: failed to set governor for cpu{}", static_cast<int>(i));
             ::close(fd);
         }
     }

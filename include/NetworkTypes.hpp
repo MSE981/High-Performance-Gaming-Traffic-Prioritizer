@@ -37,6 +37,9 @@ private:
     uint32_t v_;
 };
 
+// Returns true and fills `out` when `s` is a valid IPv4 dotted-decimal string.
+[[nodiscard]] bool try_parse_ipv4(const char* s, IPv4Net& out) noexcept;
+
 IPv4Net parse_ipv4(const char* s) noexcept;
 
 // Nth address after base (DHCP pool construction).

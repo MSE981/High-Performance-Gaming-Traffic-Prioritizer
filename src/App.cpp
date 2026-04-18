@@ -1,5 +1,6 @@
 #include "App.hpp"
 #include "DataPlane.hpp"
+#include "GUI/Dashboard.hpp"
 // POSIX C headers — visible only in this translation unit, hidden from all
 // clients that include App.hpp.
 #include <sys/socket.h>
@@ -14,10 +15,12 @@
 #include <ctime>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <print>
-#include <iostream>
 #include <cerrno>
 #include <string_view>
+#include <mutex>
+#include <string>
 
 namespace HPGTP {
 
@@ -76,7 +79,7 @@ public:
 
     PacketConsumer(int rx_fd_, const PacketWorkerConfig& cfg)
         : rx_fd(rx_fd_), tx_fd(cfg.tx_fd), core_id(cfg.core_id),
-          ctx{cfg.tx_fd, cfg.global_shaper},
+          ctx{cfg.tx_fd, cfg.route_shaper},
           nat_engine(cfg.nat_engine), dns_engine(cfg.dns_engine),
           qos_config(cfg.qos_config), device_shaper(cfg.device_shaper),
           dhcp_engine(cfg.dhcp_engine),
@@ -138,8 +141,13 @@ public:
     static bool step_dns_interceptor(PacketConsumer& self, Net::ParsedPacket& pkt) {
         if (!Config::global_state.enable_dns_cache.load(std::memory_order_relaxed)) return false;
         if (self.core_id == 3) {
-            if (self.dns_engine && self.dns_engine->process_query(pkt, self.rx_fd))
-                return true;
+            if (self.dns_engine) {
+                const Logic::DnsQueryDisposition d =
+                    self.dns_engine->process_query(pkt, self.rx_fd);
+                if (d == Logic::DnsQueryDisposition::Replied
+                    || d == Logic::DnsQueryDisposition::ReplySendFailed)
+                    return true;
+            }
         } else if (self.core_id == 2) {
             if (self.dns_engine) self.dns_engine->intercept_response(pkt);
         }
@@ -235,7 +243,7 @@ public:
         self.stats.bytes += pkt.raw_span.size();
         self.stats.prio_pkts[pi]++;
         self.stats.prio_bytes[pi] += pkt.raw_span.size();
-        size_t mode = Telemetry::instance().bridge_mode.load(std::memory_order_relaxed);
+        size_t mode = Telemetry::instance().effective_bridge_mode.load(std::memory_order_acquire) ? 1U : 0U;
         self.routes[mode][pi](self.ctx, pkt.raw_span, pi, self.core_id);
         return true;
     }
@@ -265,7 +273,6 @@ struct RxFrameCopy {
 
 App::App() {
     shutdown_future = shutdown_promise.get_future();
-    global_shaper   = std::make_shared<Traffic::Shaper>(Traffic::Mbps{100.0});
 
     // Service flags are loaded from config/config.txt before App is constructed;
     // do not override them here.
@@ -283,8 +290,14 @@ App::App() {
     qos_config       = std::make_shared<QoSConfig>();
     device_shaper_dl = std::make_shared<QoSConfig>();
     device_shaper_ul = std::make_shared<QoSConfig>();
-    qos_config->update(Config::IP_LIMIT_TABLE, Config::IP_LIMIT_COUNT);
-    nat_engine->set_wan_ip(Config::parse_ip_str(Config::ROUTER_IP));  // IPv4Net ✓
+    {
+        std::lock_guard<std::mutex> lk(Config::ip_limit_mutex);
+        qos_config->update(Config::IP_LIMIT_TABLE, Config::IP_LIMIT_COUNT);
+    }
+    if (auto rip = Config::parse_ip_str(Config::ROUTER_IP); rip)
+        nat_engine->set_wan_ip(*rip);
+    else
+        std::println(stderr, "[App] Invalid ROUTER_IP: {}", rip.error());
 }
 
 App::~App() {
@@ -301,18 +314,19 @@ App::~App() {
     close_watchdog_stop_efd();
 }
 
-void App::open_worker_poll_fds_for_start() {
+std::expected<void, std::string> App::open_worker_poll_fds_for_start() {
     close_worker_poll_fds();
     for (auto& w : worker_poll_) {
         w.frame_efd = ::eventfd(0, EFD_CLOEXEC);
         w.stop_efd  = ::eventfd(0, EFD_CLOEXEC);
         if (w.frame_efd < 0 || w.stop_efd < 0) {
-            std::println(stderr, "[App] eventfd for worker poll sync failed: {}",
-                std::strerror(errno));
+            int e = errno;
             close_worker_poll_fds();
-            return;
+            return std::unexpected(
+                std::string("eventfd for worker poll sync failed: ") + std::strerror(e));
         }
     }
+    return {};
 }
 
 void App::close_worker_poll_fds() {
@@ -349,19 +363,25 @@ void App::close_watchdog_stop_efd() {
 
 void App::stop() {
     if (shutdown_sequence_started_.exchange(true, std::memory_order_acq_rel)) return;
+    // Stop data-plane workers (Cores 2/3) before watchdog (Core 1) so
+    // the watchdog does not read stale shaper state after workers exit.
     running_workers.store(false, std::memory_order_relaxed);
     wake_proc_threads_for_shutdown();
     if (worker_downstream.joinable()) worker_downstream.join();
     if (worker_upstream.joinable()) worker_upstream.join();
     close_worker_poll_fds();
-    shutdown_promise.set_value();
+    running_watchdog.store(false, std::memory_order_release);
+    wake_watchdog_for_shutdown();
+    if (watchdog.joinable()) watchdog.join();
+    close_watchdog_stop_efd();
+    std::call_once(shutdown_notify_once_, [this]() { shutdown_promise.set_value(); });
 }
 
 std::expected<void, std::string> App::init() {
-    Utils::Network::disable_hardware_offloads(Config::IFACE_WAN);
-    Utils::Network::disable_hardware_offloads(Config::IFACE_LAN);
-    iface_wan = std::make_unique<Engine::RawSocketManager>(Config::IFACE_WAN);
-    iface_lan = std::make_unique<Engine::RawSocketManager>(Config::IFACE_LAN);
+    Utils::Network::disable_hardware_offloads(Config::iface_wan());
+    Utils::Network::disable_hardware_offloads(Config::iface_lan());
+    iface_wan = std::make_unique<Engine::RawSocketManager>(Config::iface_wan());
+    iface_lan = std::make_unique<Engine::RawSocketManager>(Config::iface_lan());
     if (auto r = iface_wan->init(); !r) return r;
     if (auto r = iface_lan->init(); !r) return r;
     return {};
@@ -369,10 +389,56 @@ std::expected<void, std::string> App::init() {
 
 void App::start() {
     std::println("=== High-performance gaming traffic prioritizer (software router) ===");
-    Telemetry::instance().bridge_mode.store(
-        !Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed),
-        std::memory_order_relaxed);
+    auto& tel = Telemetry::instance();
+    const bool accel = Config::ENABLE_ACCELERATION.load(std::memory_order_relaxed);
+    tel.acceleration_pending.store(accel, std::memory_order_relaxed);
+    tel.mode_config_dirty.store(false, std::memory_order_relaxed);
+    tel.effective_acceleration.store(accel, std::memory_order_release);
+    tel.effective_bridge_mode.store(!accel, std::memory_order_release);
+    tel.bridge_mode.store(!accel, std::memory_order_relaxed);
+    {
+        std::array<Config::StaticDnsRecord, Config::MAX_STATIC_DNS> dns_snapshot{};
+        size_t dns_count =
+            Config::copy_static_dns_snapshot(dns_snapshot.data(), dns_snapshot.size());
+        std::lock_guard<std::mutex> lock(tel.dns_pending_mutex);
+        tel.dns_upstream_primary_pending = Config::DNS_UPSTREAM_PRIMARY;
+        tel.dns_upstream_secondary_pending = Config::DNS_UPSTREAM_SECONDARY;
+        tel.dns_redirect_pending =
+            Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed);
+        tel.dns_static_pending_count = dns_count;
+        for (size_t i = 0; i < dns_count; ++i) {
+            std::strncpy(
+                tel.dns_static_pending[i].hostname.data(),
+                dns_snapshot[i].hostname.data(), 63);
+            tel.dns_static_pending[i].hostname[63] = '\0';
+            std::string ip = Config::ip_to_str(dns_snapshot[i].ip);
+            std::strncpy(tel.dns_static_pending[i].ip_str.data(), ip.c_str(), 15);
+            tel.dns_static_pending[i].ip_str[15] = '\0';
+        }
+    }
     HPGTP::System::Optimizer::lock_cpu_frequency();
+
+    int fd_wan = iface_wan->get_fd();
+    int fd_lan = iface_lan->get_fd();
+    lan_fd_ = fd_lan;
+
+    base_dl_mbps = tel.qos_global_dl_mbps_pending.load(std::memory_order_relaxed);
+    base_ul_mbps = tel.qos_global_ul_mbps_pending.load(std::memory_order_relaxed);
+    tel.effective_qos_global_dl_mbps.store(base_dl_mbps, std::memory_order_release);
+    tel.effective_qos_global_ul_mbps.store(base_ul_mbps, std::memory_order_release);
+    global_shaper_dl = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_dl_mbps});
+    global_shaper_ul = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_ul_mbps});
+
+    auto gw_e = Config::parse_ip_str(Config::ROUTER_IP);
+    if (!gw_e) {
+        std::println(stderr, "[App] Invalid ROUTER_IP: {}", gw_e.error());
+        return;
+    }
+    Net::IPv4Net gw_ip = *gw_e;
+    if (auto pr = open_worker_poll_fds_for_start(); !pr) {
+        std::println(stderr, "[App] {}", pr.error());
+        return;
+    }
 
     if (watchdog_stop_efd_ < 0) {
         watchdog_stop_efd_ = ::eventfd(0, EFD_CLOEXEC);
@@ -387,19 +453,6 @@ void App::start() {
 
     Utils::Network::force_arp_resolution(Utils::Network::get_gateway_ip());
 
-    int fd_wan = iface_wan->get_fd();
-    int fd_lan = iface_lan->get_fd();
-    lan_fd_ = fd_lan;
-
-    constexpr double dl = 500.0;
-    constexpr double ul = 50.0;
-    base_dl_mbps = dl;
-    base_ul_mbps = ul;
-    shaper_dl = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_dl_mbps});
-    shaper_ul = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_ul_mbps});
-
-    Net::IPv4Net gw_ip = Config::parse_ip_str(Config::ROUTER_IP);
-    open_worker_poll_fds_for_start();
     running_workers.store(true, std::memory_order_relaxed);
 
     worker_downstream = std::thread(
@@ -408,7 +461,7 @@ void App::start() {
             worker_event_loop(std::move(iface), std::move(cfg), *ps);
         },
         std::move(iface_wan),
-        PacketWorkerConfig{ fd_lan, 2, shaper_dl, nat_engine, dns_engine,
+        PacketWorkerConfig{ fd_lan, 2, global_shaper_dl, nat_engine, dns_engine,
                             qos_config, device_shaper_dl, dhcp_engine,
                             firewall_engine, gw_ip });
 
@@ -418,7 +471,7 @@ void App::start() {
             worker_event_loop(std::move(iface), std::move(cfg), *ps);
         },
         std::move(iface_lan),
-        PacketWorkerConfig{ fd_wan, 3, shaper_ul, nat_engine, dns_engine,
+        PacketWorkerConfig{ fd_wan, 3, global_shaper_ul, nat_engine, dns_engine,
                             qos_config, device_shaper_ul, dhcp_engine,
                             firewall_engine, gw_ip });
 
@@ -456,6 +509,10 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
                 int prx = ::poll(pfds_rx, 2, -1);
                 if (prx < 0) {
                     if (errno == EINTR) continue;
+                    const int e = errno;
+                    mgr->notify_rx_poll_fatal(e, 2);
+                    std::println(stderr, "[App] Core {} RX poll failed: {}",
+                        core, std::strerror(e));
                     break;
                 }
                 if ((pfds_rx[1].revents & POLLIN) != 0) {
@@ -498,12 +555,12 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
                 consumer.on_packet_event(pkt);
             }
 
-            if (cfg.global_shaper) cfg.global_shaper->process_queue(cfg.tx_fd);
+            if (cfg.route_shaper) cfg.route_shaper->process_queue(cfg.tx_fd);
 
             if (consumer.qos_config
                 && Config::IP_LIMIT_ACTIVE.load(std::memory_order_relaxed)) {
                 size_t ai =
-                    consumer.qos_config->active_idx.load(std::memory_order_relaxed);
+                    consumer.qos_config->active_idx.load(std::memory_order_acquire);
                 consumer.qos_config->buffers[ai].for_each_occupied([&](auto& shaper) {
                     shaper->process_queue(cfg.tx_fd);
                 });
@@ -545,12 +602,23 @@ void App::watchdog_loop() {
     auto& tel = Telemetry::instance();
 
     int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
-    if (tfd == -1) return;
+    if (tfd == -1) {
+        std::println(stderr, "[App] Fatal: timerfd_create: {}", std::strerror(errno));
+        running_watchdog.store(false, std::memory_order_relaxed);
+        std::call_once(shutdown_notify_once_, [this]() { shutdown_promise.set_value(); });
+        return;
+    }
 
     struct itimerspec its{};
     its.it_value.tv_sec    = 1;
     its.it_interval.tv_sec = 1;
-    if (timerfd_settime(tfd, 0, &its, nullptr) == -1) { close(tfd); return; }
+    if (timerfd_settime(tfd, 0, &its, nullptr) == -1) {
+        std::println(stderr, "[App] Fatal: timerfd_settime: {}", std::strerror(errno));
+        ::close(tfd);
+        running_watchdog.store(false, std::memory_order_relaxed);
+        std::call_once(shutdown_notify_once_, [this]() { shutdown_promise.set_value(); });
+        return;
+    }
 
     uint64_t expirations;
     uint64_t last_bytes[4]  = {};
@@ -613,7 +681,7 @@ void App::watchdog_loop() {
         si.iface_count.store(cnt, std::memory_order_release);
     };
 
-    while (running_watchdog.load(std::memory_order_relaxed)) {
+    while (running_watchdog.load(std::memory_order_acquire)) {
         const int rescan_fd = si.rescan_poll_fd();
         struct pollfd pfds[3]{};
         pfds[0] = { tfd, POLLIN, 0 };
@@ -675,7 +743,11 @@ void App::watchdog_loop() {
                 if (n > 0) {
                     sbuf[n] = '\0';
                     const char* p = sbuf;
-                    for (int ci = 0; ci < 4; ++ci) {
+                    long nproc = ::sysconf(_SC_NPROCESSORS_ONLN);
+                    if (nproc < 1) nproc = 1;
+                    int max_ci = static_cast<int>(std::min<long>(
+                        nproc, static_cast<long>(tel.core_metrics.size())));
+                    for (int ci = 0; ci < max_ci; ++ci) {
                         char tag[8];
                         snprintf(tag, sizeof(tag), "cpu%d ", ci);
                         const char* ln = strstr(p, tag);
@@ -718,9 +790,49 @@ void App::watchdog_loop() {
             prev_big = big;
         }
 
+        {
+            static uint64_t prev_ct = 0;
+            uint64_t ct = tel.conntrack_track_drops.load(std::memory_order_relaxed);
+            uint64_t dct = ct - prev_ct;
+            if (dct != 0) {
+                std::println(
+                    "[Conntrack] last 1s: track_drops (probe exhausted) +{}", dct);
+            }
+            prev_ct = ct;
+        }
+
+        {
+            static uint8_t prev_pe = 0;
+            uint8_t pe = tel.raw_socket_poll_errors.load(std::memory_order_relaxed);
+            if (pe != prev_pe && pe != 0) {
+                GUI::Dashboard::post_notification(
+                    QStringLiteral("Network"),
+                    QStringLiteral(
+                        "Packet RX poll failure (telemetry mask %1). See stderr / interface state.")
+                        .arg(pe));
+                prev_pe = pe;
+            }
+        }
+
         // System info refresh every 5 ticks (5 s)
         bool did_iface_scan = false;
         ++watchdog_tick;
+
+        // First tick: report UPnP bind errors to GUI
+        if (watchdog_tick == 1 && upnp_engine) {
+            uint8_t errs = upnp_engine->bind_errors.load(std::memory_order_relaxed);
+            if (errs) {
+                const char* detail =
+                    (errs & 3) == 3 ? "SSDP (1900) and SOAP (5000)" :
+                    (errs & 1)      ? "SSDP (1900)" :
+                    (errs & 2)      ? "SOAP (5000)" : "SOAP listen";
+                GUI::Dashboard::post_notification(
+                    QStringLiteral("UPnP"),
+                    QStringLiteral("Port bind failed: %1. UPnP is partially disabled.")
+                        .arg(detail));
+            }
+        }
+
         if (watchdog_tick % 5 == 0) {
             read_sysfd("/etc/hostname",   std::span<char>(si.hostname));
             read_sysfd("/proc/version",   std::span<char>(si.kernel_short));
@@ -767,8 +879,8 @@ void App::watchdog_loop() {
                             char ip_str[20]{}, hw[8]{}, flags[8]{}, mac[20]{};
                             if (sscanf(line, "%19s %7s %7s %19s",
                                        ip_str, hw, flags, mac) == 4) {
-                                Net::IPv4Net ip = Net::parse_ipv4(ip_str);
-                                if (ip.raw() != INADDR_NONE && strcmp(flags, "0x0") != 0) {
+                                Net::IPv4Net ip{};
+                                if (Net::try_parse_ipv4(ip_str, ip) && strcmp(flags, "0x0") != 0) {
                                     tel.device_table[dcnt].ip = ip;
                                     std::string_view mac_sv{mac};
                                     auto nm = mac_sv.copy(tel.device_table[dcnt].mac.data(), 17);
@@ -788,13 +900,23 @@ void App::watchdog_loop() {
         if (force_scan && !did_iface_scan) scan_ifaces();
         if (force_scan) si.signal_done();
 
+        // Mode sync (GUI pending -> control-plane apply)
+        if (tel.mode_config_dirty.exchange(false, std::memory_order_acq_rel)) {
+            bool accel_on = tel.acceleration_pending.load(std::memory_order_relaxed);
+            Config::ENABLE_ACCELERATION.store(accel_on, std::memory_order_relaxed);
+            tel.effective_acceleration.store(accel_on, std::memory_order_release);
+            tel.effective_bridge_mode.store(!accel_on, std::memory_order_release);
+            tel.bridge_mode.store(!accel_on, std::memory_order_relaxed);
+            std::println("[Mode] Applied: {}", accel_on ? "Acceleration" : "Bridge");
+        }
+
         // Bandwidth (1 Hz)
         uint64_t bd = tel.core_metrics[2].bytes.load(std::memory_order_relaxed);
         uint64_t bu = tel.core_metrics[3].bytes.load(std::memory_order_relaxed);
         std::println("[Monitor] DL: {:.2f} Mbps | UL: {:.2f} Mbps | Mode: {}",
             (bd - last_bytes[2]) * 8.0 / 1e6,
             (bu - last_bytes[3]) * 8.0 / 1e6,
-            tel.bridge_mode.load(std::memory_order_relaxed) ? "Bridge" : "Accel");
+            tel.effective_bridge_mode.load(std::memory_order_acquire) ? "Bridge" : "Accel");
         last_bytes[2] = bd;
         last_bytes[3] = bu;
 
@@ -804,11 +926,12 @@ void App::watchdog_loop() {
 
         // Device policy sync
         if (Config::DEVICE_POLICY_DIRTY.exchange(false, std::memory_order_acq_rel)) {
-            if (firewall_engine) firewall_engine->sync_blocked_ips();
+            const std::lock_guard<std::mutex> plk(Config::device_policy_mutex);
+            if (firewall_engine) firewall_engine->sync_blocked_ips_locked();
 
             auto rebuild_device_shaper = [&](std::shared_ptr<QoSConfig>& cfg_ptr, bool use_dl) {
                 if (!cfg_ptr) return;
-                size_t active   = cfg_ptr->active_idx.load(std::memory_order_relaxed);
+                size_t active   = cfg_ptr->active_idx.load(std::memory_order_acquire);
                 size_t inactive = 1 - active;
                 cfg_ptr->buffers[inactive] = {};
                 for (size_t i = 0; i < Config::DEVICE_POLICY_COUNT; ++i) {
@@ -827,25 +950,72 @@ void App::watchdog_loop() {
 
         // DNS config sync
         if (dns_engine && tel.dns_config_dirty.exchange(false, std::memory_order_acq_rel)) {
-            dns_engine->set_upstream({
-                Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY),
-                Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY)});
-            dns_engine->set_redirect(
-                Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
+            std::string dns_primary;
+            std::string dns_secondary;
+            bool dns_redirect = false;
+            std::array<Telemetry::DnsPendingRecord, Config::MAX_STATIC_DNS> dns_records{};
+            size_t dns_record_count = 0;
+            {
+                std::lock_guard<std::mutex> lock(tel.dns_pending_mutex);
+                dns_primary = tel.dns_upstream_primary_pending;
+                dns_secondary = tel.dns_upstream_secondary_pending;
+                dns_redirect = tel.dns_redirect_pending;
+                dns_record_count =
+                    std::min(tel.dns_static_pending_count, dns_records.size());
+                for (size_t i = 0; i < dns_record_count; ++i)
+                    dns_records[i] = tel.dns_static_pending[i];
+            }
+
+            std::array<Config::StaticDnsRecord, Config::MAX_STATIC_DNS> dns_snapshot{};
+            size_t dns_snapshot_valid = 0;
+            for (size_t i = 0; i < dns_record_count; ++i) {
+                auto ip_e = Config::parse_ip_str(std::string_view{dns_records[i].ip_str.data()});
+                if (!ip_e) {
+                    std::println(stderr, "[DNS] Skipping static record (bad IP): {}",
+                        ip_e.error());
+                    continue;
+                }
+                dns_snapshot[dns_snapshot_valid].domain_hash =
+                    Config::dns_hash_hostname(dns_records[i].hostname.data());
+                dns_snapshot[dns_snapshot_valid].ip = *ip_e;
+                std::strncpy(
+                    dns_snapshot[dns_snapshot_valid].hostname.data(),
+                    dns_records[i].hostname.data(), 63);
+                dns_snapshot[dns_snapshot_valid].hostname[63] = '\0';
+                ++dns_snapshot_valid;
+            }
+
+            Config::DNS_UPSTREAM_PRIMARY = dns_primary;
+            Config::DNS_UPSTREAM_SECONDARY = dns_secondary;
+            Config::DNS_REDIRECT_ENABLED.store(dns_redirect, std::memory_order_relaxed);
+            Config::apply_static_dns_snapshot(dns_snapshot.data(), dns_snapshot_valid);
+
+            auto up_pri = Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY);
+            auto up_sec = Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY);
+            if (!up_pri || !up_sec) {
+                std::println(stderr, "[DNS] Invalid upstream address: {} / {}",
+                    up_pri ? "" : up_pri.error(), up_sec ? "" : up_sec.error());
+            }
+            dns_engine->set_upstream(
+                {up_pri.value_or(Net::IPv4Net{}), up_sec.value_or(Net::IPv4Net{})});
+            dns_engine->set_redirect(dns_redirect);
             dns_engine->reload_static_records();
             std::println("[DNS] Config applied: upstream {} / {}, redirect={}, static={}",
                 Config::DNS_UPSTREAM_PRIMARY, Config::DNS_UPSTREAM_SECONDARY,
-                Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed) ? "on":"off",
-                Config::STATIC_DNS_COUNT);
+                dns_redirect ? "on":"off",
+                dns_snapshot_valid);
         }
 
         // DHCP config sync
         if (dhcp_engine && tel.dhcp_config_dirty.exchange(false, std::memory_order_acq_rel)) {
-            if (auto dr = dhcp_engine->reconfigure({
-                    Config::parse_ip_str(Config::DHCP_POOL_START),
-                    Config::parse_ip_str(Config::DHCP_POOL_END),
-                    Config::DHCP_LEASE_DURATION});
-                !dr) {
+            auto pool_s = Config::parse_ip_str(Config::DHCP_POOL_START);
+            auto pool_e = Config::parse_ip_str(Config::DHCP_POOL_END);
+            if (!pool_s || !pool_e) {
+                std::println(stderr, "[DHCP] Invalid pool bounds: {} / {}",
+                    pool_s ? "" : pool_s.error(), pool_e ? "" : pool_e.error());
+            } else if (auto dr = dhcp_engine->reconfigure({
+                           *pool_s, *pool_e, Config::DHCP_LEASE_DURATION});
+                     !dr) {
                 std::println(stderr, "[DHCP] reconfigure failed: {}", dr.error());
             } else {
                 std::println("[DHCP] Pool reconfigured: {} – {}, lease {}s",
@@ -864,10 +1034,14 @@ void App::watchdog_loop() {
         if (tel.qos_global_bw_dirty.exchange(false, std::memory_order_acq_rel)) {
             base_dl_mbps = tel.qos_global_dl_mbps_pending.load(std::memory_order_relaxed);
             base_ul_mbps = tel.qos_global_ul_mbps_pending.load(std::memory_order_relaxed);
+            tel.effective_qos_global_dl_mbps.store(base_dl_mbps, std::memory_order_release);
+            tel.effective_qos_global_ul_mbps.store(base_ul_mbps, std::memory_order_release);
             int pct = tel.qos_throttle_pct.load(std::memory_order_relaxed);
             double factor = pct / 100.0;
-            if (shaper_dl) shaper_dl->set_rate_limit(Traffic::Mbps{base_dl_mbps * factor});
-            if (shaper_ul) shaper_ul->set_rate_limit(Traffic::Mbps{base_ul_mbps * factor});
+            if (global_shaper_dl)
+                global_shaper_dl->set_rate_limit(Traffic::Mbps{base_dl_mbps * factor});
+            if (global_shaper_ul)
+                global_shaper_ul->set_rate_limit(Traffic::Mbps{base_ul_mbps * factor});
             last_throttle_pct = pct;
             std::println("[QoS] Global limits applied — base DL {:.1f} / UL {:.1f} Mbps (throttle {}%)",
                 base_dl_mbps, base_ul_mbps, pct);
@@ -879,8 +1053,10 @@ void App::watchdog_loop() {
             if (pct != last_throttle_pct) {
                 last_throttle_pct = pct;
                 double factor = pct / 100.0;
-                if (shaper_dl) shaper_dl->set_rate_limit(Traffic::Mbps{base_dl_mbps * factor});
-                if (shaper_ul) shaper_ul->set_rate_limit(Traffic::Mbps{base_ul_mbps * factor});
+                if (global_shaper_dl)
+                    global_shaper_dl->set_rate_limit(Traffic::Mbps{base_dl_mbps * factor});
+                if (global_shaper_ul)
+                    global_shaper_ul->set_rate_limit(Traffic::Mbps{base_ul_mbps * factor});
                 std::println("[QoS] Throttle {}% — DL {:.1f} Mbps / UL {:.1f} Mbps",
                     pct, base_dl_mbps * factor, base_ul_mbps * factor);
             }

@@ -12,6 +12,7 @@
 #include <string_view>
 
 #include "Config.hpp"
+#include <mutex>
 #include "NatEngine.hpp"
 #include "DnsEngine.hpp"
 #include "DhcpEngine.hpp"
@@ -188,11 +189,11 @@ std::array<uint8_t, 512> SelfTest::make_dhcp_discover(size_t& out_len) {
 void SelfTest::test_nat(Report& r) {
     // make_unique: NatEngine has ~1.3 MB internal arrays — too large for stack
     auto nat = std::make_unique<Logic::NatEngine>();
-    Net::IPv4Net wan_ip = Config::parse_ip_str("10.0.0.1");
+    Net::IPv4Net wan_ip = Config::parse_ip_str("10.0.0.1").value();
     nat->set_wan_ip(wan_ip);
 
-    Net::IPv4Net lan_ip = Config::parse_ip_str("192.168.1.100");
-    Net::IPv4Net ext_ip = Config::parse_ip_str("8.8.8.8");
+    Net::IPv4Net lan_ip = Config::parse_ip_str("192.168.1.100").value();
+    Net::IPv4Net ext_ip = Config::parse_ip_str("8.8.8.8").value();
     auto buf = make_udp_pkt(lan_ip, ext_ip, 54321, 12345);
     auto pkt = Net::ParsedPacket::parse(std::span<uint8_t>{buf.data(), 42});
 
@@ -219,17 +220,19 @@ void SelfTest::test_dns(Report& r) {
     dns_static->reload_static_records();
 
     size_t pkt_len = 0;
-    Net::IPv4Net cli = Config::parse_ip_str("192.168.1.100");
-    Net::IPv4Net srv = Config::parse_ip_str("8.8.8.8");
+    Net::IPv4Net cli = Config::parse_ip_str("192.168.1.100").value();
+    Net::IPv4Net srv = Config::parse_ip_str("8.8.8.8").value();
     auto dns_buf = make_dns_query(cli, srv, "test.local", pkt_len);
     // Span must include tail room for DnsEngine::do_bounce (+16 bytes).
     const size_t static_cap = std::min(pkt_len + 64, dns_buf.size());
     auto pkt_static = Net::ParsedPacket::parse(
         std::span<uint8_t>{dns_buf.data(), static_cap});
-    // bounce_fd=-1: send() will fail (EBADF), increments dropped counter by 1 — acceptable
-    bool static_pass = dns_static->process_query(pkt_static, -1);
+    using enum Logic::DnsQueryDisposition;
+    const auto static_disp = dns_static->process_query(pkt_static, -1);
+    const bool static_pass = (static_disp == ReplySendFailed);
     r.add("DNS_Static", static_pass,
-          static_pass ? "static record hit and bounced" : "static record lookup failed");
+          static_pass ? "static hit; ReplySendFailed with invalid bounce fd (expected)"
+                      : "unexpected DNS disposition for static record");
 
     Config::STATIC_DNS_COUNT = saved_count; // restore global state
 
@@ -239,21 +242,22 @@ void SelfTest::test_dns(Report& r) {
     auto miss_buf = make_dns_query(cli, srv, "unknown.invalid", len2);
     auto pkt_miss = Net::ParsedPacket::parse(
         std::span<uint8_t>{miss_buf.data(), len2});
-    bool miss_pass = !dns_miss->process_query(pkt_miss, -1);
+    const bool miss_pass = (dns_miss->process_query(pkt_miss, -1) == NotHandled);
     r.add("DNS_CacheMiss", miss_pass,
-          miss_pass ? "unknown domain returns false (cache miss)" : "unexpected cache hit");
+          miss_pass ? "unknown domain NotHandled (cache miss)" : "unexpected cache hit");
 
     // ── DNS_Redirect ──
     auto dns_redir = std::make_unique<Logic::DnsEngine>();
-    Net::IPv4Net upstream = Config::parse_ip_str("9.9.9.9");
+    Net::IPv4Net upstream = Config::parse_ip_str("9.9.9.9").value();
     dns_redir->set_upstream({upstream, Net::IPv4Net{}});
     dns_redir->set_redirect(true);
     size_t len3 = 0;
     auto redir_buf = make_dns_query(cli, srv, "redirect.test", len3);
     auto pkt_redir = Net::ParsedPacket::parse(
         std::span<uint8_t>{redir_buf.data(), len3});
-    dns_redir->process_query(pkt_redir, -1); // cache miss → rewrites daddr
-    bool redir_pass = pkt_redir.is_valid_ipv4() && (pkt_redir.ipv4->daddr == upstream);
+    const auto redir_disp = dns_redir->process_query(pkt_redir, -1); // Redirected + daddr rewrite
+    bool redir_pass = (redir_disp == Redirected) && pkt_redir.is_valid_ipv4()
+                      && (pkt_redir.ipv4->daddr == upstream);
     r.add("DNS_Redirect", redir_pass,
           redir_pass ? "daddr redirected to upstream" : "daddr not rewritten");
 }
@@ -292,11 +296,15 @@ void SelfTest::test_dhcp(Report& r) {
 
 void SelfTest::test_firewall(Report& r) {
     // make_unique: FirewallEngine has ~5 MB table — must be heap-allocated
-    size_t saved_policy_count = Config::DEVICE_POLICY_COUNT;
+    size_t saved_policy_count;
+    {
+        std::lock_guard<std::mutex> lk(Config::device_policy_mutex);
+        saved_policy_count = Config::DEVICE_POLICY_COUNT;
+    }
 
     // ── FW_Block ──
     auto fw_block = std::make_unique<Logic::FirewallEngine>();
-    Net::IPv4Net block_ip = Config::parse_ip_str("192.168.1.200");
+    Net::IPv4Net block_ip = Config::parse_ip_str("192.168.1.200").value();
     Config::DevicePolicy p{};
     p.ip      = block_ip;
     p.blocked = true;
@@ -306,12 +314,15 @@ void SelfTest::test_firewall(Report& r) {
     r.add("FW_Block", block_pass,
           block_pass ? "blocked IP correctly rejected" : "is_blocked_ip returned false");
 
-    Config::DEVICE_POLICY_COUNT = saved_policy_count; // restore global state
+    {
+        std::lock_guard<std::mutex> lk(Config::device_policy_mutex);
+        Config::DEVICE_POLICY_COUNT = saved_policy_count;
+    }
 
     // ── FW_Session ──
     auto fw_sess = std::make_unique<Logic::FirewallEngine>();
-    Net::IPv4Net lan_ip = Config::parse_ip_str("192.168.1.100");
-    Net::IPv4Net srv_ip = Config::parse_ip_str("1.2.3.4");
+    Net::IPv4Net lan_ip = Config::parse_ip_str("192.168.1.100").value();
+    Net::IPv4Net srv_ip = Config::parse_ip_str("1.2.3.4").value();
 
     // Outbound SYN: flags = 0x5002 (data_offset=5, SYN=1)
     auto syn_buf = make_tcp_pkt(lan_ip, srv_ip, 54321, 80, 0x5002);
@@ -329,8 +340,8 @@ void SelfTest::test_firewall(Report& r) {
 }
 
 void SelfTest::test_classifier(Report& r) {
-    Net::IPv4Net src = Config::parse_ip_str("192.168.1.100");
-    Net::IPv4Net dst = Config::parse_ip_str("8.8.8.8");
+    Net::IPv4Net src = Config::parse_ip_str("192.168.1.100").value();
+    Net::IPv4Net dst = Config::parse_ip_str("8.8.8.8").value();
 
     // ── PRIO_DNS: UDP dst=53 → Critical ──
     {

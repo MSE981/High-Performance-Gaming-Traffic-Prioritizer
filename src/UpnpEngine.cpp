@@ -60,7 +60,12 @@ void UpnpEngine::run_ssdp_server() {
     addr.sin_family      = AF_INET;
     addr.sin_port        = htons(1900);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+    if (bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        std::println(stderr, "[UPnP] SSDP bind port 1900 failed ({})", std::strerror(errno));
+        bind_errors.fetch_or(1, std::memory_order_relaxed);
+        ::close(fd);
+        return;
+    }
 
     ip_mreq mreq{};
     mreq.imr_multiaddr.s_addr = inet_addr("239.255.255.250");
@@ -236,8 +241,20 @@ void UpnpEngine::run_soap_server() {
     addr.sin_family      = AF_INET;
     addr.sin_port        = htons(5000);
     addr.sin_addr.s_addr = inet_addr(router_ip_str.c_str());
-    bind(soap_listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-    listen(soap_listen_fd, 10);
+    if (bind(soap_listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        std::println(stderr, "[UPnP] SOAP bind port 5000 failed ({})", std::strerror(errno));
+        bind_errors.fetch_or(2, std::memory_order_relaxed);
+        ::close(soap_listen_fd);
+        soap_listen_fd = -1;
+        return;
+    }
+    if (listen(soap_listen_fd, 10) < 0) {
+        std::println(stderr, "[UPnP] SOAP listen failed ({})", std::strerror(errno));
+        bind_errors.fetch_or(4, std::memory_order_relaxed);
+        ::close(soap_listen_fd);
+        soap_listen_fd = -1;
+        return;
+    }
 
     while (running.load(std::memory_order_relaxed)) {
         struct pollfd pfds[2]{

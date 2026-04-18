@@ -5,10 +5,26 @@
 #include <charconv>
 #include <string_view>
 #include <algorithm>
+#include <cerrno>
 #include <fcntl.h>
 #include <unistd.h>
 
 namespace HPGTP::Config {
+
+// ── interface names (single source of truth; not exposed as inline globals) ──
+static std::string g_iface_gateway{"eth0"};
+static std::string g_iface_wan{"eth0"};
+static std::string g_iface_lan{"eth1"};
+
+void set_iface_names(const IfaceNames& names) {
+    g_iface_gateway = names.gateway;
+    g_iface_wan     = names.wan;
+    g_iface_lan     = names.lan;
+}
+
+const std::string& iface_gateway() { return g_iface_gateway; }
+const std::string& iface_wan() { return g_iface_wan; }
+const std::string& iface_lan() { return g_iface_lan; }
 
 // ── game port load accumulator (single-threaded load_config) ─────────────────
 static std::array<PortRange, MAX_GAME_PORT_RANGES> g_load_game_ports{};
@@ -76,19 +92,22 @@ static bool parse_kv(const char* line, size_t len,
 
 // ── public API ────────────────────────────────────────────────────────────────
 
-void load_config(const std::string& path) {
+std::expected<void, std::string> load_config(const std::string& path) {
     g_load_game_ports_n = 0;
-
     int fd = ::open(path.c_str(), O_RDONLY);
     if (fd < 0) {
-        std::println(stderr, "[Config] Warning: cannot open config file {}, using defaults.", path);
-        return;
+        if (errno == ENOENT) {
+            std::println(stderr, "[Config] Warning: cannot open config file {}, using defaults.", path);
+            return {};
+        }
+        return std::unexpected(
+            std::string("cannot open ") + path + ": " + std::strerror(errno));
     }
 
     char buf[8192]{};
     ssize_t n = ::read(fd, buf, sizeof(buf) - 1);
     ::close(fd);
-    if (n <= 0) return;
+    if (n <= 0) return {};
     buf[n] = '\0';
 
     bool bridge_iface_loaded = false;
@@ -104,8 +123,8 @@ void load_config(const std::string& path) {
 
         if (llen > 0 && p[0] != '#' && parse_kv(p, llen, key, sizeof(key), val, sizeof(val))) {
             try {
-                if      (!strcmp(key, "IFACE_WAN"))  IFACE_WAN  = val;
-                else if (!strcmp(key, "IFACE_LAN"))  IFACE_LAN  = val;
+                if      (!strcmp(key, "IFACE_WAN"))  g_iface_wan  = val;
+                else if (!strcmp(key, "IFACE_LAN"))  g_iface_lan  = val;
                 else if (!strcmp(key, "ROUTER_IP"))  ROUTER_IP  = val;
                 else if (!strcmp(key, "ENABLE_ACCELERATION"))
                     ENABLE_ACCELERATION.store(!strcmp(val, "true") || !strcmp(val, "1"),
@@ -134,12 +153,12 @@ void load_config(const std::string& path) {
                 else if (!strcmp(key, "DNS_REDIRECT_ENABLED")) DNS_REDIRECT_ENABLED.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                 else if (!strcmp(key, "STATIC_DNS")) {
                     char* colon = strchr(val, ':');
-                    if (colon && STATIC_DNS_COUNT < MAX_STATIC_DNS) {
+                    if (colon) {
                         *colon = '\0';
                         upsert_static_dns(val, colon + 1);
                     }
                 }
-                else if (!strcmp(key, "IFACE_GATEWAY")) IFACE_GATEWAY = val;
+                else if (!strcmp(key, "IFACE_GATEWAY")) g_iface_gateway = val;
                 else if (!strcmp(key, "IFACE_ROLE")) {
                     char* colon = strchr(val, ':');
                     if (colon) {
@@ -156,25 +175,37 @@ void load_config(const std::string& path) {
                     char* colon = strchr(val, ':');
                     if (colon) {
                         *colon = '\0';
-                        Net::IPv4Net ip = parse_ip_str(val);
-                        add_ip_limit(ip, Traffic::Mbps{atof(colon + 1)});
+                        auto ip_e = parse_ip_str(val);
+                        if (ip_e)
+                            add_ip_limit(*ip_e, Traffic::Mbps{atof(colon + 1)});
+                        else
+                            std::println(stderr, "[Config] IP_LIMIT bad address: {}",
+                                ip_e.error());
                     }
                 }
                 else if (!strcmp(key, "GAME_PORT")) {
                     if (g_load_game_ports_n < MAX_GAME_PORT_RANGES) {
+                        // Format: port or start-end, optionally followed by :description
+                        char desc_buf[32]{};
+                        char* colon = strchr(val, ':');
+                        if (colon) {
+                            *colon = '\0';
+                            std::strncpy(desc_buf, colon + 1, sizeof(desc_buf) - 1);
+                        }
                         char* dash = strchr(val, '-');
                         uint32_t a = 0, b = 0;
                         if (dash) {
                             *dash = '\0';
                             a = parse_u32(val);
                             b = parse_u32(dash + 1);
-                            *dash = '-';
                         } else {
                             a = b = parse_u32(val);
                         }
-                        if (a <= 65535u && b <= 65535u && a <= b)
-                            g_load_game_ports[g_load_game_ports_n++] = {
-                                static_cast<uint16_t>(a), static_cast<uint16_t>(b)};
+                        if (a <= 65535u && b <= 65535u && a <= b) {
+                            PortRange pr{static_cast<uint16_t>(a), static_cast<uint16_t>(b), {}};
+                            std::memcpy(pr.desc, desc_buf, sizeof(pr.desc));
+                            g_load_game_ports[g_load_game_ports_n++] = pr;
+                        }
                     }
                 }
             } catch (...) {
@@ -189,31 +220,35 @@ void load_config(const std::string& path) {
         bool bridge_from_roles = false;
         for (size_t i = 0; i < IFACE_ROLES_COUNT; ++i) {
             if (IFACE_ROLES[i].role == IfaceRole::GATEWAY) {
-                IFACE_GATEWAY = IFACE_ROLES[i].name.data();
-                IFACE_WAN = IFACE_ROLES[i].name.data();
+                g_iface_gateway = IFACE_ROLES[i].name.data();
+                g_iface_wan     = IFACE_ROLES[i].name.data();
             } else if (IFACE_ROLES[i].role == IfaceRole::LAN) {
                 if (!bridge_from_roles) { clear_bridged(); bridge_from_roles = true; }
                 add_bridged(IFACE_ROLES[i].name.data());
             }
         }
-        if (BRIDGED_IFACES_COUNT > 0) IFACE_LAN = BRIDGED_INTERFACES[0].name.data();
+        if (BRIDGED_IFACES_COUNT > 0) g_iface_lan = BRIDGED_INTERFACES[0].name.data();
     }
-    IP_LIMIT_ACTIVE.store(IP_LIMIT_COUNT > 0, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lk(ip_limit_mutex);
+        IP_LIMIT_ACTIVE.store(IP_LIMIT_COUNT > 0, std::memory_order_release);
+    }
     commit_loaded_game_ports_to_runtime();
     std::println("[Config] Config loaded: {}", path);
+    return {};
 }
 
-void save_config(const std::string& path) {
+std::expected<void, std::string> save_config(const std::string& path) {
     int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
-        std::println(stderr, "[Config] Error: cannot write config file {}", path);
-        return;
+        return std::unexpected(
+            std::string("cannot write ") + path + ": " + std::strerror(errno));
     }
     auto b = [](bool v) -> const char* { return v ? "true" : "false"; };
 
     dprintf(fd, "# Auto-saved on shutdown\n");
-    dprintf(fd, "IFACE_WAN=%s\n",            IFACE_WAN.c_str());
-    dprintf(fd, "IFACE_LAN=%s\n",            IFACE_LAN.c_str());
+    dprintf(fd, "IFACE_WAN=%s\n",            g_iface_wan.c_str());
+    dprintf(fd, "IFACE_LAN=%s\n",            g_iface_lan.c_str());
     dprintf(fd, "ROUTER_IP=%s\n",            ROUTER_IP.c_str());
     dprintf(fd, "ENABLE_ACCELERATION=%s\n",  b(ENABLE_ACCELERATION.load(std::memory_order_relaxed)));
     dprintf(fd, "ENABLE_STP=%s\n",           b(ENABLE_STP.load(std::memory_order_relaxed)));
@@ -236,31 +271,44 @@ void save_config(const std::string& path) {
     dprintf(fd, "DNS_UPSTREAM_PRIMARY=%s\n",   DNS_UPSTREAM_PRIMARY.c_str());
     dprintf(fd, "DNS_UPSTREAM_SECONDARY=%s\n", DNS_UPSTREAM_SECONDARY.c_str());
     dprintf(fd, "DNS_REDIRECT_ENABLED=%s\n",   b(DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed)));
-    for (size_t i = 0; i < STATIC_DNS_COUNT; ++i) {
-        uint32_t ip = STATIC_DNS_TABLE[i].ip.raw();
+    std::array<StaticDnsRecord, MAX_STATIC_DNS> dns_snapshot{};
+    size_t dns_count = copy_static_dns_snapshot(dns_snapshot.data(), dns_snapshot.size());
+    for (size_t i = 0; i < dns_count; ++i) {
+        uint32_t ip = dns_snapshot[i].ip.raw();
         dprintf(fd, "STATIC_DNS=%s:%u.%u.%u.%u\n",
-            STATIC_DNS_TABLE[i].hostname.data(),
+            dns_snapshot[i].hostname.data(),
             ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF);
     }
-    for (size_t i = 0; i < IP_LIMIT_COUNT; ++i) {
-        uint32_t ip = IP_LIMIT_TABLE[i].ip.raw();
-        dprintf(fd, "IP_LIMIT=%u.%u.%u.%u:%.6g\n",
-            ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF,
-            IP_LIMIT_TABLE[i].rate.value);
+    {
+        std::lock_guard<std::mutex> lk(ip_limit_mutex);
+        for (size_t i = 0; i < IP_LIMIT_COUNT; ++i) {
+            uint32_t ip = IP_LIMIT_TABLE[i].ip.raw();
+            dprintf(fd, "IP_LIMIT=%u.%u.%u.%u:%.6g\n",
+                ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF,
+                IP_LIMIT_TABLE[i].rate.value);
+        }
     }
     {
         size_t ai = game_port_active_idx.load(std::memory_order_acquire);
         size_t n  = game_port_table_counts[ai];
         for (size_t i = 0; i < n; ++i) {
             const auto& r = GAME_PORT_TABLE_DOUBLE[ai][i];
-            if (r.start == r.end)
-                dprintf(fd, "GAME_PORT=%u\n", static_cast<unsigned>(r.start));
-            else
-                dprintf(fd, "GAME_PORT=%u-%u\n", static_cast<unsigned>(r.start),
-                    static_cast<unsigned>(r.end));
+            if (r.start == r.end) {
+                if (r.desc[0])
+                    dprintf(fd, "GAME_PORT=%u:%s\n", static_cast<unsigned>(r.start), r.desc);
+                else
+                    dprintf(fd, "GAME_PORT=%u\n", static_cast<unsigned>(r.start));
+            } else {
+                if (r.desc[0])
+                    dprintf(fd, "GAME_PORT=%u-%u:%s\n", static_cast<unsigned>(r.start),
+                        static_cast<unsigned>(r.end), r.desc);
+                else
+                    dprintf(fd, "GAME_PORT=%u-%u\n", static_cast<unsigned>(r.start),
+                        static_cast<unsigned>(r.end));
+            }
         }
     }
-    dprintf(fd, "IFACE_GATEWAY=%s\n", IFACE_GATEWAY.c_str());
+    dprintf(fd, "IFACE_GATEWAY=%s\n", g_iface_gateway.c_str());
     for (size_t i = 0; i < IFACE_ROLES_COUNT; ++i) {
         const char* rs;
         switch (IFACE_ROLES[i].role) {
@@ -273,6 +321,7 @@ void save_config(const std::string& path) {
     }
     ::close(fd);
     std::println("[Config] Config saved: {}", path);
+    return {};
 }
 
 } // namespace HPGTP::Config

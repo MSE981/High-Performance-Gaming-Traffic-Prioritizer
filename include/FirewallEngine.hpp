@@ -5,6 +5,10 @@
 #include "Headers.hpp"
 #include "Config.hpp"
 
+namespace HPGTP {
+class App;
+}
+
 namespace HPGTP::Logic {
 
     enum class ConnState : uint8_t {
@@ -14,7 +18,10 @@ namespace HPGTP::Logic {
     };
 
     class FirewallEngine {
+        friend class HPGTP::App;
+
         struct alignas(64) ConnTrackEntry {
+            std::atomic<uint32_t> seq{0};
             uint32_t  remote_ip   = 0;
             uint16_t  remote_port = 0;
             uint32_t  lan_ip      = 0;
@@ -41,6 +48,7 @@ namespace HPGTP::Logic {
         static uint32_t hash_remote(uint32_t remote_ip, uint16_t remote_port, uint8_t proto);
         static uint32_t timeout_for(ConnState s);
         bool is_expired(const ConnTrackEntry& e) const;
+        void sync_blocked_ips_locked();
 
     public:
         void tick();

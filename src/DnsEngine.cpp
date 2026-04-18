@@ -2,16 +2,39 @@
 #include "DataPlane.hpp"
 #include <netinet/in.h>
 #include <cstring>
-#include <print>
 
 namespace HPGTP::Logic {
 
-static uint32_t hash_qname(const uint8_t* qname, size_t max_len) {
+namespace {
+
+uint32_t hash_qname(const uint8_t* qname, size_t max_len) {
     uint32_t h = 2166136261U;
     size_t i = 0;
     while (i < max_len && qname[i] != 0) { h ^= qname[i]; h *= 16777619U; i++; }
     return h;
 }
+
+// RFC 1035 name: labels ending in 0, or a suffix pointer (two bytes 11xxxxxx), or pointer-only.
+[[nodiscard]] bool skip_one_dns_name(const uint8_t* d, size_t msg_len, size_t& ptr) {
+    unsigned guard = 0;
+    while (ptr < msg_len && guard++ < 128) {
+        if ((d[ptr] & 0xC0) == 0xC0) {
+            if (ptr + 2 > msg_len) return false;
+            ptr += 2;
+            return true;
+        }
+        const uint8_t lab = d[ptr];
+        if (lab == 0) {
+            ++ptr;
+            return true;
+        }
+        if (lab > 63 || ptr + 1u + static_cast<size_t>(lab) > msg_len) return false;
+        ptr += 1u + lab;
+    }
+    return false;
+}
+
+} // namespace
 
 void DnsEngine::tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
 
@@ -35,7 +58,7 @@ void DnsEngine::reload_static_records() {
 }
 
 bool DnsEngine::do_bounce(Net::ParsedPacket& pkt, DnsHeader* dns, Net::UDPHeader* udp,
-                          Net::IPv4Net ip, int bounce_fd) {
+                          Net::IPv4Net ip, int bounce_fd) noexcept {
     if (!pkt.ipv4) return false;
     const size_t eth_sz = sizeof(Net::EthernetHeader);
     const uint16_t ip_tot = ntohs(pkt.ipv4->tot_len);
@@ -77,11 +100,13 @@ bool DnsEngine::do_bounce(Net::ParsedPacket& pkt, DnsHeader* dns, Net::UDPHeader
     udp->len    = htons(static_cast<uint16_t>(new_len - sizeof(Net::EthernetHeader) - pkt.ihl));
     udp->check  = 0;
 
-    DataPlane::TxFrameOutput::send_best_effort(
-        bounce_fd,
-        std::span<const uint8_t>(pkt.raw_span.data(), new_len),
-        3,
-        1);
+    const auto tr = DataPlane::TxFrameOutput::try_send_packet_nonblocking(
+        bounce_fd, std::span<const uint8_t>(pkt.raw_span.data(), new_len));
+    if (tr != DataPlane::TxFrameOutput::PacketTxTry::Complete) {
+        Telemetry::instance().core_metrics[3].dropped[1].fetch_add(
+            1, std::memory_order_relaxed);
+        return false;
+    }
     return true;
 }
 
@@ -96,21 +121,24 @@ void DnsEngine::rewrite_upstream(Net::ParsedPacket& pkt, Net::IPv4Net upstream_i
     pkt.ipv4->check = htons(~static_cast<uint16_t>(sum));
 }
 
-bool DnsEngine::process_query(Net::ParsedPacket& pkt, int bounce_fd) {
-    if (!pkt.is_valid_ipv4() || pkt.l4_protocol != 17) return false;
+DnsQueryDisposition DnsEngine::process_query(Net::ParsedPacket& pkt,
+                                             int bounce_fd) noexcept {
+    if (!pkt.is_valid_ipv4() || pkt.l4_protocol != 17)
+        return DnsQueryDisposition::NotHandled;
 
     auto udp = pkt.udp();
-    if (!udp || ntohs(udp->dest) != 53) return false;
+    if (!udp || ntohs(udp->dest) != 53) return DnsQueryDisposition::NotHandled;
 
     size_t dns_offset = pkt.l4_offset + sizeof(Net::UDPHeader);
-    if (pkt.raw_span.size() < dns_offset + sizeof(DnsHeader) + 1) return false;
+    if (pkt.raw_span.size() < dns_offset + sizeof(DnsHeader) + 1)
+        return DnsQueryDisposition::NotHandled;
 
     auto dns = reinterpret_cast<DnsHeader*>(pkt.raw_span.data() + dns_offset);
-    if ((ntohs(dns->flags) & 0x8000) != 0) return false;
-    if (ntohs(dns->qdcount) != 1) return false;
+    if ((ntohs(dns->flags) & 0x8000) != 0) return DnsQueryDisposition::NotHandled;
+    if (ntohs(dns->qdcount) != 1) return DnsQueryDisposition::NotHandled;
 
     size_t qname_offset = dns_offset + sizeof(DnsHeader);
-    if (qname_offset >= pkt.raw_span.size()) return false;
+    if (qname_offset >= pkt.raw_span.size()) return DnsQueryDisposition::NotHandled;
 
     uint32_t h = hash_qname(pkt.raw_span.data() + qname_offset,
                             pkt.raw_span.size() - qname_offset);
@@ -118,22 +146,33 @@ bool DnsEngine::process_query(Net::ParsedPacket& pkt, int bounce_fd) {
     uint8_t scnt = static_count.load(std::memory_order_acquire);
     for (uint8_t i = 0; i < scnt; ++i) {
         if (static_records[i].domain_hash == h)
-            return do_bounce(pkt, dns, udp, static_records[i].ip, bounce_fd);
+            return do_bounce(pkt, dns, udp, static_records[i].ip, bounce_fd)
+                ? DnsQueryDisposition::Replied
+                : DnsQueryDisposition::ReplySendFailed;
     }
 
     size_t idx = h % CACHE_SIZE;
-    if (cache[idx].valid.load(std::memory_order_acquire)) {
-        if (cache[idx].domain_hash == h &&
-            current_tick.load(std::memory_order_relaxed) <= cache[idx].expire_tick)
-            return do_bounce(pkt, dns, udp, cache[idx].ipv4_address, bounce_fd);
+    for (;;) {
+        if (!cache[idx].valid.load(std::memory_order_acquire)) break;
+        const uint32_t dh = cache[idx].domain_hash.load(std::memory_order_relaxed);
+        const Net::IPv4Net addr = cache[idx].ipv4_address.load(std::memory_order_relaxed);
+        const uint32_t ex = cache[idx].expire_tick.load(std::memory_order_relaxed);
+        if (!cache[idx].valid.load(std::memory_order_acquire)) continue;
+        if (dh == h && current_tick.load(std::memory_order_relaxed) <= ex)
+            return do_bounce(pkt, dns, udp, addr, bounce_fd) ? DnsQueryDisposition::Replied
+                                                             : DnsQueryDisposition::ReplySendFailed;
         cache[idx].valid.store(false, std::memory_order_relaxed);
+        break;
     }
 
     if (redirect_enabled.load(std::memory_order_relaxed)) {
         Net::IPv4Net upstream = upstream_primary_ip.load(std::memory_order_relaxed);
-        if (upstream.raw() != 0) rewrite_upstream(pkt, upstream);
+        if (upstream.raw() != 0) {
+            rewrite_upstream(pkt, upstream);
+            return DnsQueryDisposition::Redirected;
+        }
     }
-    return false;
+    return DnsQueryDisposition::NotHandled;
 }
 
 void DnsEngine::intercept_response(const Net::ParsedPacket& pkt) {
@@ -166,20 +205,43 @@ void DnsEngine::process_background_tasks() {
         uint32_t h = hash_qname(msg.data.data() + qname_offset, msg.len - qname_offset);
 
         size_t ptr = qname_offset;
-        while (ptr < msg.len && msg.data[ptr] != 0) { ptr += msg.data[ptr] + 1; }
-        ptr += 5;
-
-        if (ptr + 12 <= msg.len) {
-            if (msg.data[ptr+2] == 0x00 && msg.data[ptr+3] == 0x01) {
-                Net::IPv4Net ipv4{*reinterpret_cast<const uint32_t*>(&msg.data[ptr+10])};
-
-                size_t idx = h % CACHE_SIZE;
-                cache[idx].domain_hash  = h;
-                cache[idx].ipv4_address = ipv4;
-                cache[idx].expire_tick  = current_tick.load(std::memory_order_relaxed) + 300;
-                cache[idx].valid.store(true, std::memory_order_release);
+        while (ptr < msg.len) {
+            const uint8_t lab = msg.data[ptr];
+            if (lab == 0) break;
+            if (lab >= 0xC0) {
+                ptr = msg.len;
+                break;
             }
+            if (lab > 63 || ptr + 1u + static_cast<size_t>(lab) > msg.len) {
+                ptr = msg.len;
+                break;
+            }
+            ptr += 1u + lab;
         }
+        if (ptr >= msg.len || msg.data[ptr] != 0) continue;
+        ptr += 1;
+        if (ptr + 4 > msg.len) continue;
+        ptr += 4;
+
+        if (!skip_one_dns_name(msg.data.data(), msg.len, ptr)) continue;
+        if (ptr + 10 > msg.len) continue;
+
+        const uint16_t rtype = static_cast<uint16_t>(
+            (static_cast<uint16_t>(msg.data[ptr]) << 8) | msg.data[ptr + 1]);
+        const uint16_t rdlen = static_cast<uint16_t>(
+            (static_cast<uint16_t>(msg.data[ptr + 8]) << 8) | msg.data[ptr + 9]);
+        if (rtype != 1 || rdlen != 4) continue;
+        if (ptr + 10 + 4 > msg.len) continue;
+
+        Net::IPv4Net ipv4{*reinterpret_cast<const uint32_t*>(&msg.data[ptr + 10])};
+
+        size_t idx = h % CACHE_SIZE;
+        cache[idx].valid.store(false, std::memory_order_release);
+        cache[idx].domain_hash.store(h, std::memory_order_relaxed);
+        cache[idx].ipv4_address.store(ipv4, std::memory_order_relaxed);
+        cache[idx].expire_tick.store(
+            current_tick.load(std::memory_order_relaxed) + 300, std::memory_order_relaxed);
+        cache[idx].valid.store(true, std::memory_order_release);
     }
 }
 

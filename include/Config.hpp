@@ -1,16 +1,18 @@
 #pragma once
 #include <string>
+#include <string_view>
+#include <expected>
 #include <cstdint>
 #include <atomic>
 #include <array>
-#include <chrono>
 #include <mutex>
+#include <chrono>
 #include <span>
 #include <print>
 #include <format>
 #include <cstring>
-#include <cstdio>
 #include <cstdlib>
+#include <arpa/inet.h>
 #include "NetworkTypes.hpp"
 #include "Units.hpp"
 
@@ -52,7 +54,17 @@ namespace HPGTP::Config {
 
     inline void clear_roles() { IFACE_ROLES_COUNT = 0; }
 
-    inline std::string IFACE_GATEWAY = "eth0";
+    // Kernel interface names (gateway / WAN / LAN). Storage is private to Config.cpp;
+    // all updates go through set_iface_names (aggregated multi-field setter).
+    struct IfaceNames {
+        std::string gateway;
+        std::string wan;
+        std::string lan;
+    };
+    void set_iface_names(const IfaceNames& names);
+    const std::string& iface_gateway();
+    const std::string& iface_wan();
+    const std::string& iface_lan();
 
     // Set to false by GUI shutdown dialog to skip the post-exit config save
     inline std::atomic<bool> SAVE_ON_EXIT{true};
@@ -69,9 +81,7 @@ namespace HPGTP::Config {
     };
     inline DynamicState global_state;
 
-    // Interface configuration
-    inline std::string IFACE_WAN = "eth0";
-    inline std::string IFACE_LAN = "eth1";
+    // Interface configuration (ROUTER_IP and below remain inline; IFACE_* live in Config.cpp)
     inline std::string ROUTER_IP = "192.168.1.100";
 
     // DHCP pool configuration
@@ -90,6 +100,7 @@ namespace HPGTP::Config {
         Net::IPv4Net  ip{};
         std::array<char, 64> hostname{};
     };
+    inline std::mutex static_dns_mutex;
     inline std::array<StaticDnsRecord, MAX_STATIC_DNS> STATIC_DNS_TABLE{};
     inline size_t STATIC_DNS_COUNT = 0;
 
@@ -139,17 +150,62 @@ namespace HPGTP::Config {
     inline uint32_t CLEANUP_INTERVAL_PKTS = 10000;
 
     // Gaming protocol port whitelist (GUI + config.txt); dataplane reads active buffer only.
-    struct PortRange { uint16_t start; uint16_t end; };
+    struct PortRange { uint16_t start; uint16_t end; char desc[32]; };
     static constexpr size_t MAX_GAME_PORT_RANGES = 64;
+    // Compile-time defaults — overridden by config.txt GAME_PORT lines when present.
     inline std::array<std::array<PortRange, MAX_GAME_PORT_RANGES>, 2> GAME_PORT_TABLE_DOUBLE{{
-        {{{3074, 3074}, {27015, 27015}, {12000, 12999}}},
-        {{{3074, 3074}, {27015, 27015}, {12000, 12999}}},
+        {{
+            {3478, 3480, "PlayStation Network"},
+            {3074, 3074, "Xbox Live"},
+            {27015, 27050, "Steam"},
+            {5000, 5500, "Riot Games (LoL, Valorant)"},
+            {26500, 26510, "Overwatch / Blizzard"},
+            {9000, 9100, "Fortnite / Epic"},
+            {1024, 1124, "Apex Legends / EA"},
+            {3216, 3216, "EA"},
+            {9960, 9969, "EA"},
+            {18000, 18060, "EA"},
+            {3074, 3080, "Call of Duty"},
+            {25565, 25565, "Minecraft Java"},
+            {19132, 19133, "Minecraft Bedrock"},
+            {7000, 9000, "Rocket League"},
+            {22101, 22102, "Genshin Impact / HoYoverse"},
+            {7086, 7995, "PUBG"},
+            {6015, 6015, "Rainbow Six Siege"},
+            {17000, 17100, "Escape from Tarkov"},
+            {9987, 9987, "TeamSpeak"},
+            {50000, 50004, "Discord voice"},
+        }},
+        {{
+            {3478, 3480, "PlayStation Network"},
+            {3074, 3074, "Xbox Live"},
+            {27015, 27050, "Steam"},
+            {5000, 5500, "Riot Games (LoL, Valorant)"},
+            {26500, 26510, "Overwatch / Blizzard"},
+            {9000, 9100, "Fortnite / Epic"},
+            {1024, 1124, "Apex Legends / EA"},
+            {3216, 3216, "EA"},
+            {9960, 9969, "EA"},
+            {18000, 18060, "EA"},
+            {3074, 3080, "Call of Duty"},
+            {25565, 25565, "Minecraft Java"},
+            {19132, 19133, "Minecraft Bedrock"},
+            {7000, 9000, "Rocket League"},
+            {22101, 22102, "Genshin Impact / HoYoverse"},
+            {7086, 7995, "PUBG"},
+            {6015, 6015, "Rainbow Six Siege"},
+            {17000, 17100, "Escape from Tarkov"},
+            {9987, 9987, "TeamSpeak"},
+            {50000, 50004, "Discord voice"},
+        }},
     }};
-    inline std::array<size_t, 2> game_port_table_counts{{3, 3}};
+    inline std::array<size_t, 2> game_port_table_counts{{20, 20}};
     inline std::atomic<size_t> game_port_active_idx{0};
     inline std::mutex          game_ports_staging_mutex;
     inline std::array<PortRange, MAX_GAME_PORT_RANGES> game_port_staging{};
     inline size_t                game_port_staging_count = 0;
+    // GUI sets GAME_PORTS_DIRTY (release). Exactly one consumer — Core 1 watchdog
+    // in App — must exchange(acq_rel) false then call apply_pended_game_ports().
     inline std::atomic<bool>     GAME_PORTS_DIRTY{false};
 
     void request_game_ports_apply(std::span<const PortRange> ranges);
@@ -175,16 +231,22 @@ namespace HPGTP::Config {
     inline std::array<DevicePolicy, MAX_DEVICE_POLICIES> DEVICE_POLICY_TABLE{};
     inline size_t DEVICE_POLICY_COUNT = 0;
     inline std::atomic<bool> DEVICE_POLICY_DIRTY{false};
+    inline std::atomic<uint64_t> DEVICE_POLICY_REVISION{0};
+    inline std::mutex        device_policy_mutex;
 
     inline void upsert_device_policy(const DevicePolicy& policy) {
+        std::lock_guard<std::mutex> lk(device_policy_mutex);
         for (size_t i = 0; i < DEVICE_POLICY_COUNT; ++i) {
             if (DEVICE_POLICY_TABLE[i].ip == policy.ip) {
                 DEVICE_POLICY_TABLE[i] = policy;
+                DEVICE_POLICY_REVISION.fetch_add(1, std::memory_order_release);
                 return;
             }
         }
-        if (DEVICE_POLICY_COUNT < MAX_DEVICE_POLICIES)
+        if (DEVICE_POLICY_COUNT < MAX_DEVICE_POLICIES) {
             DEVICE_POLICY_TABLE[DEVICE_POLICY_COUNT++] = policy;
+            DEVICE_POLICY_REVISION.fetch_add(1, std::memory_order_release);
+        }
     }
 
     // Static IP rate limit table (max 256 entries, zero heap allocation)
@@ -196,9 +258,14 @@ namespace HPGTP::Config {
     inline std::array<IpLimitEntry, MAX_IP_LIMITS> IP_LIMIT_TABLE{};
     inline size_t IP_LIMIT_COUNT = 0;
     inline std::atomic<bool> IP_LIMIT_ACTIVE{false};
+    inline std::mutex ip_limit_mutex;
 
-    inline void clear_ip_limits() { IP_LIMIT_COUNT = 0; }
+    inline void clear_ip_limits() {
+        std::lock_guard<std::mutex> lk(ip_limit_mutex);
+        IP_LIMIT_COUNT = 0;
+    }
     inline void add_ip_limit(Net::IPv4Net ip, Traffic::Mbps rate) {
+        std::lock_guard<std::mutex> lk(ip_limit_mutex);
         for (size_t i = 0; i < IP_LIMIT_COUNT; ++i) {
             if (IP_LIMIT_TABLE[i].ip == ip) { IP_LIMIT_TABLE[i].rate = rate; return; }
         }
@@ -219,12 +286,18 @@ namespace HPGTP::Config {
         return false;
     }
 
-    // Helper: parse dotted-decimal string to NBO IPv4Net (manual, no syscall)
-    inline Net::IPv4Net parse_ip_str(const std::string& ip_str) {
-        uint32_t a, b, c, d;
-        if (sscanf(ip_str.c_str(), "%u.%u.%u.%u", &a, &b, &c, &d) == 4)
-            return Net::IPv4Net{(a << 0) | (b << 8) | (c << 16) | (d << 24)};
-        return Net::IPv4Net{};
+    // Dotted-decimal IPv4 only; rejects invalid octets and non-canonical forms per inet_pton(3).
+    inline std::expected<Net::IPv4Net, std::string> parse_ip_str(std::string_view ip_sv) {
+        if (ip_sv.empty()) return std::unexpected(std::string("empty IPv4 string"));
+        if (ip_sv.size() > 15u)
+            return std::unexpected(std::string("IPv4 string too long"));
+        char buf[16]{};
+        std::memcpy(buf, ip_sv.data(), ip_sv.size());
+        buf[ip_sv.size()] = '\0';
+        struct ::in_addr a {};
+        if (::inet_pton(AF_INET, buf, &a) != 1)
+            return std::unexpected(std::string("invalid IPv4 address"));
+        return Net::IPv4Net{a.s_addr};
     }
 
     // Helper: convert NBO IPv4Net to dotted-decimal string
@@ -234,10 +307,12 @@ namespace HPGTP::Config {
             v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF);
     }
 
-    // Insert or update a static DNS record (called by GUI)
-    inline void upsert_static_dns(const std::string& hostname, const std::string& ip_str) {
-        uint32_t     hash = dns_hash_hostname(hostname);
-        Net::IPv4Net ip   = parse_ip_str(ip_str);
+    // Insert or update a static DNS record (callers must hold static_dns_mutex)
+    inline void upsert_static_dns_unlocked(const std::string& hostname, const std::string& ip_str) {
+        uint32_t hash = dns_hash_hostname(hostname);
+        auto     ip_e = parse_ip_str(ip_str);
+        if (!ip_e) return;
+        Net::IPv4Net ip = *ip_e;
         for (size_t i = 0; i < STATIC_DNS_COUNT; ++i) {
             if (STATIC_DNS_TABLE[i].domain_hash == hash) {
                 STATIC_DNS_TABLE[i].ip = ip;
@@ -255,7 +330,35 @@ namespace HPGTP::Config {
         }
     }
 
+    inline void clear_static_dns_records() {
+        std::lock_guard<std::mutex> lock(static_dns_mutex);
+        STATIC_DNS_COUNT = 0;
+    }
+
+    // Insert or update a static DNS record.
+    inline void upsert_static_dns(const std::string& hostname, const std::string& ip_str) {
+        std::lock_guard<std::mutex> lock(static_dns_mutex);
+        upsert_static_dns_unlocked(hostname, ip_str);
+    }
+
+    inline void apply_static_dns_snapshot(const StaticDnsRecord* records, size_t count) {
+        std::lock_guard<std::mutex> lock(static_dns_mutex);
+        STATIC_DNS_COUNT = 0;
+        const size_t n = count < MAX_STATIC_DNS ? count : MAX_STATIC_DNS;
+        for (size_t i = 0; i < n; ++i) {
+            STATIC_DNS_TABLE[i] = records[i];
+        }
+        STATIC_DNS_COUNT = n;
+    }
+
+    inline size_t copy_static_dns_snapshot(StaticDnsRecord* out, size_t max_out) {
+        std::lock_guard<std::mutex> lock(static_dns_mutex);
+        const size_t c = STATIC_DNS_COUNT < max_out ? STATIC_DNS_COUNT : max_out;
+        for (size_t i = 0; i < c; ++i) out[i] = STATIC_DNS_TABLE[i];
+        return c;
+    }
+
     // Load / save — implementations in Config.cpp (hide POSIX fd I/O from clients)
-    void load_config(const std::string& path = "config/config.txt");
-    void save_config(const std::string& path = "config/config.txt");
+    std::expected<void, std::string> load_config(const std::string& path = "config/config.txt");
+    std::expected<void, std::string> save_config(const std::string& path = "config/config.txt");
 }

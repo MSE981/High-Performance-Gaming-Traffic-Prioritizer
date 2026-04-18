@@ -1,4 +1,6 @@
 #include "FirewallEngine.hpp"
+#include "Telemetry.hpp"
+#include <mutex>
 #include <netinet/in.h>
 
 namespace HPGTP::Logic {
@@ -30,13 +32,18 @@ bool FirewallEngine::is_expired(const ConnTrackEntry& e) const {
 
 void FirewallEngine::tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
 
-void FirewallEngine::sync_blocked_ips() {
+void FirewallEngine::sync_blocked_ips_locked() {
     uint8_t cnt = 0;
     for (size_t i = 0; i < Config::DEVICE_POLICY_COUNT && cnt < MAX_BLOCKED; ++i) {
         if (Config::DEVICE_POLICY_TABLE[i].blocked)
             blocked_ips[cnt++] = Config::DEVICE_POLICY_TABLE[i].ip;
     }
     blocked_count.store(cnt, std::memory_order_release);
+}
+
+void FirewallEngine::sync_blocked_ips() {
+    std::lock_guard<std::mutex> lk(Config::device_policy_mutex);
+    sync_blocked_ips_locked();
 }
 
 bool FirewallEngine::is_blocked_ip(Net::IPv4Net ip) const {
@@ -75,14 +82,23 @@ void FirewallEngine::track_outbound(const Net::ParsedPacket& pkt) {
         size_t idx = (h + i) % TABLE_SIZE;
         auto& e = table[idx];
 
+        uint32_t s0 = e.seq.load(std::memory_order_acquire);
+        if (s0 & 1u) continue;
+        uint32_t eri = e.remote_ip;
+        uint16_t erp = e.remote_port;
+        uint32_t eli = e.lan_ip;
+        uint16_t elp = e.lan_port;
+        uint8_t epr = e.protocol;
+        uint32_t s1 = e.seq.load(std::memory_order_acquire);
+        if (s0 != s1 || (s1 & 1u)) continue;
+
         if (!e.active.load(std::memory_order_acquire) || is_expired(e)) {
             if (free_slot == -1) free_slot = static_cast<int32_t>(idx);
             continue;
         }
 
-        if (e.remote_ip == remote_ip && e.remote_port == remote_port &&
-            e.lan_ip    == lan_ip    && e.lan_port    == lan_port    &&
-            e.protocol  == proto) {
+        if (eri == remote_ip && erp == remote_port &&
+            eli == lan_ip && elp == lan_port && epr == proto) {
 
             if (proto == 6) {
                 uint16_t flags = ntohs(pkt.tcp()->res1_doff_flags);
@@ -101,13 +117,18 @@ void FirewallEngine::track_outbound(const Net::ParsedPacket& pkt) {
         }
     }
 
-    if (free_slot == -1) return;
-    auto& ne      = table[free_slot];
+    if (free_slot == -1) {
+        Telemetry::instance().conntrack_track_drops.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    auto& ne = table[free_slot];
+    ne.seq.fetch_add(1, std::memory_order_acq_rel);
     ne.remote_ip   = remote_ip;
     ne.remote_port = remote_port;
     ne.lan_ip      = lan_ip;
     ne.lan_port    = lan_port;
     ne.protocol    = proto;
+    ne.seq.fetch_add(1, std::memory_order_acq_rel);
     ne.last_tick.store(tick, std::memory_order_relaxed);
 
     if (proto == 6) {
@@ -148,8 +169,16 @@ bool FirewallEngine::check_inbound(const Net::ParsedPacket& pkt) {
         size_t idx = (h + i) % TABLE_SIZE;
         auto& e = table[idx];
 
-        if (!e.active.load(std::memory_order_acquire) || is_expired(e)) continue;
-        if (e.remote_ip != remote_ip || e.remote_port != sport || e.protocol != proto) continue;
+        uint32_t s0 = e.seq.load(std::memory_order_acquire);
+        if (s0 & 1u) continue;
+        bool act = e.active.load(std::memory_order_acquire);
+        uint32_t eri = e.remote_ip;
+        uint16_t erp = e.remote_port;
+        uint8_t epr = e.protocol;
+        uint32_t s1 = e.seq.load(std::memory_order_acquire);
+        if (s0 != s1 || (s1 & 1u)) continue;
+        if (!act || is_expired(e)) continue;
+        if (eri != remote_ip || erp != sport || epr != proto) continue;
 
         if (proto == 17) {
             e.last_tick.store(tick, std::memory_order_relaxed);

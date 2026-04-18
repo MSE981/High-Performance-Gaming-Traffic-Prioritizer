@@ -87,19 +87,21 @@ int main() {
     auto frame  = make_dns_query("example.test");
     auto pkt    = Net::ParsedPacket::parse(std::span<uint8_t>(frame.data(), frame.size()));
 
-    // bounce_fd = -1 (send will fail gracefully, we only verify return value)
-    bool hit = dns.process_query(pkt, -1);
-    assert(hit && "Static record should produce a cache-hit bounce (returns true)");
+    using HPGTP::Logic::DnsQueryDisposition;
+    // bounce_fd = -1: response is built and send fails → ReplySendFailed (not Replied).
+    const DnsQueryDisposition hit = dns.process_query(pkt, -1);
+    assert(hit == DnsQueryDisposition::ReplySendFailed &&
+           "Static hit must classify as ReplySendFailed when bounce fd is invalid");
 
-    std::println("[PASS] process_query returned true for static record.");
+    std::println("[PASS] process_query returned ReplySendFailed for static record (invalid fd).");
 
-    // A hostname with no record should fall through (returns false)
     auto frame2 = make_dns_query("unknown.test");
     auto pkt2   = Net::ParsedPacket::parse(std::span<uint8_t>(frame2.data(), frame2.size()));
-    bool miss   = dns.process_query(pkt2, -1);
-    assert(!miss && "Unknown hostname should return false (forward to upstream)");
+    const DnsQueryDisposition miss = dns.process_query(pkt2, -1);
+    assert(miss == DnsQueryDisposition::NotHandled &&
+           "Unknown hostname should be NotHandled (forward to upstream)");
 
-    std::println("[PASS] process_query returned false for unknown hostname.");
+    std::println("[PASS] process_query returned NotHandled for unknown hostname.");
     std::println("=== Done ===");
     return 0;
 }

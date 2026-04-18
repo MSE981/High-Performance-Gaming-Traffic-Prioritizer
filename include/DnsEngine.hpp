@@ -8,6 +8,15 @@
 #include "Config.hpp"
 
 namespace HPGTP::Logic {
+
+    // Result of attempting to handle an incoming DNS query on the LAN→WAN path.
+    enum class DnsQueryDisposition : std::uint8_t {
+        NotHandled,      // Not a handled DNS query; frame unchanged by this engine.
+        Replied,         // Response built and sent successfully on bounce_fd.
+        ReplySendFailed, // Response built but egress send did not complete (frame mutated).
+        Redirected,      // Upstream redirect: destination IPv4 rewritten for forwarding.
+    };
+
     struct DnsHeader {
         uint16_t id;
         uint16_t flags;
@@ -29,10 +38,10 @@ namespace HPGTP::Logic {
 
     class DnsEngine {
         struct alignas(64) DnsCacheEntry {
-            uint32_t     domain_hash  = 0;
-            Net::IPv4Net ipv4_address{};
-            uint32_t     expire_tick  = 0;
-            std::atomic<bool> valid{false};
+            std::atomic<uint32_t>     domain_hash{0};
+            std::atomic<Net::IPv4Net> ipv4_address{};
+            std::atomic<uint32_t>     expire_tick{0};
+            std::atomic<bool>         valid{false};
         };
 
         static constexpr size_t CACHE_SIZE = 4096;
@@ -53,8 +62,11 @@ namespace HPGTP::Logic {
         std::array<StaticRecord, MAX_STATIC> static_records{};
         std::atomic<uint8_t> static_count{0};
 
+        // Preconditions: parsed IPv4/UDP/DNS; `pkt.raw_span` must hold at least the current
+        // Ethernet+IP+UDP+DNS wire length plus 16 bytes for the appended A record RDATA tail,
+        // and the resulting frame length must not exceed 1500 bytes (see implementation checks).
         [[nodiscard]] bool do_bounce(Net::ParsedPacket& pkt, DnsHeader* dns, Net::UDPHeader* udp,
-                                     Net::IPv4Net ip, int bounce_fd);
+                                     Net::IPv4Net ip, int bounce_fd) noexcept;
         static void rewrite_upstream(Net::ParsedPacket& pkt, Net::IPv4Net upstream_ip);
 
     public:
@@ -62,7 +74,8 @@ namespace HPGTP::Logic {
         void set_upstream(DnsUpstreamConfig cfg);
         void set_redirect(bool enabled);
         void reload_static_records();
-        bool process_query(Net::ParsedPacket& pkt, int bounce_fd);
+        [[nodiscard]] DnsQueryDisposition process_query(Net::ParsedPacket& pkt,
+                                                        int bounce_fd) noexcept;
         void intercept_response(const Net::ParsedPacket& pkt);
         void process_background_tasks();
     };

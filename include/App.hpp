@@ -2,8 +2,10 @@
 // C++ standard headers only -- no POSIX C headers.
 // All POSIX C APIs (socket, timerfd, poll, dirent, ...) are hidden in App.cpp.
 #include <thread>
+#include <mutex>
 #include <atomic>
 #include <memory>
+#include <string>
 #include <expected>
 #include <future>
 #include <array>
@@ -102,7 +104,7 @@ struct QoSConfig {
 struct PacketWorkerConfig {
     int tx_fd;
     int core_id;
-    std::shared_ptr<Traffic::Shaper>       global_shaper;
+    std::shared_ptr<Traffic::Shaper>       route_shaper;
     std::shared_ptr<Logic::NatEngine>      nat_engine;
     std::shared_ptr<Logic::DnsEngine>      dns_engine;
     std::shared_ptr<QoSConfig>             qos_config;
@@ -118,7 +120,6 @@ struct PacketWorkerConfig {
 class App {
     std::unique_ptr<Engine::RawSocketManager> iface_wan;
     std::unique_ptr<Engine::RawSocketManager> iface_lan;
-    std::shared_ptr<Traffic::Shaper>          global_shaper;
     std::shared_ptr<Logic::NatEngine>         nat_engine;
     std::shared_ptr<Logic::DnsEngine>         dns_engine;
     std::shared_ptr<Logic::DhcpEngine>        dhcp_engine;
@@ -127,8 +128,8 @@ class App {
     std::shared_ptr<QoSConfig>                qos_config;
     int lan_fd_ = -1;
 
-    std::shared_ptr<Traffic::Shaper> shaper_dl;
-    std::shared_ptr<Traffic::Shaper> shaper_ul;
+    std::shared_ptr<Traffic::Shaper> global_shaper_dl;
+    std::shared_ptr<Traffic::Shaper> global_shaper_ul;
     double base_dl_mbps = 500.0;
     double base_ul_mbps = 50.0;
     std::shared_ptr<QoSConfig> device_shaper_dl;
@@ -142,6 +143,7 @@ class App {
     std::promise<void> shutdown_promise;
     std::future<void>  shutdown_future;
     std::atomic<bool>   shutdown_sequence_started_{false};
+    std::once_flag      shutdown_notify_once_;
 
     struct WorkerPollSync {
         int frame_efd{-1};
@@ -150,7 +152,7 @@ class App {
     std::array<WorkerPollSync, 2> worker_poll_{};
     int watchdog_stop_efd_{-1};
 
-    void open_worker_poll_fds_for_start();
+    std::expected<void, std::string> open_worker_poll_fds_for_start();
     void close_worker_poll_fds();
     void wake_proc_threads_for_shutdown();
     void wake_watchdog_for_shutdown();

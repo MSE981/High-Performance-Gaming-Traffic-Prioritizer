@@ -27,7 +27,8 @@ uint32_t NatEngine::hash_flow(const FlowKey& k) const {
 }
 
 NatEngine::NatEngine() {
-    port_to_index.fill(-1);
+    for (auto& p : port_to_index)
+        p.store(-1, std::memory_order_relaxed);
 }
 
 void NatEngine::set_wan_ip(Net::IPv4Net ip) { wan_ip = ip; }
@@ -37,20 +38,25 @@ void NatEngine::add_upnp_rule(UpnpRule rule) {
     uint16_t net_int_port = htons(rule.int_port);
 
     for (auto& r : upnp_rules) {
-        if (r.active.load(std::memory_order_relaxed)) {
+        if (r.active.load(std::memory_order_acquire)) {
             if (r.external_port == net_ext_port && r.protocol == rule.proto) {
+                r.seq.fetch_add(1, std::memory_order_acq_rel);
                 r.internal_ip   = rule.int_ip;
                 r.internal_port = net_int_port;
+                r.seq.fetch_add(1, std::memory_order_acq_rel);
                 return;
             }
         }
     }
     size_t idx = upnp_cursor.fetch_add(1, std::memory_order_relaxed) % upnp_rules.size();
-    upnp_rules[idx].internal_ip   = rule.int_ip;
-    upnp_rules[idx].internal_port = net_int_port;
-    upnp_rules[idx].external_port = net_ext_port;
-    upnp_rules[idx].protocol      = rule.proto;
-    upnp_rules[idx].active.store(true, std::memory_order_release);
+    auto& slot = upnp_rules[idx];
+    slot.seq.fetch_add(1, std::memory_order_acq_rel);
+    slot.internal_ip   = rule.int_ip;
+    slot.internal_port = net_int_port;
+    slot.external_port = net_ext_port;
+    slot.protocol      = rule.proto;
+    slot.seq.fetch_add(1, std::memory_order_acq_rel);
+    slot.active.store(true, std::memory_order_release);
 }
 
 void NatEngine::tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
@@ -77,15 +83,22 @@ bool NatEngine::process_outbound(Net::ParsedPacket& pkt) {
     }
 
     if (upnp_cursor.load(std::memory_order_relaxed) > 0) for (auto& rule : upnp_rules) {
-        if (rule.active.load(std::memory_order_acquire)) {
-            if (rule.protocol == ip->protocol && rule.internal_ip == ip->saddr && rule.internal_port == *sport_ptr) {
-                update_checksum_32(ip->check, ip->saddr, wan_ip);
-                if (check_ptr && *check_ptr != 0)
-                    update_checksum_32(*check_ptr, ip->saddr, wan_ip);
-                ip->saddr  = wan_ip;
-                *sport_ptr = rule.external_port;
-                return true;
-            }
+        if (!rule.active.load(std::memory_order_acquire)) continue;
+        uint32_t s0 = rule.seq.load(std::memory_order_acquire);
+        if (s0 & 1u) continue;
+        Net::IPv4Net r_int_ip   = rule.internal_ip;
+        uint16_t     r_int_port = rule.internal_port;
+        uint16_t     r_ext_port = rule.external_port;
+        uint8_t      r_prot     = rule.protocol;
+        uint32_t s1 = rule.seq.load(std::memory_order_acquire);
+        if (s0 != s1 || (s1 & 1u)) continue;
+        if (r_prot == ip->protocol && r_int_ip == ip->saddr && r_int_port == *sport_ptr) {
+            update_checksum_32(ip->check, ip->saddr, wan_ip);
+            if (check_ptr && *check_ptr != 0)
+                update_checksum_32(*check_ptr, ip->saddr, wan_ip);
+            ip->saddr  = wan_ip;
+            *sport_ptr = r_ext_port;
+            return true;
         }
     }
 
@@ -98,15 +111,24 @@ bool NatEngine::process_outbound(Net::ParsedPacket& pkt) {
         size_t idx   = (h + i) % MAX_SESSIONS;
         bool is_active = sessions[idx].active.load(std::memory_order_acquire);
         if (!is_active || (tick - sessions[idx].last_active_tick.load(std::memory_order_relaxed) > 300)) {
-            if (is_active) port_to_index[ntohs(sessions[idx].external_port)] = -1;
-
-            sessions[idx].internal_key = key;
-            sessions[idx].external_port = htons(port_cursor++);
+            NatSession& sess = sessions[idx];
+            sess.seq.fetch_add(1, std::memory_order_acq_rel);
+            if (is_active) {
+                const uint16_t old_host = ntohs(sess.external_port);
+                int32_t expect_idx = static_cast<int32_t>(idx);
+                (void)port_to_index[old_host].compare_exchange_strong(
+                    expect_idx, -1, std::memory_order_release, std::memory_order_relaxed);
+            }
+            sess.internal_key = key;
+            const uint16_t ext_nbo = htons(port_cursor++);
             if (port_cursor > 60000) port_cursor = 10000;
-            sessions[idx].last_active_tick.store(tick, std::memory_order_relaxed);
-            sessions[idx].active.store(true, std::memory_order_release);
-            ext_port = sessions[idx].external_port;
-            port_to_index[ntohs(ext_port)] = static_cast<int32_t>(idx);
+            sess.external_port = ext_nbo;
+            sess.last_active_tick.store(tick, std::memory_order_relaxed);
+            sess.seq.fetch_add(1, std::memory_order_acq_rel);
+            sess.active.store(true, std::memory_order_release);
+            ext_port = ext_nbo;
+            port_to_index[ntohs(ext_port)].store(static_cast<int32_t>(idx),
+                                                 std::memory_order_release);
             break;
         }
         if (sessions[idx].internal_key == key) {
@@ -151,29 +173,51 @@ bool NatEngine::process_inbound(Net::ParsedPacket& pkt) {
     }
 
     if (upnp_cursor.load(std::memory_order_relaxed) > 0) for (auto& rule : upnp_rules) {
-        if (rule.active.load(std::memory_order_acquire)) {
-            if (rule.protocol == ip->protocol && rule.external_port == *dport_ptr) {
-                update_checksum_32(ip->check, ip->daddr, rule.internal_ip);
-                if (check_ptr && *check_ptr != 0)
-                    update_checksum_32(*check_ptr, ip->daddr, rule.internal_ip);
-                ip->daddr  = rule.internal_ip;
-                *dport_ptr = rule.internal_port;
-                return true;
-            }
+        if (!rule.active.load(std::memory_order_acquire)) continue;
+        uint32_t s0 = rule.seq.load(std::memory_order_acquire);
+        if (s0 & 1u) continue;
+        Net::IPv4Net r_int_ip   = rule.internal_ip;
+        uint16_t     r_int_port = rule.internal_port;
+        uint16_t     r_ext_port = rule.external_port;
+        uint8_t      r_prot     = rule.protocol;
+        uint32_t s1 = rule.seq.load(std::memory_order_acquire);
+        if (s0 != s1 || (s1 & 1u)) continue;
+        if (r_prot == ip->protocol && r_ext_port == *dport_ptr) {
+            update_checksum_32(ip->check, ip->daddr, r_int_ip);
+            if (check_ptr && *check_ptr != 0)
+                update_checksum_32(*check_ptr, ip->daddr, r_int_ip);
+            ip->daddr  = r_int_ip;
+            *dport_ptr = r_int_port;
+            return true;
         }
     }
 
-    int32_t idx = port_to_index[ntohs(*dport_ptr)];
-    if (idx == -1 || !sessions[idx].active.load(std::memory_order_acquire) ||
-        sessions[idx].internal_key.daddr != ip->saddr ||
-        sessions[idx].internal_key.dport != sport) {
-        return false;
-    }
+    const uint16_t dport_host = ntohs(*dport_ptr);
+    int32_t idx = port_to_index[dport_host].load(std::memory_order_acquire);
+    if (idx < 0 || static_cast<size_t>(idx) >= MAX_SESSIONS) return false;
 
-    sessions[idx].last_active_tick.store(
-        current_tick.load(std::memory_order_relaxed), std::memory_order_relaxed);
-    Net::IPv4Net internal_ip   = sessions[idx].internal_key.saddr;
-    uint16_t     internal_port = sessions[idx].internal_key.sport;
+    bool         resolved = false;
+    Net::IPv4Net internal_ip{};
+    uint16_t     internal_port = 0;
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        NatSession& sess = sessions[static_cast<size_t>(idx)];
+        uint32_t s0 = sess.seq.load(std::memory_order_acquire);
+        if (s0 & 1u) continue;
+        bool act = sess.active.load(std::memory_order_acquire);
+        FlowKey ik = sess.internal_key;
+        uint16_t ep = sess.external_port;
+        uint32_t s1 = sess.seq.load(std::memory_order_acquire);
+        if (s0 != s1 || (s1 & 1u)) continue;
+        if (!act) return false;
+        if (ik.daddr != ip->saddr || ik.dport != sport || ep != *dport_ptr) return false;
+        internal_ip   = ik.saddr;
+        internal_port = ik.sport;
+        sess.last_active_tick.store(
+            current_tick.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        resolved = true;
+        break;
+    }
+    if (!resolved) return false;
 
     update_checksum_32(ip->check, ip->daddr, internal_ip);
     if (check_ptr && *check_ptr != 0) {

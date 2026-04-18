@@ -84,8 +84,8 @@ namespace HPGTP::Net {
         }
     };
 
-    // Phase 2.6: Unified zero-copy packet context parser
-    // Eliminate redundant scalar offset calculations in downstream modules (NAT, DNS, QoS, HeuristicProcessor)
+    // Unified zero-copy packet context parser (single parse path for NAT, DNS, QoS, HeuristicProcessor).
+    // Eliminates redundant scalar offset calculations in downstream modules.
     struct ParsedPacket {
         std::span<uint8_t> raw_span;
         Net::EthernetHeader* eth = nullptr;

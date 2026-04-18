@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 
-set(CMAKE_CXX_COMPILER "g++-14")
-set(CMAKE_C_COMPILER "gcc-14")
+option(USE_GCC14 "Force GCC 14 as C and C++ compiler (gcc-14 / g++-14)" OFF)
+if(USE_GCC14)
+    set(CMAKE_C_COMPILER "gcc-14")
+    set(CMAKE_CXX_COMPILER "g++-14")
+endif()
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,7 +32,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang
         -fexceptions
     )
 elseif(MSVC)
-    list(APPEND PROJECT_ROUTER_COMPILE_OPTIONS /std:c++latest)
+    list(APPEND PROJECT_ROUTER_COMPILE_OPTIONS /std:c++latest /O2)
 endif()
 
 # ── Infrastructure utilities ──────────────────────────────────────────────────
@@ -89,7 +92,10 @@ target_link_libraries(GamingTrafficPrioritizer PRIVATE
 target_compile_options(GamingTrafficPrioritizer PRIVATE ${PROJECT_ROUTER_COMPILE_OPTIONS})
 target_compile_definitions(GamingTrafficPrioritizer PRIVATE _GNU_SOURCE)
 
-# ── Demo programs (Phase 5) ───────────────────────────────────────────────────
+# ── Demo programs (one executable per engine) ─────────────────────────────────
+# Minimal link set per target (Ch.2 §2.1: one library boundary + client demo).
+# With STATIC libraries, PRIVATE deps are not propagated to the executable;
+# list dataplane explicitly for engines that use it.
 if(EXISTS "${CMAKE_SOURCE_DIR}/demo")
     foreach(demo_src IN ITEMS
         demo/nat_demo.cpp
@@ -100,10 +106,20 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/demo")
         if(EXISTS "${CMAKE_SOURCE_DIR}/${demo_src}")
             get_filename_component(demo_name ${demo_src} NAME_WE)
             add_executable(${demo_name} ${demo_src})
-            target_link_libraries(${demo_name} PRIVATE
-                ${PROJECT_ROUTER_STATIC_LIBS}
-                Threads::Threads
-            )
+            if(demo_name STREQUAL "nat_demo")
+                set(demo_link_libs engine_nat)
+            elseif(demo_name STREQUAL "dns_demo")
+                set(demo_link_libs engine_dns dataplane config)
+            elseif(demo_name STREQUAL "dhcp_demo")
+                set(demo_link_libs engine_dhcp dataplane)
+            elseif(demo_name STREQUAL "scheduler_demo")
+                set(demo_link_libs engine_scheduler dataplane)
+            elseif(demo_name STREQUAL "firewall_demo")
+                set(demo_link_libs engine_firewall config)
+            else()
+                message(FATAL_ERROR "demo ${demo_name}: add target_link_libs mapping")
+            endif()
+            target_link_libraries(${demo_name} PRIVATE ${demo_link_libs} Threads::Threads)
             target_compile_options(${demo_name} PRIVATE ${PROJECT_ROUTER_COMPILE_OPTIONS})
             target_compile_definitions(${demo_name} PRIVATE _GNU_SOURCE)
         endif()

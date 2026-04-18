@@ -5,6 +5,7 @@
 #include <cstring>
 #include <expected>
 #include <string>
+#include <mutex>
 #include "NetworkTypes.hpp"
 
 namespace HPGTP {
@@ -26,20 +27,42 @@ namespace HPGTP {
         std::array<CoreMetrics, 4> core_metrics{};
 
         // Diagnostics and control data (low-frequency read/write, no need for separation)
-        std::atomic<bool> bridge_mode{ false };
+        std::atomic<bool> bridge_mode{ false }; // legacy mirror of effective_bridge_mode
+        std::atomic<bool> effective_bridge_mode{ false };
+        std::atomic<bool> effective_acceleration{ true };
         std::atomic<double> cpu_temp_celsius{ 0.0 };  // updated by Core 1 watchdog via timerfd, read by Qt UI
         std::atomic<int> qos_throttle_pct{ 85 };     // 0–100, written by GUI slider (Core 0), applied by Core 1 watchdog
         // Global WAN shaper caps (Mbps): GUI writes pending + dirty; Core 1 watchdog applies to base_dl/ul + shapers.
         std::atomic<bool> qos_global_bw_dirty{ false };
         std::atomic<double> qos_global_dl_mbps_pending{ 500.0 };
         std::atomic<double> qos_global_ul_mbps_pending{ 50.0 };
+        std::atomic<double> effective_qos_global_dl_mbps{ 500.0 };
+        std::atomic<double> effective_qos_global_ul_mbps{ 50.0 };
+        std::atomic<bool> mode_config_dirty{ false };
+        std::atomic<bool> acceleration_pending{ true };
         std::atomic<bool> dhcp_config_dirty{ false }; // set by GUI (Core 0), consumed by Core 1 watchdog
         std::atomic<bool> dns_config_dirty{ false };  // set by GUI (Core 0), consumed by Core 1 watchdog
+        struct DnsPendingRecord {
+            std::array<char, 64> hostname{};
+            std::array<char, 16> ip_str{};
+        };
+        std::mutex dns_pending_mutex;
+        std::string dns_upstream_primary_pending = "8.8.8.8";
+        std::string dns_upstream_secondary_pending = "8.8.4.4";
+        bool dns_redirect_pending = false;
+        std::array<DnsPendingRecord, 64> dns_static_pending{};
+        size_t dns_static_pending_count = 0;
 
         // Traffic shaper: data plane fetch_add only; watchdog prints 1 Hz deltas.
         std::atomic<uint64_t> shaper_normal_tx_complete{0};
         std::atomic<uint64_t> shaper_queue_overflow_drops{0};
         std::atomic<uint64_t> shaper_oversized_drops{0};
+
+        // Raw AF_PACKET RX: bit0 = RawSocketManager::do_poll fatal; bit1 = App worker RX poll fatal.
+        std::atomic<uint8_t> raw_socket_poll_errors{0};
+
+        // Firewall conntrack: track_outbound could not insert (linear probe exhausted).
+        std::atomic<uint64_t> conntrack_track_drops{0};
 
         // Device table: scanned from /proc/net/arp by Core 1 watchdog every 5s.
         // Plain char arrays — torn reads acceptable for display-only data.

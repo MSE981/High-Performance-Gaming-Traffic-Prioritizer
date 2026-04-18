@@ -48,7 +48,6 @@ The classifier is automated. It analyzes packet sizes and generation frequencies
 - **Device bandwidth limits**: Applies a configurable rate limiter for individual IP addresses, with capabilities to update these limits instantly during execution.
 - **Integrated network services**: Includes NAT (SNAT/DNAT), a DHCP server, a DNS cache, UPnP/IGD mapping, and a stateful firewall. All services can be controlled directly via the interface.
 - **Local dashboard**: Features a custom Qt6 interface displaying real-time packet rates, core performance metrics, and service controls using Direct Rendering Manager (DRM) hardware acceleration.
-- **Adaptive visual rendering**: Modifies visual interface refresh rates automatically from 60 Hz during active interactions to 1 Hz during idle states to conserve system resources.
 - **Interactive system notifications**: Displays system alerts via a graphical user interface panel without disrupting background network processing.
 - **Command-line mode**: Supports efficient execution without physical displays via direct configuration settings.
 
@@ -188,7 +187,7 @@ The primary classification mechanism relies on a fixed memory hash table impleme
 
 **Constant Measurement Evaluation (Core 1)**
 
-Configured exactly to a 1-second interval tracking schedule. This specific core performs hardware temperature validation, NAT status evaluation, DNS memory assessment, and DHCP lease confirmation utilizing explicit file descriptor readings (`open()`, `read()`, `close()`), ensuring strict state synchronicity.
+Configured exactly to a 1-second interval tracking schedule. This specific core performs hardware temperature validation and system metrics tracking utilizing explicit file descriptor readings (`open()`, `read()`, `close()`), ensuring strict state synchronicity. In parallel, it actively manages NAT status evaluation, DNS memory assessment, and DHCP lease confirmation as pure, lock-free in-memory operations (via atomic updates and message queues) entirely avoiding system call overhead.
 
 **High Availability Updates**
 
@@ -198,15 +197,14 @@ Bandwidth application adjustments are dynamically written into inactive paramete
 
 ## Project Roadmap
 
-- [x] Primary QoS transmission framework
-- [x] Application of adjustable device network caps
-- [x] Embedded integration for standard NAT, DHCP, DNS, and Firewall processing
-- [x] Real-time graphical dashboard processing
-- [x] Headless operational capability
-- [x] Direct DRM graphics visualization integration
-- [x] Dynamic refresh management controls
-- [x] Integrated notification response interfaces
-- [ ] Remote network administration API configuration
+- [√] Primary QoS transmission framework
+- [√] Application of adjustable device network caps
+- [√] Embedded integration for standard NAT, DHCP, DNS, and Firewall processing
+- [√] Real-time graphical dashboard processing
+- [√] Headless operational capability
+- [√] Direct DRM graphics visualization integration
+- [√] Integrated notification response interfaces
+- [O] Remote network administration API configuration
 
 
 ---

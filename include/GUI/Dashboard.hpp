@@ -94,7 +94,7 @@ private:
 };
 
 // ═══════════════════════════════════════════
-// Real-time plot component (inherited from Phase 3, retains RK4 physics engine)
+// Real-time plot: shift-buffer samples; RK4 spring-damper smoothing (buffer on sample, redraw on timer).
 // ═══════════════════════════════════════════
 class RealTimePlot : public QWidget {
     Q_OBJECT
@@ -144,6 +144,7 @@ class InterfacePage : public QWidget {
 public:
     explicit InterfacePage(QWidget* parent = nullptr);
     void scan_interfaces();
+    void refresh_from_backend();
 private slots:
     void on_save_clicked();
     void on_reset_clicked();
@@ -223,12 +224,14 @@ class QosPage : public QWidget {
 public:
     explicit QosPage(QWidget* parent = nullptr);
     void refresh_whitelist_from_config();
+    void refresh_from_backend();
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 private slots:
     void on_edit_whitelist();
     void on_toggle_accel();
-    void on_throttle_changed(int value_pct);
+    void on_throttle_label_only(int value_pct);
+    void on_throttle_committed();
     void on_apply_global_bw();
 private:
     SwitchToggle* sw_acceleration;
@@ -319,6 +322,7 @@ private:
     QVBoxLayout*         cards_layout;
     std::vector<DeviceRow> rows_;
     uint8_t last_device_count = 255;
+    uint64_t last_device_policy_revision_ = 0;
 };
 
 // ═══════════════════════════════════════════
@@ -340,6 +344,10 @@ protected:
 private:
     void setup_ui();
     void setup_tabbar(QBoxLayout* root_layout);
+    // Refresh matrix: startup uses load_config; after that, each page entry pulls
+    // from process state (Config / Telemetry). User edits on the active page stay
+    // until the user leaves and re-enters the page.
+    void run_page_enter_refresh(int page_index);
 
     QStackedWidget* page_stack       = nullptr;
     QFrame*         header_          = nullptr;  // header frame — watched for swipe-down gesture
@@ -382,9 +390,11 @@ private:
     uint64_t plot_tick_ = 0;
     std::chrono::steady_clock::time_point plot_last_tick_ = std::chrono::steady_clock::now();
 
-    // Startup log reader: async file I/O off the GUI thread (PDF Ch.3).
+    // Startup log reader: async file I/O off the GUI thread.
     // Auto-joins on Dashboard destruction; worker posts each line via invokeMethod.
     std::jthread startup_log_reader_;
+
+    static void run_startup_log_reader(std::stop_token st);
 
 private slots:
     void on_tab_clicked(int page_index);

@@ -5,6 +5,8 @@
 #include <cstring>
 #include <expected>
 #include <string>
+#include <functional>
+#include <cstdint>
 #include "Headers.hpp"
 
 namespace HPGTP::Engine {
@@ -25,6 +27,7 @@ namespace HPGTP::Engine {
         // Avoids exposing <net/if.h> (IFNAMSIZ) to clients
         static constexpr size_t IFACE_NAME_MAX = 16;
         std::array<char, IFACE_NAME_MAX> iface{};
+        std::function<void(int err)> poll_error_callback_;
 
         // Kernel ring-buffer helpers — implementation in NetworkEngine.cpp.
         // Hides <poll.h> and <linux/if_packet.h> from all clients.
@@ -37,6 +40,13 @@ namespace HPGTP::Engine {
         ~RawSocketManager();
         std::expected<void, std::string> init();
         int get_fd() const { return fd; }
+
+        void set_poll_error_callback(std::function<void(int err)> cb) {
+            poll_error_callback_ = std::move(cb);
+        }
+
+        /// `telemetry_flag`: bit0 = do_poll path; bit1 = worker RX thread (see Telemetry::raw_socket_poll_errors).
+        void notify_rx_poll_fatal(int err, std::uint8_t telemetry_flag);
 
         void poll_rx(int timeout_ms) { do_poll(timeout_ms); }
         bool peek_rx_frame(std::span<uint8_t>& out) { return peek_frame(out); }

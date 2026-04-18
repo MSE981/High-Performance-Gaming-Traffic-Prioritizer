@@ -62,6 +62,31 @@ enable_upnp=false
 enable_firewall=true
 enable_pppoe=false
 
+# ── Game port whitelist ──────────────────────────────────────────────
+# Ports / ranges listed here receive priority queuing when QoS is active.
+# Format: GAME_PORT=<port>:<description>  or  GAME_PORT=<start>-<end>:<description>
+# The description is optional (colon and text may be omitted).
+GAME_PORT=3478-3480:PlayStation Network
+GAME_PORT=3074:Xbox Live
+GAME_PORT=27015-27050:Steam
+GAME_PORT=5000-5500:Riot Games (LoL, Valorant)
+GAME_PORT=26500-26510:Overwatch / Blizzard
+GAME_PORT=9000-9100:Fortnite / Epic
+GAME_PORT=1024-1124:Apex Legends / EA
+GAME_PORT=3216:EA
+GAME_PORT=9960-9969:EA
+GAME_PORT=18000-18060:EA
+GAME_PORT=3074-3080:Call of Duty
+GAME_PORT=25565:Minecraft Java
+GAME_PORT=19132-19133:Minecraft Bedrock
+GAME_PORT=7000-9000:Rocket League
+GAME_PORT=22101-22102:Genshin Impact / HoYoverse
+GAME_PORT=7086-7995:PUBG
+GAME_PORT=6015:Rainbow Six Siege
+GAME_PORT=17000-17100:Escape from Tarkov
+GAME_PORT=9987:TeamSpeak
+GAME_PORT=50000-50004:Discord voice
+
 # ── Per-device bandwidth caps (optional) ─────────────────────────────
 # Limit the download speed of individual LAN devices by IP address.
 # The token-bucket shaper is applied per-packet in the forwarding hot path.

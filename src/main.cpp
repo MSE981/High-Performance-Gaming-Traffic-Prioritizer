@@ -60,7 +60,10 @@ int main(int argc, char* argv[]) {
 
     // 1. Load router and system config
     // Requires the working directory to be the project root (i.e. run as: ./build/app from project root)
-    HPGTP::Config::load_config("config/config.txt");
+    if (auto cr = HPGTP::Config::load_config("config/config.txt"); !cr) {
+        std::println(stderr, "[Fatal] {}", cr.error());
+        return 1;
+    }
 
     if (auto r = HPGTP::Telemetry::instance().sys_info.init_event_fds(); !r) {
         std::println(stderr, "[Fatal] {}", r.error());
@@ -248,8 +251,10 @@ int main(int argc, char* argv[]) {
         gui_stop_efd = -1;
     }
     close_shutdown_signal_efd();
-    if (HPGTP::Config::SAVE_ON_EXIT.load(std::memory_order_relaxed))
-        HPGTP::Config::save_config("config/config.txt");
+    if (HPGTP::Config::SAVE_ON_EXIT.load(std::memory_order_relaxed)) {
+        if (auto sr = HPGTP::Config::save_config("config/config.txt"); !sr)
+            std::println(stderr, "[Warning] {}", sr.error());
+    }
     std::println("[System] Application cleanly exited. Kernel resources fully released.");
 
     return ret;
