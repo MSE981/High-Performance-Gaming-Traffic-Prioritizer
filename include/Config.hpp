@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <string_view>
 #include <expected>
 #include <cstdint>
 #include <atomic>
@@ -10,8 +11,8 @@
 #include <print>
 #include <format>
 #include <cstring>
-#include <cstdio>
 #include <cstdlib>
+#include <arpa/inet.h>
 #include "NetworkTypes.hpp"
 #include "Units.hpp"
 
@@ -277,12 +278,18 @@ namespace HPGTP::Config {
         return false;
     }
 
-    // Helper: parse dotted-decimal string to NBO IPv4Net (manual, no syscall)
-    inline Net::IPv4Net parse_ip_str(const std::string& ip_str) {
-        uint32_t a, b, c, d;
-        if (sscanf(ip_str.c_str(), "%u.%u.%u.%u", &a, &b, &c, &d) == 4)
-            return Net::IPv4Net{(a << 0) | (b << 8) | (c << 16) | (d << 24)};
-        return Net::IPv4Net{};
+    // Dotted-decimal IPv4 only; rejects invalid octets and non-canonical forms per inet_pton(3).
+    inline std::expected<Net::IPv4Net, std::string> parse_ip_str(std::string_view ip_sv) {
+        if (ip_sv.empty()) return std::unexpected(std::string("empty IPv4 string"));
+        if (ip_sv.size() > 15u)
+            return std::unexpected(std::string("IPv4 string too long"));
+        char buf[16]{};
+        std::memcpy(buf, ip_sv.data(), ip_sv.size());
+        buf[ip_sv.size()] = '\0';
+        struct ::in_addr a {};
+        if (::inet_pton(AF_INET, buf, &a) != 1)
+            return std::unexpected(std::string("invalid IPv4 address"));
+        return Net::IPv4Net{a.s_addr};
     }
 
     // Helper: convert NBO IPv4Net to dotted-decimal string
@@ -294,8 +301,10 @@ namespace HPGTP::Config {
 
     // Insert or update a static DNS record (callers must hold static_dns_mutex)
     inline void upsert_static_dns_unlocked(const std::string& hostname, const std::string& ip_str) {
-        uint32_t     hash = dns_hash_hostname(hostname);
-        Net::IPv4Net ip   = parse_ip_str(ip_str);
+        uint32_t hash = dns_hash_hostname(hostname);
+        auto     ip_e = parse_ip_str(ip_str);
+        if (!ip_e) return;
+        Net::IPv4Net ip = *ip_e;
         for (size_t i = 0; i < STATIC_DNS_COUNT; ++i) {
             if (STATIC_DNS_TABLE[i].domain_hash == hash) {
                 STATIC_DNS_TABLE[i].ip = ip;

@@ -1530,8 +1530,15 @@ void DhcpConfigDialog::on_apply() {
     edit_pool_start->setStyleSheet("");
     edit_pool_end->setStyleSheet("");
 
-    Net::IPv4Net start_ip = Config::parse_ip_str(edit_pool_start->text().toStdString());
-    Net::IPv4Net end_ip   = Config::parse_ip_str(edit_pool_end->text().toStdString());
+    auto start_e = Config::parse_ip_str(edit_pool_start->text().toStdString());
+    auto end_e   = Config::parse_ip_str(edit_pool_end->text().toStdString());
+    if (!start_e || !end_e) {
+        edit_pool_start->setStyleSheet("border: 1px solid #cc3333;");
+        edit_pool_end->setStyleSheet("border: 1px solid #cc3333;");
+        return;
+    }
+    Net::IPv4Net start_ip = *start_e;
+    Net::IPv4Net end_ip   = *end_e;
     if (ntohl(start_ip.raw()) >= ntohl(end_ip.raw())) {
         edit_pool_start->setStyleSheet("border: 1px solid #cc3333;");
         edit_pool_end->setStyleSheet("border: 1px solid #cc3333;");

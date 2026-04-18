@@ -141,8 +141,13 @@ public:
     static bool step_dns_interceptor(PacketConsumer& self, Net::ParsedPacket& pkt) {
         if (!Config::global_state.enable_dns_cache.load(std::memory_order_relaxed)) return false;
         if (self.core_id == 3) {
-            if (self.dns_engine && self.dns_engine->process_query(pkt, self.rx_fd))
-                return true;
+            if (self.dns_engine) {
+                const Logic::DnsQueryDisposition d =
+                    self.dns_engine->process_query(pkt, self.rx_fd);
+                if (d == Logic::DnsQueryDisposition::Replied
+                    || d == Logic::DnsQueryDisposition::ReplySendFailed)
+                    return true;
+            }
         } else if (self.core_id == 2) {
             if (self.dns_engine) self.dns_engine->intercept_response(pkt);
         }
@@ -289,7 +294,10 @@ App::App() {
         std::lock_guard<std::mutex> lk(Config::ip_limit_mutex);
         qos_config->update(Config::IP_LIMIT_TABLE, Config::IP_LIMIT_COUNT);
     }
-    nat_engine->set_wan_ip(Config::parse_ip_str(Config::ROUTER_IP));  // IPv4Net ✓
+    if (auto rip = Config::parse_ip_str(Config::ROUTER_IP); rip)
+        nat_engine->set_wan_ip(*rip);
+    else
+        std::println(stderr, "[App] Invalid ROUTER_IP: {}", rip.error());
 }
 
 App::~App() {
@@ -421,7 +429,12 @@ void App::start() {
     global_shaper_dl = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_dl_mbps});
     global_shaper_ul = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_ul_mbps});
 
-    Net::IPv4Net gw_ip = Config::parse_ip_str(Config::ROUTER_IP);
+    auto gw_e = Config::parse_ip_str(Config::ROUTER_IP);
+    if (!gw_e) {
+        std::println(stderr, "[App] Invalid ROUTER_IP: {}", gw_e.error());
+        return;
+    }
+    Net::IPv4Net gw_ip = *gw_e;
     if (auto pr = open_worker_poll_fds_for_start(); !pr) {
         std::println(stderr, "[App] {}", pr.error());
         return;
@@ -838,8 +851,8 @@ void App::watchdog_loop() {
                             char ip_str[20]{}, hw[8]{}, flags[8]{}, mac[20]{};
                             if (sscanf(line, "%19s %7s %7s %19s",
                                        ip_str, hw, flags, mac) == 4) {
-                                Net::IPv4Net ip = Net::parse_ipv4(ip_str);
-                                if (ip.raw() != INADDR_NONE && strcmp(flags, "0x0") != 0) {
+                                Net::IPv4Net ip{};
+                                if (Net::try_parse_ipv4(ip_str, ip) && strcmp(flags, "0x0") != 0) {
                                     tel.device_table[dcnt].ip = ip;
                                     std::string_view mac_sv{mac};
                                     auto nm = mac_sv.copy(tel.device_table[dcnt].mac.data(), 17);
@@ -926,39 +939,55 @@ void App::watchdog_loop() {
             }
 
             std::array<Config::StaticDnsRecord, Config::MAX_STATIC_DNS> dns_snapshot{};
+            size_t dns_snapshot_valid = 0;
             for (size_t i = 0; i < dns_record_count; ++i) {
-                dns_snapshot[i].domain_hash =
+                auto ip_e = Config::parse_ip_str(std::string_view{dns_records[i].ip_str.data()});
+                if (!ip_e) {
+                    std::println(stderr, "[DNS] Skipping static record (bad IP): {}",
+                        ip_e.error());
+                    continue;
+                }
+                dns_snapshot[dns_snapshot_valid].domain_hash =
                     Config::dns_hash_hostname(dns_records[i].hostname.data());
-                dns_snapshot[i].ip = Config::parse_ip_str(dns_records[i].ip_str.data());
+                dns_snapshot[dns_snapshot_valid].ip = *ip_e;
                 std::strncpy(
-                    dns_snapshot[i].hostname.data(),
+                    dns_snapshot[dns_snapshot_valid].hostname.data(),
                     dns_records[i].hostname.data(), 63);
-                dns_snapshot[i].hostname[63] = '\0';
+                dns_snapshot[dns_snapshot_valid].hostname[63] = '\0';
+                ++dns_snapshot_valid;
             }
 
             Config::DNS_UPSTREAM_PRIMARY = dns_primary;
             Config::DNS_UPSTREAM_SECONDARY = dns_secondary;
             Config::DNS_REDIRECT_ENABLED.store(dns_redirect, std::memory_order_relaxed);
-            Config::apply_static_dns_snapshot(dns_snapshot.data(), dns_record_count);
+            Config::apply_static_dns_snapshot(dns_snapshot.data(), dns_snapshot_valid);
 
-            dns_engine->set_upstream({
-                Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY),
-                Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY)});
+            auto up_pri = Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY);
+            auto up_sec = Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY);
+            if (!up_pri || !up_sec) {
+                std::println(stderr, "[DNS] Invalid upstream address: {} / {}",
+                    up_pri ? "" : up_pri.error(), up_sec ? "" : up_sec.error());
+            }
+            dns_engine->set_upstream(
+                {up_pri.value_or(Net::IPv4Net{}), up_sec.value_or(Net::IPv4Net{})});
             dns_engine->set_redirect(dns_redirect);
             dns_engine->reload_static_records();
             std::println("[DNS] Config applied: upstream {} / {}, redirect={}, static={}",
                 Config::DNS_UPSTREAM_PRIMARY, Config::DNS_UPSTREAM_SECONDARY,
                 dns_redirect ? "on":"off",
-                dns_record_count);
+                dns_snapshot_valid);
         }
 
         // DHCP config sync
         if (dhcp_engine && tel.dhcp_config_dirty.exchange(false, std::memory_order_acq_rel)) {
-            if (auto dr = dhcp_engine->reconfigure({
-                    Config::parse_ip_str(Config::DHCP_POOL_START),
-                    Config::parse_ip_str(Config::DHCP_POOL_END),
-                    Config::DHCP_LEASE_DURATION});
-                !dr) {
+            auto pool_s = Config::parse_ip_str(Config::DHCP_POOL_START);
+            auto pool_e = Config::parse_ip_str(Config::DHCP_POOL_END);
+            if (!pool_s || !pool_e) {
+                std::println(stderr, "[DHCP] Invalid pool bounds: {} / {}",
+                    pool_s ? "" : pool_s.error(), pool_e ? "" : pool_e.error());
+            } else if (auto dr = dhcp_engine->reconfigure({
+                           *pool_s, *pool_e, Config::DHCP_LEASE_DURATION});
+                     !dr) {
                 std::println(stderr, "[DHCP] reconfigure failed: {}", dr.error());
             } else {
                 std::println("[DHCP] Pool reconfigured: {} – {}, lease {}s",

@@ -8,6 +8,15 @@
 #include "Config.hpp"
 
 namespace HPGTP::Logic {
+
+    // Result of attempting to handle an incoming DNS query on the LAN→WAN path.
+    enum class DnsQueryDisposition : std::uint8_t {
+        NotHandled,      // Not a handled DNS query; frame unchanged by this engine.
+        Replied,         // Response built and sent successfully on bounce_fd.
+        ReplySendFailed, // Response built but egress send did not complete (frame mutated).
+        Redirected,      // Upstream redirect: destination IPv4 rewritten for forwarding.
+    };
+
     struct DnsHeader {
         uint16_t id;
         uint16_t flags;
@@ -54,7 +63,7 @@ namespace HPGTP::Logic {
         std::atomic<uint8_t> static_count{0};
 
         [[nodiscard]] bool do_bounce(Net::ParsedPacket& pkt, DnsHeader* dns, Net::UDPHeader* udp,
-                                     Net::IPv4Net ip, int bounce_fd);
+                                     Net::IPv4Net ip, int bounce_fd) noexcept;
         static void rewrite_upstream(Net::ParsedPacket& pkt, Net::IPv4Net upstream_ip);
 
     public:
@@ -62,7 +71,8 @@ namespace HPGTP::Logic {
         void set_upstream(DnsUpstreamConfig cfg);
         void set_redirect(bool enabled);
         void reload_static_records();
-        bool process_query(Net::ParsedPacket& pkt, int bounce_fd);
+        [[nodiscard]] DnsQueryDisposition process_query(Net::ParsedPacket& pkt,
+                                                        int bounce_fd) noexcept;
         void intercept_response(const Net::ParsedPacket& pkt);
         void process_background_tasks();
     };

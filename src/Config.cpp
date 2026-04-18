@@ -160,8 +160,12 @@ std::expected<void, std::string> load_config(const std::string& path) {
                     char* colon = strchr(val, ':');
                     if (colon) {
                         *colon = '\0';
-                        Net::IPv4Net ip = parse_ip_str(val);
-                        add_ip_limit(ip, Traffic::Mbps{atof(colon + 1)});
+                        auto ip_e = parse_ip_str(val);
+                        if (ip_e)
+                            add_ip_limit(*ip_e, Traffic::Mbps{atof(colon + 1)});
+                        else
+                            std::println(stderr, "[Config] IP_LIMIT bad address: {}",
+                                ip_e.error());
                     }
                 }
                 else if (!strcmp(key, "GAME_PORT")) {

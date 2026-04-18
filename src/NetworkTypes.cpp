@@ -12,9 +12,18 @@ IPv4Net IPv4Host::to_net() const noexcept {
     return IPv4Net{::htonl(v_)};
 }
 
+bool try_parse_ipv4(const char* s, IPv4Net& out) noexcept {
+    if (!s) return false;
+    struct ::in_addr a {};
+    if (::inet_pton(AF_INET, s, &a) != 1) return false;
+    out = IPv4Net{a.s_addr};
+    return true;
+}
+
 IPv4Net parse_ipv4(const char* s) noexcept {
-    uint32_t r = ::inet_addr(s);
-    return (r == INADDR_NONE) ? IPv4Net{} : IPv4Net{r};
+    IPv4Net out{};
+    (void)try_parse_ipv4(s, out);
+    return out;
 }
 
 } // namespace HPGTP::Net
