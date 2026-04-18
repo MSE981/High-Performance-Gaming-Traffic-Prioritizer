@@ -2402,14 +2402,22 @@ void Dashboard::on_shutdown_clicked() {
     lay->addWidget(btn_nosave);
     lay->addWidget(btn_cancel);
 
-    // Save settings then exit — skip redundant save in main()
-    connect(btn_save, &QPushButton::clicked, &dlg, [&dlg]() {
-        if (auto sr = Config::save_config("config/config.txt"); !sr)
-            std::println(stderr, "[GUI] {}", sr.error());
-        Config::SAVE_ON_EXIT.store(false, std::memory_order_relaxed);
-        dlg.accept();
-        QApplication::quit();
-    });
+    // Save on a worker thread: Config::save_config does blocking write(2)/close;
+    // Core-0 Qt thread only joins (no disk syscalls here). UI may idle briefly.
+    connect(btn_save, &QPushButton::clicked, &dlg,
+        [&dlg, btn_save, btn_nosave, btn_cancel]() {
+            btn_save->setEnabled(false);
+            btn_nosave->setEnabled(false);
+            btn_cancel->setEnabled(false);
+            std::thread worker([]() {
+                if (auto sr = Config::save_config("config/config.txt"); !sr)
+                    std::println(stderr, "[GUI] {}", sr.error());
+                Config::SAVE_ON_EXIT.store(false, std::memory_order_relaxed);
+            });
+            worker.join();
+            dlg.accept();
+            QApplication::quit();
+        });
     // Exit without saving
     connect(btn_nosave, &QPushButton::clicked, &dlg, [&dlg]() {
         Config::SAVE_ON_EXIT.store(false, std::memory_order_relaxed);
