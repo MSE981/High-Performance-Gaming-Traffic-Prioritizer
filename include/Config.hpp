@@ -55,7 +55,7 @@ namespace HPGTP::Config {
     inline void clear_roles() { IFACE_ROLES_COUNT = 0; }
 
     // Kernel interface names (gateway / WAN / LAN). Storage is private to Config.cpp;
-    // all updates go through set_iface_names (Ch.7 multi-field config struct).
+    // all updates go through set_iface_names (aggregated multi-field setter).
     struct IfaceNames {
         std::string gateway;
         std::string wan;

@@ -312,7 +312,7 @@ bool NotificationPanel::is_settled() const {
 }
 
 // ═════════════════════════════════════════════════════════════
-// RealTimePlot (retain Phase 3 physics engine)
+// RealTimePlot — shift-buffer sampling + spring-damper dynamics (see Dashboard.hpp)
 // ═════════════════════════════════════════════════════════════
 RealTimePlot::RealTimePlot(QWidget* parent) : QWidget(parent) {
     setMinimumSize(200, 300);
@@ -1956,7 +1956,7 @@ void DevicePage::refresh() {
     uint8_t cnt = tel.device_count.load(std::memory_order_acquire);
     uint64_t rev = Config::DEVICE_POLICY_REVISION.load(std::memory_order_acquire);
     // Cheap path: device list + policy revision gate. Do not remove — the plot timer
-    // calls refresh at 25 Hz; without this, cards rebuild every tick (pdf_text Ch.4.2.2).
+    // calls refresh at 25 Hz; without this, cards rebuild every tick.
     if (cnt == last_device_count && rev == last_device_policy_revision_) return;
     last_device_count = cnt;
     last_device_policy_revision_ = rev;
@@ -2324,7 +2324,7 @@ void Dashboard::setup_ui() {
     notif_panel_->setFixedSize(centralWidget()->width(), centralWidget()->height());
     notif_panel_->raise();
 
-    // Async startup log read — I/O off the GUI thread (pdf_text Ch.4). poll() + non-blocking
+    // Async startup log read — I/O off the GUI thread. poll() + non-blocking
     // read so FIFOs or slow writers cannot block past jthread stop (P5-001).
     // Lines are queued via invokeMethod; Qt drops undelivered events if Dashboard is gone.
     startup_log_reader_ = std::jthread(Dashboard::run_startup_log_reader);

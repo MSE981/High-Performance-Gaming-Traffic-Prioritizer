@@ -92,7 +92,7 @@ target_link_libraries(GamingTrafficPrioritizer PRIVATE
 target_compile_options(GamingTrafficPrioritizer PRIVATE ${PROJECT_ROUTER_COMPILE_OPTIONS})
 target_compile_definitions(GamingTrafficPrioritizer PRIVATE _GNU_SOURCE)
 
-# ── Demo programs (Phase 5) ───────────────────────────────────────────────────
+# ── Demo programs (one executable per engine) ─────────────────────────────────
 if(EXISTS "${CMAKE_SOURCE_DIR}/demo")
     foreach(demo_src IN ITEMS
         demo/nat_demo.cpp

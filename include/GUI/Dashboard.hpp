@@ -94,7 +94,7 @@ private:
 };
 
 // ═══════════════════════════════════════════
-// Real-time plot component (inherited from Phase 3, retains RK4 physics engine)
+// Real-time plot: shift-buffer samples; RK4 spring-damper smoothing (buffer on sample, redraw on timer).
 // ═══════════════════════════════════════════
 class RealTimePlot : public QWidget {
     Q_OBJECT
@@ -390,7 +390,7 @@ private:
     uint64_t plot_tick_ = 0;
     std::chrono::steady_clock::time_point plot_last_tick_ = std::chrono::steady_clock::now();
 
-    // Startup log reader: async file I/O off the GUI thread (pdf_text Ch.4).
+    // Startup log reader: async file I/O off the GUI thread.
     // Auto-joins on Dashboard destruction; worker posts each line via invokeMethod.
     std::jthread startup_log_reader_;
 
