@@ -390,9 +390,11 @@ private:
     uint64_t plot_tick_ = 0;
     std::chrono::steady_clock::time_point plot_last_tick_ = std::chrono::steady_clock::now();
 
-    // Startup log reader: async file I/O off the GUI thread (PDF Ch.3).
+    // Startup log reader: async file I/O off the GUI thread (pdf_text Ch.4).
     // Auto-joins on Dashboard destruction; worker posts each line via invokeMethod.
     std::jthread startup_log_reader_;
+
+    static void run_startup_log_reader(std::stop_token st);
 
 private slots:
     void on_tab_clicked(int page_index);

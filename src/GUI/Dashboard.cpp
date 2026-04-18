@@ -8,8 +8,6 @@
 #include <QScreen>
 #include <QMetaObject>
 #include <QButtonGroup>
-#include <QFile>
-#include <QTextStream>
 #include <QMenu>
 #include <QBoxLayout>
 #include <QPainter>
@@ -39,7 +37,11 @@
 #include <vector>
 #include <optional>
 #include <cmath>
+#include <cerrno>
 #include <fcntl.h>
+#include <poll.h>
+#include <string>
+#include <string_view>
 #include <unistd.h>
 #include <arpa/inet.h>
 
@@ -1945,6 +1947,8 @@ void DevicePage::refresh() {
     auto& tel = Telemetry::instance();
     uint8_t cnt = tel.device_count.load(std::memory_order_acquire);
     uint64_t rev = Config::DEVICE_POLICY_REVISION.load(std::memory_order_acquire);
+    // Cheap path: device list + policy revision gate. Do not remove — the plot timer
+    // calls refresh at 25 Hz; without this, cards rebuild every tick (pdf_text Ch.4.2.2).
     if (cnt == last_device_count && rev == last_device_policy_revision_) return;
     last_device_count = cnt;
     last_device_policy_revision_ = rev;
@@ -2100,6 +2104,10 @@ void DevicePage::on_apply_all() {
 // ═════════════════════════════════════════════════════════════
 // Dashboard: main control panel frame
 // ═════════════════════════════════════════════════════════════
+// Cross-thread UI delivery only: worker code must not dereference this except by passing
+// it as the QObject* context to QMetaObject::invokeMethod(..., QueuedConnection). Qt
+// drops queued calls if the receiver is destroyed; call sites guard with if (!instance_)
+// before queueing. Set to this in ctor and nullptr in dtor — not a general-purpose singleton.
 Dashboard* Dashboard::instance_ = nullptr;
 
 Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
@@ -2115,6 +2123,83 @@ Dashboard::Dashboard(QWidget* parent) : QMainWindow(parent) {
 
 Dashboard::~Dashboard() {
     instance_ = nullptr;
+}
+
+void Dashboard::run_startup_log_reader(std::stop_token st) {
+    constexpr int poll_timeout_ms = 200;
+    int fd = ::open("/tmp/hpgtp_startup.log", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return;
+
+    std::string pending;
+    std::array<char, 4096> buf{};
+
+    auto flush_line = [](std::string_view raw) {
+        QString line = QString::fromUtf8(raw.data(), static_cast<int>(raw.size())).trimmed();
+        if (line.isEmpty()) return;
+        int sep       = line.indexOf('|');
+        QString title = (sep >= 0) ? line.left(sep) : line;
+        QString body  = (sep >= 0) ? line.mid(sep + 1) : QString();
+        if (!instance_) return;
+        QMetaObject::invokeMethod(instance_, [title, body]() {
+            if (instance_ && instance_->notif_panel_)
+                instance_->notif_panel_->push_notification(title, body);
+        }, Qt::QueuedConnection);
+    };
+
+    auto drain_lines = [&] {
+        for (;;) {
+            auto nl = pending.find('\n');
+            if (nl == std::string::npos) break;
+            flush_line(std::string_view(pending).substr(0, nl));
+            pending.erase(0, nl + 1);
+        }
+    };
+
+    while (!st.stop_requested()) {
+        struct pollfd pfd{};
+        pfd.fd     = fd;
+        pfd.events = POLLIN;
+        int pr     = ::poll(&pfd, 1, poll_timeout_ms);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (pr == 0) continue;
+
+        if (pfd.revents & (POLLERR | POLLNVAL)) break;
+
+        if (pfd.revents & (POLLIN | POLLHUP)) {
+            bool eof = false;
+            for (;;) {
+                ssize_t n = ::read(fd, buf.data(), buf.size());
+                if (n < 0) {
+                    if (errno == EINTR) continue;
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                    ::close(fd);
+                    return;
+                }
+                if (n == 0) {
+                    eof = true;
+                    break;
+                }
+                pending.append(buf.data(), static_cast<size_t>(n));
+                drain_lines();
+            }
+            if (eof) {
+                drain_lines();
+                if (!pending.empty()) flush_line(pending);
+                pending.clear();
+                break;
+            }
+        }
+        if (pfd.revents & POLLHUP) {
+            drain_lines();
+            if (!pending.empty()) flush_line(pending);
+            pending.clear();
+            break;
+        }
+    }
+    ::close(fd);
 }
 
 void Dashboard::post_notification(const QString& title, const QString& body) {
@@ -2231,26 +2316,10 @@ void Dashboard::setup_ui() {
     notif_panel_->setFixedSize(centralWidget()->width(), centralWidget()->height());
     notif_panel_->raise();
 
-    // Async startup log read — regular file I/O is offloaded off the GUI thread.
-    // Each line is queued back via invokeMethod; if Dashboard is destroyed before
-    // delivery, Qt silently drops the queued event (QObject receiver invalidation).
-    startup_log_reader_ = std::jthread([](std::stop_token st) {
-        QFile log("/tmp/hpgtp_startup.log");
-        if (!log.open(QIODevice::ReadOnly | QIODevice::Text)) return;
-        QTextStream ts(&log);
-        while (!ts.atEnd()) {
-            if (st.stop_requested()) return;
-            QString line = ts.readLine().trimmed();
-            if (line.isEmpty()) continue;
-            int sep = line.indexOf('|');
-            QString title = (sep >= 0) ? line.left(sep)   : line;
-            QString body  = (sep >= 0) ? line.mid(sep + 1): QString();
-            QMetaObject::invokeMethod(instance_, [title, body]() {
-                if (instance_ && instance_->notif_panel_)
-                    instance_->notif_panel_->push_notification(title, body);
-            }, Qt::QueuedConnection);
-        }
-    });
+    // Async startup log read — I/O off the GUI thread (pdf_text Ch.4). poll() + non-blocking
+    // read so FIFOs or slow writers cannot block past jthread stop (P5-001).
+    // Lines are queued via invokeMethod; Qt drops undelivered events if Dashboard is gone.
+    startup_log_reader_ = std::jthread(Dashboard::run_startup_log_reader);
 
     // Self-test results posted asynchronously via on_selftest_done() after worker completes.
 
