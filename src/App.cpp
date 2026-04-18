@@ -509,6 +509,10 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
                 int prx = ::poll(pfds_rx, 2, -1);
                 if (prx < 0) {
                     if (errno == EINTR) continue;
+                    const int e = errno;
+                    mgr->notify_rx_poll_fatal(e, 2);
+                    std::println(stderr, "[App] Core {} RX poll failed: {}",
+                        core, std::strerror(e));
                     break;
                 }
                 if ((pfds_rx[1].revents & POLLIN) != 0) {
@@ -784,6 +788,19 @@ void App::watchdog_loop() {
             prev_ok  = ok;
             prev_ovf = ovf;
             prev_big = big;
+        }
+
+        {
+            static uint8_t prev_pe = 0;
+            uint8_t pe = tel.raw_socket_poll_errors.load(std::memory_order_relaxed);
+            if (pe != prev_pe && pe != 0) {
+                GUI::Dashboard::post_notification(
+                    QStringLiteral("Network"),
+                    QStringLiteral(
+                        "Packet RX poll failure (telemetry mask %1). See stderr / interface state.")
+                        .arg(pe));
+                prev_pe = pe;
+            }
         }
 
         // System info refresh every 5 ticks (5 s)

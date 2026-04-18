@@ -58,6 +58,9 @@ namespace HPGTP {
         std::atomic<uint64_t> shaper_queue_overflow_drops{0};
         std::atomic<uint64_t> shaper_oversized_drops{0};
 
+        // Raw AF_PACKET RX: bit0 = RawSocketManager::do_poll fatal; bit1 = App worker RX poll fatal.
+        std::atomic<uint8_t> raw_socket_poll_errors{0};
+
         // Device table: scanned from /proc/net/arp by Core 1 watchdog every 5s.
         // Plain char arrays — torn reads acceptable for display-only data.
         static constexpr uint8_t MAX_TRACKED_DEVICES = 64;

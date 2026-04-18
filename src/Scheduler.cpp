@@ -1,5 +1,6 @@
 #include "Scheduler.hpp"
 #include "DataPlane.hpp"
+#include <array>
 
 namespace HPGTP::Traffic {
 
@@ -30,19 +31,27 @@ void Shaper::enqueue_normal(std::span<const uint8_t> pkt) {
 }
 
 void Shaper::process_queue(int tx_fd) {
+    std::array<uint8_t, 2048> pkt_copy{};
     while (true) {
+        uint16_t sz = 0;
+        {
+            lock_spin();
+            if (normal_queue.empty()) {
+                unlock_spin();
+                break;
+            }
+            auto pkt_span = normal_queue.front();
+            if (!bucket.try_consume(pkt_span.size())) {
+                unlock_spin();
+                break;
+            }
+            sz = static_cast<uint16_t>(pkt_span.size());
+            std::memcpy(pkt_copy.data(), pkt_span.data(), sz);
+            unlock_spin();
+        }
+        TxResult res = try_hardware_send(tx_fd, std::span(pkt_copy.data(), sz));
         lock_spin();
-        if (normal_queue.empty()) {
-            unlock_spin();
-            break;
-        }
-        auto pkt_span = normal_queue.front();
-        if (!bucket.try_consume(pkt_span.size())) {
-            unlock_spin();
-            break;
-        }
-        TxResult res = try_hardware_send(tx_fd, pkt_span);
-        result_handlers[static_cast<size_t>(res)](this, pkt_span.size());
+        result_handlers[static_cast<size_t>(res)](this, sz);
         unlock_spin();
         if (res == TxResult::Congested) break;
     }
