@@ -5,12 +5,36 @@
 
 namespace HPGTP::Logic {
 
-static uint32_t hash_qname(const uint8_t* qname, size_t max_len) {
+namespace {
+
+uint32_t hash_qname(const uint8_t* qname, size_t max_len) {
     uint32_t h = 2166136261U;
     size_t i = 0;
     while (i < max_len && qname[i] != 0) { h ^= qname[i]; h *= 16777619U; i++; }
     return h;
 }
+
+// RFC 1035 name: labels ending in 0, or a suffix pointer (two bytes 11xxxxxx), or pointer-only.
+[[nodiscard]] bool skip_one_dns_name(const uint8_t* d, size_t msg_len, size_t& ptr) {
+    unsigned guard = 0;
+    while (ptr < msg_len && guard++ < 128) {
+        if ((d[ptr] & 0xC0) == 0xC0) {
+            if (ptr + 2 > msg_len) return false;
+            ptr += 2;
+            return true;
+        }
+        const uint8_t lab = d[ptr];
+        if (lab == 0) {
+            ++ptr;
+            return true;
+        }
+        if (lab > 63 || ptr + 1u + static_cast<size_t>(lab) > msg_len) return false;
+        ptr += 1u + lab;
+    }
+    return false;
+}
+
+} // namespace
 
 void DnsEngine::tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
 
@@ -128,13 +152,17 @@ DnsQueryDisposition DnsEngine::process_query(Net::ParsedPacket& pkt,
     }
 
     size_t idx = h % CACHE_SIZE;
-    if (cache[idx].valid.load(std::memory_order_acquire)) {
-        if (cache[idx].domain_hash == h &&
-            current_tick.load(std::memory_order_relaxed) <= cache[idx].expire_tick)
-            return do_bounce(pkt, dns, udp, cache[idx].ipv4_address, bounce_fd)
-                ? DnsQueryDisposition::Replied
-                : DnsQueryDisposition::ReplySendFailed;
+    for (;;) {
+        if (!cache[idx].valid.load(std::memory_order_acquire)) break;
+        const uint32_t dh = cache[idx].domain_hash.load(std::memory_order_relaxed);
+        const Net::IPv4Net addr = cache[idx].ipv4_address.load(std::memory_order_relaxed);
+        const uint32_t ex = cache[idx].expire_tick.load(std::memory_order_relaxed);
+        if (!cache[idx].valid.load(std::memory_order_acquire)) continue;
+        if (dh == h && current_tick.load(std::memory_order_relaxed) <= ex)
+            return do_bounce(pkt, dns, udp, addr, bounce_fd) ? DnsQueryDisposition::Replied
+                                                             : DnsQueryDisposition::ReplySendFailed;
         cache[idx].valid.store(false, std::memory_order_relaxed);
+        break;
     }
 
     if (redirect_enabled.load(std::memory_order_relaxed)) {
@@ -177,20 +205,43 @@ void DnsEngine::process_background_tasks() {
         uint32_t h = hash_qname(msg.data.data() + qname_offset, msg.len - qname_offset);
 
         size_t ptr = qname_offset;
-        while (ptr < msg.len && msg.data[ptr] != 0) { ptr += msg.data[ptr] + 1; }
-        ptr += 5;
-
-        if (ptr + 12 <= msg.len) {
-            if (msg.data[ptr+2] == 0x00 && msg.data[ptr+3] == 0x01) {
-                Net::IPv4Net ipv4{*reinterpret_cast<const uint32_t*>(&msg.data[ptr+10])};
-
-                size_t idx = h % CACHE_SIZE;
-                cache[idx].domain_hash  = h;
-                cache[idx].ipv4_address = ipv4;
-                cache[idx].expire_tick  = current_tick.load(std::memory_order_relaxed) + 300;
-                cache[idx].valid.store(true, std::memory_order_release);
+        while (ptr < msg.len) {
+            const uint8_t lab = msg.data[ptr];
+            if (lab == 0) break;
+            if (lab >= 0xC0) {
+                ptr = msg.len;
+                break;
             }
+            if (lab > 63 || ptr + 1u + static_cast<size_t>(lab) > msg.len) {
+                ptr = msg.len;
+                break;
+            }
+            ptr += 1u + lab;
         }
+        if (ptr >= msg.len || msg.data[ptr] != 0) continue;
+        ptr += 1;
+        if (ptr + 4 > msg.len) continue;
+        ptr += 4;
+
+        if (!skip_one_dns_name(msg.data.data(), msg.len, ptr)) continue;
+        if (ptr + 10 > msg.len) continue;
+
+        const uint16_t rtype = static_cast<uint16_t>(
+            (static_cast<uint16_t>(msg.data[ptr]) << 8) | msg.data[ptr + 1]);
+        const uint16_t rdlen = static_cast<uint16_t>(
+            (static_cast<uint16_t>(msg.data[ptr + 8]) << 8) | msg.data[ptr + 9]);
+        if (rtype != 1 || rdlen != 4) continue;
+        if (ptr + 10 + 4 > msg.len) continue;
+
+        Net::IPv4Net ipv4{*reinterpret_cast<const uint32_t*>(&msg.data[ptr + 10])};
+
+        size_t idx = h % CACHE_SIZE;
+        cache[idx].valid.store(false, std::memory_order_release);
+        cache[idx].domain_hash.store(h, std::memory_order_relaxed);
+        cache[idx].ipv4_address.store(ipv4, std::memory_order_relaxed);
+        cache[idx].expire_tick.store(
+            current_tick.load(std::memory_order_relaxed) + 300, std::memory_order_relaxed);
+        cache[idx].valid.store(true, std::memory_order_release);
     }
 }
 

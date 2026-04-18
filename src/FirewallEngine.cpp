@@ -1,4 +1,5 @@
 #include "FirewallEngine.hpp"
+#include "Telemetry.hpp"
 #include <mutex>
 #include <netinet/in.h>
 
@@ -116,7 +117,10 @@ void FirewallEngine::track_outbound(const Net::ParsedPacket& pkt) {
         }
     }
 
-    if (free_slot == -1) return;
+    if (free_slot == -1) {
+        Telemetry::instance().conntrack_track_drops.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     auto& ne = table[free_slot];
     ne.seq.fetch_add(1, std::memory_order_acq_rel);
     ne.remote_ip   = remote_ip;

@@ -791,6 +791,17 @@ void App::watchdog_loop() {
         }
 
         {
+            static uint64_t prev_ct = 0;
+            uint64_t ct = tel.conntrack_track_drops.load(std::memory_order_relaxed);
+            uint64_t dct = ct - prev_ct;
+            if (dct != 0) {
+                std::println(
+                    "[Conntrack] last 1s: track_drops (probe exhausted) +{}", dct);
+            }
+            prev_ct = ct;
+        }
+
+        {
             static uint8_t prev_pe = 0;
             uint8_t pe = tel.raw_socket_poll_errors.load(std::memory_order_relaxed);
             if (pe != prev_pe && pe != 0) {
