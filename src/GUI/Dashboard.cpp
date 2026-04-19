@@ -499,17 +499,6 @@ InterfacePage::InterfacePage(QWidget* parent) : QWidget(parent) {
 
     scan_interfaces();
 
-    // Advanced options
-    auto* adv_group = new QGroupBox("Advanced Options");
-    auto* adv_form = new QFormLayout(adv_group);
-    sw_stp = new SwitchToggle();
-    sw_stp->setChecked(Config::ENABLE_STP.load(std::memory_order_relaxed));
-    adv_form->addRow("Spanning Tree Protocol:", sw_stp);
-    sw_igmp = new SwitchToggle();
-    sw_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed));
-    adv_form->addRow("IGMP Snooping:", sw_igmp);
-    layout->addWidget(adv_group);
-
     // Button row
     auto* btn_row = new QHBoxLayout();
     btn_refresh = new QPushButton("Refresh");
@@ -631,12 +620,6 @@ void InterfacePage::on_role_changed(const QString& iface, int index) {
 
 void InterfacePage::refresh_from_backend() {
     scan_interfaces();
-    {
-        QSignalBlocker b1(*sw_stp);
-        QSignalBlocker b2(*sw_igmp);
-        sw_stp->setChecked(Config::ENABLE_STP.load(std::memory_order_relaxed));
-        sw_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed));
-    }
 }
 
 void InterfacePage::on_save_clicked() {
@@ -666,17 +649,12 @@ void InterfacePage::on_save_clicked() {
         ? "" : std::string(Config::BRIDGED_INTERFACES[0].name.data());
     Config::set_iface_names(iface);
 
-    Config::ENABLE_STP.store(sw_stp->isChecked(), std::memory_order_relaxed);
-    Config::ENABLE_IGMP_SNOOPING.store(sw_igmp->isChecked(), std::memory_order_relaxed);
-
     std::println("[GUI] Interface roles saved. Gateway: {}, LAN interfaces: {}",
         Config::iface_gateway(), Config::BRIDGED_IFACES_COUNT);
 }
 
 void InterfacePage::on_reset_clicked() {
     scan_interfaces(); // Rebuilds table from Config::IFACE_ROLES
-    sw_stp->setChecked(Config::ENABLE_STP.load(std::memory_order_relaxed));
-    sw_igmp->setChecked(Config::ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed));
 }
 
 void InterfacePage::on_refresh_clicked() {

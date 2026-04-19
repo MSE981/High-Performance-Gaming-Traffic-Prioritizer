@@ -161,8 +161,6 @@ private:
     std::array<RoleEntry, Telemetry::SystemInfo::MAX_IFACES> role_entries_{};
     size_t role_entries_count_ = 0;
 
-    SwitchToggle*    sw_stp;
-    SwitchToggle*    sw_igmp;
     QPushButton*     btn_refresh = nullptr;
     QSocketNotifier* scan_done_notifier_ = nullptr;
 };

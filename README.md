@@ -2,7 +2,7 @@
 
 **A dedicated Raspberry Pi 5 network device that prioritizes gaming data over general network traffic using microsecond precision.**
 
-GamingTrafficPrioritizer is software built in C++23 using Linux real-time programming concepts. It inspects network packets using raw sockets and lock-free data structures to function as a transparent network bridge.
+GamingTrafficPrioritizer is software built in C++23 using Linux real-time programming concepts. It inspects network packets using raw sockets and fixed-size, allocation-free data structures to operate as an **IPv4 gateway-style forwarder** between WAN and LAN interfaces (NAT and routing), not as a classic layer-2 transparent bridge.
 
 ---
 
@@ -31,7 +31,7 @@ The system classifies every network packet into one of three distinct categories
 
 | Category | Traffic Type | Forwarding Protocol |
 |----------|---------------|-----------|
-| **Critical** | DNS queries, TCP handshakes | Immediate forwarding |
+| **Critical** | DNS (UDP/TCP port 53); very small TCP segments (including typical handshake-sized traffic and other short TCP segments) | Immediate forwarding |
 | **High** | Gaming packets, small UDP data | Zero-wait forwarding |
 | **Normal** | Large downloads, video streaming | Rate-controlled forwarding |
 
@@ -41,7 +41,7 @@ The classifier is automated. It analyzes packet sizes and generation frequencies
 
 ## Core Features
 
-- **Zero-copy network forwarding**: Utilizes the Linux kernel ring buffer (`TPACKET` mmap) to process packet data without copying it between kernel and userspace memory areas, maximizing processing speed.
+- **High-throughput RX path**: Receives frames via a Linux `AF_PACKET` RX ring (`PACKET_RX_RING` + `mmap`). Each frame is copied into an internal bounded queue for parsing and forwarding; the hot path avoids extra allocation but is **not** end-to-end zero-copy from ring to wire.
 - **Lock-free processing**: Implements fixed-size hash tables to eliminate memory allocation and threading locks during active network transmission.
 - **Dedicated CPU core allocation**: Assigns specific runtime tasks to individual processing cores to prevent context-switching delays.
 - **Real-time execution**: Employs synchronous system calls for periodic tasks, avoiding blocking timeout functions in the primary packet forwarding cycle.
@@ -49,7 +49,7 @@ The classifier is automated. It analyzes packet sizes and generation frequencies
 - **Integrated network services**: Includes NAT (SNAT/DNAT), a DHCP server, a DNS cache, UPnP/IGD mapping, and a stateful firewall. All services can be controlled directly via the interface.
 - **Local dashboard**: Features a custom Qt6 interface displaying real-time packet rates, core performance metrics, and service controls using Direct Rendering Manager (DRM) hardware acceleration.
 - **Interactive system notifications**: Displays system alerts via a graphical user interface panel without disrupting background network processing.
-- **Command-line mode**: Supports efficient execution without physical displays via direct configuration settings.
+- **Command-line mode**: With `enable_gui=false`, no dashboard window is shown. The binary is still dynamically linked to Qt 6; install compatible Qt 6 runtime libraries on the target system even when running headless.
 
 ---
 
@@ -90,21 +90,23 @@ For single-device configurations, connect the destination device directly to the
 git clone <repo-url>
 cd High-Performance-Gaming-Traffic-Prioritizer
 
-# 2. Build and launch the system (this script automatically manages dependencies)
+# 2. Build and launch: start.sh runs start_release.sh, which on Debian-based
+#    systems can install missing build/runtime packages (e.g. via apt), then builds if needed.
 sudo ./start.sh
 
-# Complete headless boot sequence (no graphical interface)
-# Set enable_gui=false in the configuration file, then execute:
-cd build && sudo ./GamingTrafficPrioritizer
+# Headless (no Qt window): set enable_gui=false in config/config.txt, then run the
+# binary with the current working directory set to the repository root so
+# config/config.txt is found (paths are relative to CWD):
+sudo ./build/GamingTrafficPrioritizer
 ```
 
-The system requires no external installation steps beyond compilation; the binary executable is located inside the `build/` directory and functions persistently.
+First-time setup on a minimal image usually requires installing compiler, CMake, Qt development packages, and related tools—either manually or by relying on `start_release.sh` / `start.sh` where applicable. After a successful build, the main executable is `build/GamingTrafficPrioritizer`; keep using the repo root as the working directory when launching so configuration and assets resolve correctly. The process runs until you stop it (signal, dashboard shutdown, etc.); it is not a one-shot command.
 
 ---
 
 ## Configuration Variables
 
-The system relies on a `config.txt` file located in the application directory. All parameters are optional; the system will initialize with default variables. The local graphical interface writes active parameters to this file automatically during the termination process.
+The program loads `config/config.txt` relative to the **current working directory** (typically the repository root). All parameters are optional; the system will initialize with default variables if the file is missing. The local graphical interface writes active parameters to this file on clean exit when saving is enabled.
 
 ```ini
 # ── Network interface assignment ──────────────────────────────────────
@@ -132,15 +134,10 @@ enable_dhcp=true
 enable_dns_cache=true
 enable_upnp=true
 enable_firewall=true
-enable_pppoe=false
 
 # ── Specialized device configurations ──────────────────────────────────
 # IP_LIMIT=192.168.1.50:20     # Enforce a 20 Mbps bandwidth maximum to specific IP
 # IP_LIMIT=192.168.1.51:5      # Enforce a 5 Mbps bandwidth maximum to specific IP
-
-# ── Data link layer protocols ─────────────────────────────────────────
-ENABLE_STP=false
-ENABLE_IGMP_SNOOPING=false
 ```
 
 ---
@@ -151,11 +148,11 @@ ENABLE_IGMP_SNOOPING=false
 # Launch with the graphical dashboard visualization:
 sudo ./start.sh
 
-# Launch as a standard network process:
-cd build && sudo ./GamingTrafficPrioritizer
+# Launch without the start script (binary must exist; CWD should be repo root):
+sudo ./build/GamingTrafficPrioritizer
 ```
 
-The execution protocol verifies dependency availability, compiles new iterations, enforces required adapter states, and directs initialization.
+The `start.sh` / `start_release.sh` flow checks dependencies, rebuilds when sources are newer than the binary, adjusts interfaces with `ethtool` where possible, then starts the application.
 
 ### Safe Termination
 
@@ -187,7 +184,7 @@ The primary classification mechanism relies on a fixed memory hash table impleme
 
 **Constant Measurement Evaluation (Core 1)**
 
-Configured exactly to a 1-second interval tracking schedule. This specific core performs hardware temperature validation and system metrics tracking utilizing explicit file descriptor readings (`open()`, `read()`, `close()`), ensuring strict state synchronicity. In parallel, it actively manages NAT status evaluation, DNS memory assessment, and DHCP lease confirmation as pure, lock-free in-memory operations (via atomic updates and message queues) entirely avoiding system call overhead.
+Runs on a one-second `timerfd` tick. The same thread reads hardware temperature and system metrics using normal file I/O on `/sys` and `/proc` (`open`, `read`, `close`) and aggregates statistics. On each tick it also runs periodic maintenance for NAT, DNS, DHCP, and firewall engines (e.g. `tick()` / background tasks), applies pending GUI or config-driven updates via dirty flags and atomics, and refreshes telemetry—so it routinely uses system calls and is not “syscall-free” for those subsystems.
 
 **High Availability Updates**
 
@@ -211,4 +208,4 @@ Bandwidth application adjustments are dynamically written into inactive paramete
 
 ## License
 
-This software is released under the MIT License.
+This software is released under the MIT License. See the [`LICENSE`](LICENSE) file.

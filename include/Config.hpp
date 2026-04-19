@@ -76,7 +76,6 @@ namespace HPGTP::Config {
         std::atomic<bool> enable_dns_cache{true};
         std::atomic<bool> enable_upnp{true};
         std::atomic<bool> enable_firewall{true};
-        std::atomic<bool> enable_pppoe{false};
         std::atomic<bool> enable_gui{true};
     };
     inline DynamicState global_state;
@@ -125,10 +124,6 @@ namespace HPGTP::Config {
     }
 
     inline std::atomic<bool> ENABLE_ACCELERATION{true};
-
-    // Bridge depth configuration
-    inline std::atomic<bool> ENABLE_STP{false};
-    inline std::atomic<bool> ENABLE_IGMP_SNOOPING{false};
 
     // Static bridged interfaces list (max 8 entries, zero heap allocation)
     struct BridgedIfaceEntry { std::array<char, 16> name{}; };

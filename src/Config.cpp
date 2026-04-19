@@ -129,8 +129,6 @@ std::expected<void, std::string> load_config(const std::string& path) {
                 else if (!strcmp(key, "ENABLE_ACCELERATION"))
                     ENABLE_ACCELERATION.store(!strcmp(val, "true") || !strcmp(val, "1"),
                         std::memory_order_relaxed);
-                else if (!strcmp(key, "ENABLE_STP"))          ENABLE_STP.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
-                else if (!strcmp(key, "ENABLE_IGMP_SNOOPING")) ENABLE_IGMP_SNOOPING.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                 else if (!strcmp(key, "BRIDGE_IFACE")) {
                     if (!bridge_iface_loaded) { clear_bridged(); bridge_iface_loaded = true; }
                     add_bridged(val);
@@ -144,7 +142,6 @@ std::expected<void, std::string> load_config(const std::string& path) {
                 else if (!strcmp(key, "enable_dns_cache"))  global_state.enable_dns_cache.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                 else if (!strcmp(key, "enable_upnp"))       global_state.enable_upnp.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                 else if (!strcmp(key, "enable_firewall"))   global_state.enable_firewall.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
-                else if (!strcmp(key, "enable_pppoe"))      global_state.enable_pppoe.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                 else if (!strcmp(key, "DHCP_POOL_START"))   DHCP_POOL_START = val;
                 else if (!strcmp(key, "DHCP_POOL_END"))     DHCP_POOL_END   = val;
                 else if (!strcmp(key, "DHCP_LEASE_SECONDS")) DHCP_LEASE_DURATION = std::chrono::seconds{parse_u32(val)};
@@ -251,8 +248,6 @@ std::expected<void, std::string> save_config(const std::string& path) {
     dprintf(fd, "IFACE_LAN=%s\n",            g_iface_lan.c_str());
     dprintf(fd, "ROUTER_IP=%s\n",            ROUTER_IP.c_str());
     dprintf(fd, "ENABLE_ACCELERATION=%s\n",  b(ENABLE_ACCELERATION.load(std::memory_order_relaxed)));
-    dprintf(fd, "ENABLE_STP=%s\n",           b(ENABLE_STP.load(std::memory_order_relaxed)));
-    dprintf(fd, "ENABLE_IGMP_SNOOPING=%s\n", b(ENABLE_IGMP_SNOOPING.load(std::memory_order_relaxed)));
     for (size_t i = 0; i < BRIDGED_IFACES_COUNT; ++i)
         dprintf(fd, "BRIDGE_IFACE=%s\n", BRIDGED_INTERFACES[i].name.data());
     dprintf(fd, "LARGE_PACKET_THRESHOLD=%u\n", LARGE_PACKET_THRESHOLD_BYTES);
@@ -264,7 +259,6 @@ std::expected<void, std::string> save_config(const std::string& path) {
     dprintf(fd, "enable_dns_cache=%s\n",  b(global_state.enable_dns_cache.load(std::memory_order_relaxed)));
     dprintf(fd, "enable_upnp=%s\n",       b(global_state.enable_upnp.load(std::memory_order_relaxed)));
     dprintf(fd, "enable_firewall=%s\n",   b(global_state.enable_firewall.load(std::memory_order_relaxed)));
-    dprintf(fd, "enable_pppoe=%s\n",      b(global_state.enable_pppoe.load(std::memory_order_relaxed)));
     dprintf(fd, "DHCP_POOL_START=%s\n",   DHCP_POOL_START.c_str());
     dprintf(fd, "DHCP_POOL_END=%s\n",     DHCP_POOL_END.c_str());
     dprintf(fd, "DHCP_LEASE_SECONDS=%u\n", static_cast<uint32_t>(DHCP_LEASE_DURATION.count()));
