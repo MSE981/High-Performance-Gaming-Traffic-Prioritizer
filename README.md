@@ -183,6 +183,10 @@ Each independent processing core runs a continuous network evaluation cycle mapp
 
 The specified routing procedure assigns memory paths strictly based on array indexing routines.
 
+**Layer-2 egress on forwarded IPv4**
+
+Frames are transmitted with `AF_PACKET` `send()` using the full Ethernet header from the buffer. After NAT rewrites the IPv4 header, the pipeline sets **Ethernet source** to the egress interface MAC and **destination** to the next hop (default gateway on WAN, or the LAN host from the kernel ARP cache on LAN). DHCP replies use the **LAN interface MAC** as the Ethernet source (not the destination of the inbound broadcast). Ensure the WAN interface has a default route and that `ROUTER_IP` and the DHCP pool share the LAN subnet.
+
 **Network Data Structuring**
 
 The primary classification mechanism relies on a fixed memory hash table implementation. It guarantees instantaneous assessment capacity without relying on progressive memory reallocation limits.

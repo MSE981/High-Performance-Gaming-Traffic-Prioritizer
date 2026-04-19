@@ -21,7 +21,10 @@
 #include <string_view>
 #include <mutex>
 #include <string>
+#include <array>
+#include <atomic>
 #include <netinet/in.h>
+#include <optional>
 
 namespace HPGTP {
 
@@ -62,6 +65,68 @@ static std::expected<Net::IPv4Net, std::string> resolve_nat_wan_ip() {
     if (is_invalid_nat_wan(*e))
         return std::unexpected(std::string("WAN interface has unusable address: ") + s);
     return *e;
+}
+
+// L2 rewrite for routed IPv4: raw AF_PACKET egress needs correct Ethernet src/dst per segment.
+// Watchdog publishes a double-buffered snapshot (no /proc on Core 2/3 hot path).
+struct alignas(64) ForwardL2Snapshot {
+    std::array<uint8_t, 6> lan_hw{};
+    std::array<uint8_t, 6> wan_hw{};
+    std::array<uint8_t, 6> gw_hw{};
+    static constexpr size_t MAX_ARP = 128;
+    struct ArpEntry {
+        uint32_t ip_nbo = 0;
+        uint8_t  mac[6]{};
+    };
+    std::array<ArpEntry, MAX_ARP> arp{};
+    uint32_t arp_count = 0;
+    bool     ready     = false;
+};
+
+static std::array<ForwardL2Snapshot, 2> g_fwd_snap{};
+static std::atomic<unsigned>            g_fwd_active{0};
+
+static void refresh_forward_layer2_macs() {
+    const unsigned w = 1u - g_fwd_active.load(std::memory_order_relaxed);
+    ForwardL2Snapshot& snap = g_fwd_snap[w];
+
+    const bool lan_ok = Utils::Network::get_iface_hwaddr(Config::iface_lan(), snap.lan_hw.data());
+    const bool wan_ok = Utils::Network::get_iface_hwaddr(Config::iface_wan(), snap.wan_hw.data());
+
+    std::string gw_ip = Utils::Network::get_default_gateway_for_iface(Config::iface_wan());
+    if (gw_ip.empty())
+        gw_ip = Utils::Network::get_gateway_ip();
+    if (!gw_ip.empty())
+        Utils::Network::force_arp_resolution(gw_ip);
+
+    Utils::ArpTableRow rows[ForwardL2Snapshot::MAX_ARP];
+    const size_t n = Utils::Network::read_arp_table(rows, ForwardL2Snapshot::MAX_ARP);
+
+    bool gw_ok = false;
+    if (!gw_ip.empty()) {
+        struct in_addr gw_addr {};
+        if (inet_pton(AF_INET, gw_ip.c_str(), &gw_addr) == 1) {
+            const uint32_t gw_nbo = gw_addr.s_addr;
+            for (size_t i = 0; i < n; ++i) {
+                if (rows[i].ip_nbo == gw_nbo) {
+                    std::memcpy(snap.gw_hw.data(), rows[i].mac, 6);
+                    gw_ok = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    const uint32_t ac = static_cast<uint32_t>(
+        std::min(n, static_cast<size_t>(ForwardL2Snapshot::MAX_ARP)));
+    snap.arp_count = ac;
+    for (uint32_t i = 0; i < ac; ++i) {
+        snap.arp[i].ip_nbo = rows[i].ip_nbo;
+        std::memcpy(snap.arp[i].mac, rows[i].mac, 6);
+    }
+
+    snap.ready = lan_ok && wan_ok && gw_ok;
+    g_fwd_active.store(w, std::memory_order_release);
 }
 
 // ─── Packet routing context (internal to data plane) ─────────────────────────
@@ -109,7 +174,7 @@ public:
 
     // Ordered pipeline stages; each step returns true if it handled the packet.
     struct PacketPipeline {
-        std::array<PipelineStep, 10> steps{};
+        std::array<PipelineStep, 12> steps{};
     };
     PacketPipeline pipeline;
 
@@ -132,9 +197,10 @@ public:
             pipeline.steps = {{
                 step_dhcp_interceptor, step_dns_interceptor,
                 step_firewall_inbound, step_nat_downstream,
+                step_eth_rewrite_wan_to_lan,
                 step_block_device_downstream, step_device_shaper_downstream,
                 step_ip_shaper_downstream, step_qos_routing,
-                nullptr, nullptr
+                nullptr, nullptr, nullptr
             }};
         } else {
             // Core 3 LAN→WAN: block and SNAT before sending upstream
@@ -142,8 +208,10 @@ public:
                 step_dhcp_interceptor, step_dns_interceptor,
                 step_local_delivery_blocker, step_block_device_upstream,
                 step_firewall_track_outbound, step_nat_downstream,
-                step_nat_upstream, step_device_shaper_upstream,
-                step_ip_shaper_upstream, step_qos_routing
+                step_nat_upstream, step_eth_rewrite_lan_to_wan,
+                step_device_shaper_upstream,
+                step_ip_shaper_upstream, step_qos_routing,
+                nullptr
             }};
         }
     }
@@ -199,6 +267,43 @@ public:
     static bool step_nat_upstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
         if (!Config::global_state.enable_nat.load(std::memory_order_relaxed)) return false;
         if (self.nat_engine) self.nat_engine->process_outbound(pkt);
+        return false;
+    }
+
+    static bool ipv4_needs_eth_rewrite_for_forward(Net::IPv4Header* ip) noexcept {
+        const uint32_t d = ntohl(ip->daddr.raw());
+        if (d == 0xFFFFFFFFu) return false;
+        if ((d >> 24) >= 224u) return false;
+        return true;
+    }
+
+    static bool step_eth_rewrite_lan_to_wan(PacketConsumer& self, Net::ParsedPacket& pkt) {
+        (void)self;
+        if (!Config::global_state.enable_nat.load(std::memory_order_relaxed)) return false;
+        const unsigned a = g_fwd_active.load(std::memory_order_acquire);
+        const ForwardL2Snapshot& s = g_fwd_snap[a];
+        if (!s.ready || !pkt.eth || !pkt.ipv4) return false;
+        if (!ipv4_needs_eth_rewrite_for_forward(pkt.ipv4)) return false;
+        std::memcpy(pkt.eth->src, s.wan_hw.data(), 6);
+        std::memcpy(pkt.eth->dest, s.gw_hw.data(), 6);
+        return false;
+    }
+
+    static bool step_eth_rewrite_wan_to_lan(PacketConsumer& self, Net::ParsedPacket& pkt) {
+        (void)self;
+        if (!Config::global_state.enable_nat.load(std::memory_order_relaxed)) return false;
+        const unsigned a = g_fwd_active.load(std::memory_order_acquire);
+        const ForwardL2Snapshot& s = g_fwd_snap[a];
+        if (!s.ready || !pkt.eth || !pkt.ipv4) return false;
+        if (!ipv4_needs_eth_rewrite_for_forward(pkt.ipv4)) return false;
+        const uint32_t key = pkt.ipv4->daddr.raw();
+        for (uint32_t i = 0; i < s.arp_count; ++i) {
+            if (s.arp[i].ip_nbo == key) {
+                std::memcpy(pkt.eth->src, s.lan_hw.data(), 6);
+                std::memcpy(pkt.eth->dest, s.arp[i].mac, 6);
+                return false;
+            }
+        }
         return false;
     }
 
@@ -306,6 +411,107 @@ struct RxFrameCopy {
 } // anonymous namespace
 
 // ─── App method definitions ───────────────────────────────────────────────────
+
+std::expected<void, std::string> App::sync_lan_subnet_and_dhcp_gateway() {
+    auto parse_kern = [](const std::string& s) -> std::optional<Net::IPv4Net> {
+        if (s.empty()) return std::nullopt;
+        auto e = Config::parse_ip_str(s);
+        if (!e) return std::nullopt;
+        return *e;
+    };
+
+    if (!Config::global_state.enable_dhcp.load(std::memory_order_relaxed)) {
+        if (Config::APPLY_ROUTER_IP_TO_LAN && Config::LAN_PREFIX_LEN > 0 && Config::LAN_PREFIX_LEN <= 32) {
+            if (Config::parse_ip_str(Config::ROUTER_IP)) {
+                if (!Utils::Network::set_iface_ipv4_and_prefix(
+                        Config::iface_lan(), Config::ROUTER_IP, Config::LAN_PREFIX_LEN))
+                    std::println(stderr, "[App] set_iface ROUTER_IP on {} failed: {}",
+                        Config::iface_lan(), std::strerror(errno));
+            }
+        }
+        auto re = Config::parse_ip_str(Config::ROUTER_IP);
+        if (!re) return std::unexpected(std::string("ROUTER_IP: ") + re.error());
+        const std::string k = Utils::Network::get_local_ip(Config::iface_lan());
+        effective_lan_gateway_ = parse_kern(k).value_or(*re);
+        if (dhcp_engine) dhcp_engine->set_router_ip(effective_lan_gateway_);
+        return {};
+    }
+
+    auto pstart_e = Config::parse_ip_str(Config::DHCP_POOL_START);
+    auto pend_e   = Config::parse_ip_str(Config::DHCP_POOL_END);
+    if (!pstart_e) return std::unexpected(std::string("DHCP_POOL_START: ") + pstart_e.error());
+    if (!pend_e) return std::unexpected(std::string("DHCP_POOL_END: ") + pend_e.error());
+    const Net::IPv4Net pool_start = *pstart_e;
+    const Net::IPv4Net pool_end   = *pend_e;
+    if (ntohl(pool_start.raw()) > ntohl(pool_end.raw()))
+        return std::unexpected(std::string("DHCP pool start is after pool end"));
+
+    const int prefix = Utils::Network::infer_prefix_covering_pool(pool_start, pool_end);
+    if (prefix > 32)
+        return std::unexpected(std::string("invalid DHCP pool prefix derivation"));
+
+    if (Config::LAN_PREFIX_LEN > 0 && Config::LAN_PREFIX_LEN <= 32
+        && Config::LAN_PREFIX_LEN != prefix)
+        std::println(stderr,
+            "[App] LAN_PREFIX_LEN={} differs from pool-derived prefix {}; using derived for subnet and ioctl.",
+            Config::LAN_PREFIX_LEN, prefix);
+
+    auto router_e = Config::parse_ip_str(Config::ROUTER_IP);
+    if (!router_e) return std::unexpected(std::string("ROUTER_IP: ") + router_e.error());
+
+    if (Config::APPLY_ROUTER_IP_TO_LAN) {
+        if (!Utils::Network::set_iface_ipv4_and_prefix(
+                Config::iface_lan(), Config::ROUTER_IP, prefix)) {
+            std::println(stderr, "[App] set_iface ROUTER_IP on {} failed: {}",
+                Config::iface_lan(), std::strerror(errno));
+        }
+    }
+
+    auto in_pool_subnet = [&](Net::IPv4Net ip) {
+        return Utils::Network::ipv4_in_subnet(ip, prefix, pool_start);
+    };
+
+    std::string       kern_s = Utils::Network::get_local_ip(Config::iface_lan());
+    std::optional<Net::IPv4Net> kern = parse_kern(kern_s);
+
+    bool ok = kern.has_value() && in_pool_subnet(*kern);
+    if (!ok) {
+        if (in_pool_subnet(*router_e)) {
+            if (!Utils::Network::set_iface_ipv4_and_prefix(
+                    Config::iface_lan(), Config::ROUTER_IP, prefix))
+                return std::unexpected(std::string("set_iface ROUTER_IP: ") + std::strerror(errno));
+            kern_s = Utils::Network::get_local_ip(Config::iface_lan());
+            kern   = parse_kern(kern_s);
+            ok     = kern.has_value() && in_pool_subnet(*kern);
+        } else {
+            return std::unexpected(
+                std::string("ROUTER_IP is not in the DHCP pool subnet (derived /") + std::to_string(prefix)
+                + "); fix ROUTER_IP or DHCP_POOL_*");
+        }
+    }
+
+    if (!ok || !kern.has_value())
+        return std::unexpected(
+            std::string("IFACE_LAN has no IPv4 in the DHCP pool subnet; set APPLY_ROUTER_IP_TO_LAN=true "
+                        "with ROUTER_IP inside the pool subnet, or assign manually."));
+
+    effective_lan_gateway_ = *kern;
+    if (dhcp_engine) dhcp_engine->set_router_ip(effective_lan_gateway_);
+    std::println("[App] DHCP gateway {} (kernel LAN, pool subnet /{})",
+        Config::ip_to_str(effective_lan_gateway_), prefix);
+    return {};
+}
+
+void App::refresh_dhcp_router_from_kernel() noexcept {
+    if (!dhcp_engine || !Config::global_state.enable_dhcp.load(std::memory_order_relaxed))
+        return;
+    const std::string s = Utils::Network::get_local_ip(Config::iface_lan());
+    if (s.empty()) return;
+    auto e = Config::parse_ip_str(s);
+    if (!e) return;
+    if (*e != dhcp_engine->router_ip_snapshot())
+        dhcp_engine->set_router_ip(*e);
+}
 
 App::App() {
     shutdown_future = shutdown_promise.get_future();
@@ -422,6 +628,8 @@ std::expected<void, std::string> App::init() {
     if (auto r = iface_wan->init(); !r) return r;
     if (auto r = iface_lan->init(); !r) return r;
 
+    if (auto s = sync_lan_subnet_and_dhcp_gateway(); !s) return s;
+
     if (Config::global_state.enable_nat.load(std::memory_order_relaxed)) {
         auto w = resolve_nat_wan_ip();
         if (!w) return std::unexpected(w.error());
@@ -462,6 +670,19 @@ void App::start() {
             tel.dns_static_pending[i].ip_str[15] = '\0';
         }
     }
+
+    // Apply DNS upstream + static records from config before workers run. Watchdog only
+    // refreshes when dns_config_dirty (GUI Apply); without this, upstream stayed 0 on headless boot.
+    if (dns_engine) {
+        auto up_pri = Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY);
+        auto up_sec = Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY);
+        dns_engine->set_upstream(
+            {up_pri.value_or(Net::IPv4Net{}), up_sec.value_or(Net::IPv4Net{})});
+        dns_engine->set_redirect(
+            Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
+        dns_engine->reload_static_records();
+    }
+
     HPGTP::System::Optimizer::lock_cpu_frequency();
 
     int fd_wan = iface_wan->get_fd();
@@ -475,12 +696,17 @@ void App::start() {
     global_shaper_dl = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_dl_mbps});
     global_shaper_ul = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_ul_mbps});
 
-    auto gw_e = Config::parse_ip_str(Config::ROUTER_IP);
-    if (!gw_e) {
-        std::println(stderr, "[App] Invalid ROUTER_IP: {}", gw_e.error());
-        return;
+    // DHCP gateway tracks kernel via DhcpEngine::set_router_ip; local-delivery uses
+    // this snapshot at worker start (no per-packet hot-path update).
+    Net::IPv4Net gw_ip = effective_lan_gateway_;
+    if (gw_ip.raw() == 0) {
+        auto gw_e = Config::parse_ip_str(Config::ROUTER_IP);
+        if (!gw_e) {
+            std::println(stderr, "[App] Invalid ROUTER_IP: {}", gw_e.error());
+            return;
+        }
+        gw_ip = *gw_e;
     }
-    Net::IPv4Net gw_ip = *gw_e;
     if (auto pr = open_worker_poll_fds_for_start(); !pr) {
         std::println(stderr, "[App] {}", pr.error());
         return;
@@ -497,7 +723,13 @@ void App::start() {
     running_watchdog.store(true, std::memory_order_relaxed);
     watchdog = std::thread([this]() { watchdog_loop(); });
 
-    Utils::Network::force_arp_resolution(Utils::Network::get_gateway_ip());
+    refresh_forward_layer2_macs();
+    {
+        const unsigned fa = g_fwd_active.load(std::memory_order_acquire);
+        if (!g_fwd_snap[fa].ready)
+            std::println(stderr,
+                "[App] Warning: Ethernet MACs for L3 forwarding not ready (interfaces or default route / ARP).");
+    }
 
     running_workers.store(true, std::memory_order_relaxed);
 
@@ -907,6 +1139,8 @@ void App::watchdog_loop() {
 
             scan_ifaces();
             did_iface_scan = true;
+            refresh_forward_layer2_macs();
+            refresh_dhcp_router_from_kernel();
 
             if (Config::global_state.enable_nat.load(std::memory_order_relaxed)
                 && trim_ws(Config::WAN_IP).empty()
@@ -1084,6 +1318,8 @@ void App::watchdog_loop() {
                 std::println("[DHCP] Pool reconfigured: {} – {}, lease {}s",
                     Config::DHCP_POOL_START, Config::DHCP_POOL_END,
                     Config::DHCP_LEASE_DURATION.count());
+                if (auto s = sync_lan_subnet_and_dhcp_gateway(); !s)
+                    std::println(stderr, "[DHCP] LAN subnet sync after pool change: {}", s.error());
             }
         }
 

@@ -165,12 +165,12 @@ DnsQueryDisposition DnsEngine::process_query(Net::ParsedPacket& pkt,
         break;
     }
 
-    if (redirect_enabled.load(std::memory_order_relaxed)) {
-        Net::IPv4Net upstream = upstream_primary_ip.load(std::memory_order_relaxed);
-        if (upstream.raw() != 0) {
-            rewrite_upstream(pkt, upstream);
-            return DnsQueryDisposition::Redirected;
-        }
+    // Forward to upstream when configured. DHCP option 6 often points clients at this
+    // router; without rewriting daddr here, step_local_delivery_blocker drops dst=gateway.
+    Net::IPv4Net upstream = upstream_primary_ip.load(std::memory_order_relaxed);
+    if (upstream.raw() != 0) {
+        rewrite_upstream(pkt, upstream);
+        return DnsQueryDisposition::Redirected;
     }
     return DnsQueryDisposition::NotHandled;
 }

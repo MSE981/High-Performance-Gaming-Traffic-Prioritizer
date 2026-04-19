@@ -38,6 +38,7 @@ namespace HPGTP::Logic {
         size_t       pool_count    = 0;
         Net::IPv4Net        router_ip{};
         std::chrono::seconds lease_duration{86400};
+        std::array<uint8_t, 6> lan_if_mac_{};
 
         std::expected<void, std::string> init_pool(Net::IPv4Net start_ip, Net::IPv4Net end_ip);
         void handle_dhcp_request(DhcpMessage& msg, int lan_fd);
@@ -47,6 +48,8 @@ namespace HPGTP::Logic {
     public:
         explicit DhcpEngine(const std::string& lan_ip, DhcpPoolConfig cfg);
         std::expected<void, std::string> reconfigure(DhcpPoolConfig cfg);
+        void set_router_ip(Net::IPv4Net ip) noexcept { router_ip = ip; }
+        [[nodiscard]] Net::IPv4Net router_ip_snapshot() const noexcept { return router_ip; }
         void intercept_request(const Net::ParsedPacket& pkt);
         void process_background_tasks(int lan_fd);
     };

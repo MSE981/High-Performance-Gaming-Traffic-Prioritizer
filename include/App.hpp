@@ -158,6 +158,11 @@ class App {
     void wake_watchdog_for_shutdown();
     void close_watchdog_stop_efd();
 
+    // DHCP pool subnet alignment + kernel LAN IP as DhcpEngine router_ip (Core 1 / init).
+    Net::IPv4Net                     effective_lan_gateway_{};
+    std::expected<void, std::string> sync_lan_subnet_and_dhcp_gateway();
+    void                             refresh_dhcp_router_from_kernel() noexcept;
+
 public:
     App();
     ~App();

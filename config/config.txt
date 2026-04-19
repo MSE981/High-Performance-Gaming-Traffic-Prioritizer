@@ -8,6 +8,11 @@
 # IFACE_LAN  : Ethernet interface facing your local devices.
 # ROUTER_IP  : The Pi's own IP on the LAN side (default gateway for DHCP clients, firewall, UPnP).
 #              Must be on a different subnet from the upstream router.
+# APPLY_ROUTER_IP_TO_LAN : If true, the program sets the kernel IPv4 on IFACE_LAN to ROUTER_IP at startup
+#              (userspace DHCP does not configure the interface). Requires root. Disable if you use netplan/systemd-networkd.
+# LAN_PREFIX_LEN : CIDR prefix for that LAN (typical home LAN: 24).
+APPLY_ROUTER_IP_TO_LAN=true
+LAN_PREFIX_LEN=24
 # WAN_IP     : Optional. Static IPv4 used for NAT (SNAT / inbound DNAT). Leave empty or omit to use
 #              the IPv4 address assigned to IFACE_WAN (e.g. DHCP from your ISP router).
 IFACE_WAN=eth0
@@ -61,7 +66,9 @@ enable_upnp=false
 enable_firewall=true
 
 # ── DHCP address pool (LAN clients) ──────────────────────────────────
-# Must sit on the same subnet as ROUTER_IP. End may be .255 on /24 (broadcast); use .254 if a client rejects it.
+# Pool bounds imply the LAN subnet (prefix). ROUTER_IP must lie in that subnet; when enable_dhcp=true,
+# the program aligns IFACE_LAN into that subnet (see APPLY_ROUTER_IP_TO_LAN) and uses the kernel LAN IP
+# as the DHCP default gateway. End may be .255 on /24; use .254 if a client rejects it.
 DHCP_POOL_START=192.168.12.50
 DHCP_POOL_END=192.168.12.255
 

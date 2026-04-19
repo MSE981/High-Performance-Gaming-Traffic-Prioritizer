@@ -1,5 +1,7 @@
 #include "DhcpEngine.hpp"
+#include "Config.hpp"
 #include "DataPlane.hpp"
+#include "NetworkUtils.hpp"
 #include <expected>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -117,7 +119,7 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
 
         auto eth = reinterpret_cast<Net::EthernetHeader*>(response.data());
         std::memcpy(eth->dest, dhcp->chaddr, 6);
-        std::memcpy(eth->src, parsed.eth->dest, 6);
+        std::memcpy(eth->src, lan_if_mac_.data(), 6);
         eth->proto = htons(0x0800);
 
         auto ip = reinterpret_cast<Net::IPv4Header*>(response.data() + sizeof(Net::EthernetHeader));
@@ -214,6 +216,9 @@ DhcpEngine::DhcpEngine(const std::string& lan_ip, DhcpPoolConfig cfg) {
     lease_duration = cfg.lease;
     if (auto r = init_pool(cfg.pool_start, cfg.pool_end); !r)
         std::println(stderr, "[DHCP] init_pool: {}", r.error());
+    if (!Utils::Network::get_iface_hwaddr(Config::iface_lan(), lan_if_mac_.data()))
+        std::println(stderr, "[DHCP] Warning: could not read Ethernet MAC for {}",
+            Config::iface_lan());
 }
 
 std::expected<void, std::string> DhcpEngine::reconfigure(DhcpPoolConfig cfg) {

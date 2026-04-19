@@ -82,6 +82,9 @@ namespace HPGTP::Config {
 
     // Interface configuration (ROUTER_IP and below remain inline; IFACE_* live in Config.cpp)
     inline std::string ROUTER_IP = "192.168.12.1";
+    // When true, App::init sets IFACE_LAN's kernel IPv4 to ROUTER_IP (userspace DHCP does not do this).
+    inline bool APPLY_ROUTER_IP_TO_LAN = true;
+    inline int  LAN_PREFIX_LEN         = 24;
 
     // Optional static IPv4 for NAT (SNAT source / inbound DNAT match). Empty = use WAN iface address from kernel.
     inline std::string WAN_IP{};
