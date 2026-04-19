@@ -73,6 +73,9 @@ namespace HPGTP {
         };
         std::array<DeviceEntry, MAX_TRACKED_DEVICES> device_table{};
         std::atomic<uint8_t> device_count{0}; // release-stored last after all entries are written
+        // Bumped only when (ip, mac) contents differ from the prior snapshot;
+        // the UI gate uses this to rebuild cards on IP changes at constant count.
+        std::atomic<uint64_t> device_table_revision{0};
 
         // System info: updated by Core 1 watchdog every 5 seconds, read by UI thread on-demand.
         // char arrays are plain (not atomic) — display-only data, torn reads are acceptable.

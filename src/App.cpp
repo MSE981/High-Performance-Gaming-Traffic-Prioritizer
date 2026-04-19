@@ -1175,6 +1175,9 @@ void App::watchdog_loop() {
                     ssize_t nr = ::read(afd, arp, sizeof(arp) - 1);
                     ::close(afd);
                     uint8_t dcnt = 0;
+                    bool changed = false;
+                    const uint8_t prev_cnt =
+                        tel.device_count.load(std::memory_order_relaxed);
                     if (nr > 0) {
                         char* line = arp;
                         char* end  = arp + nr;
@@ -1186,10 +1189,17 @@ void App::watchdog_loop() {
                                        ip_str, hw, flags, mac) == 4) {
                                 Net::IPv4Net ip{};
                                 if (Net::try_parse_ipv4(ip_str, ip) && strcmp(flags, "0x0") != 0) {
-                                    tel.device_table[dcnt].ip = ip;
+                                    auto& slot = tel.device_table[dcnt];
+                                    if (slot.ip != ip) { slot.ip = ip; changed = true; }
+                                    std::array<char, 18> mac_buf{};
                                     std::string_view mac_sv{mac};
-                                    auto nm = mac_sv.copy(tel.device_table[dcnt].mac.data(), 17);
-                                    tel.device_table[dcnt].mac[nm] = '\0';
+                                    auto nm = mac_sv.copy(mac_buf.data(), 17);
+                                    mac_buf[nm] = '\0';
+                                    if (std::memcmp(slot.mac.data(), mac_buf.data(),
+                                                    mac_buf.size()) != 0) {
+                                        slot.mac = mac_buf;
+                                        changed  = true;
+                                    }
                                     ++dcnt;
                                 }
                             }
@@ -1197,7 +1207,10 @@ void App::watchdog_loop() {
                             if (line < end) ++line;
                         }
                     }
+                    if (dcnt != prev_cnt) changed = true;
                     tel.device_count.store(dcnt, std::memory_order_release);
+                    if (changed)
+                        tel.device_table_revision.fetch_add(1, std::memory_order_release);
                 }
             }
         }

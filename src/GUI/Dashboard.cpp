@@ -1933,11 +1933,14 @@ void DevicePage::refresh() {
     auto& tel = Telemetry::instance();
     uint8_t cnt = tel.device_count.load(std::memory_order_acquire);
     uint64_t rev = Config::DEVICE_POLICY_REVISION.load(std::memory_order_acquire);
+    uint64_t drev = tel.device_table_revision.load(std::memory_order_acquire);
     // Cheap path: device list + policy revision gate. Do not remove — the plot timer
     // calls refresh at 25 Hz; without this, cards rebuild every tick.
-    if (cnt == last_device_count && rev == last_device_policy_revision_) return;
+    if (cnt == last_device_count && rev == last_device_policy_revision_
+        && drev == last_device_table_revision_) return;
     last_device_count = cnt;
     last_device_policy_revision_ = rev;
+    last_device_table_revision_ = drev;
 
     // Remove all existing cards (leave trailing stretch)
     rows_.clear();
