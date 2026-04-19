@@ -318,7 +318,10 @@ std::expected<void, std::string> App::open_worker_poll_fds_for_start() {
     close_worker_poll_fds();
     for (auto& w : worker_poll_) {
         w.frame_efd = ::eventfd(0, EFD_CLOEXEC);
-        w.stop_efd  = ::eventfd(0, EFD_CLOEXEC);
+        // Semaphore mode: RX and proc threads both poll+read the same stop_efd; a single
+        // non-semaphore write(1) wakes both but only one read drains — the other blocks
+        // forever on read(), so App::stop() hangs on worker join.
+        w.stop_efd  = ::eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE);
         if (w.frame_efd < 0 || w.stop_efd < 0) {
             int e = errno;
             close_worker_poll_fds();
@@ -345,7 +348,9 @@ void App::close_worker_poll_fds() {
 void App::wake_proc_threads_for_shutdown() {
     for (auto& w : worker_poll_) {
         if (w.stop_efd >= 0)
-            (void)::eventfd_write(w.stop_efd, 1);
+            // Two readers per worker (RX thread + proc thread); EFD_SEMAPHORE needs one
+            // increment per successful read.
+            (void)::eventfd_write(w.stop_efd, 2);
     }
 }
 
