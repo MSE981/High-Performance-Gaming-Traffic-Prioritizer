@@ -14,6 +14,32 @@ uint32_t hash_qname(const uint8_t* qname, size_t max_len) {
     return h;
 }
 
+// RFC 1624 incremental checksum update: HC' = ~(~HC + ~m + m'), stored NBO.
+inline void csum_patch_16(uint16_t& check, uint16_t old_val, uint16_t new_val) {
+    uint32_t sum = (~ntohs(check) & 0xFFFF) + (~ntohs(old_val) & 0xFFFF) + ntohs(new_val);
+    sum = (sum & 0xFFFF) + (sum >> 16);
+    check = htons(static_cast<uint16_t>(~(sum + (sum >> 16))));
+}
+inline void csum_patch_32(uint16_t& check, Net::IPv4Net old_val, Net::IPv4Net new_val) {
+    csum_patch_16(check, static_cast<uint16_t>(old_val.raw() & 0xFFFF),
+                         static_cast<uint16_t>(new_val.raw() & 0xFFFF));
+    csum_patch_16(check, static_cast<uint16_t>(old_val.raw() >> 16),
+                         static_cast<uint16_t>(new_val.raw() >> 16));
+}
+
+inline uint64_t redirect_key(Net::IPv4Net client_ip, uint16_t port_nbo) {
+    return (static_cast<uint64_t>(client_ip.raw()) << 16)
+         | static_cast<uint64_t>(port_nbo);
+}
+inline uint32_t redirect_slot(uint64_t key) {
+    uint32_t h = 2166136261U;
+    for (int i = 0; i < 8; ++i) {
+        h ^= static_cast<uint8_t>(key >> (i * 8));
+        h *= 16777619U;
+    }
+    return h;
+}
+
 // RFC 1035 name: labels ending in 0, or a suffix pointer (two bytes 11xxxxxx), or pointer-only.
 [[nodiscard]] bool skip_one_dns_name(const uint8_t* d, size_t msg_len, size_t& ptr) {
     unsigned guard = 0;
@@ -45,6 +71,37 @@ void DnsEngine::set_upstream(DnsUpstreamConfig cfg) {
 
 void DnsEngine::set_redirect(bool enabled) {
     redirect_enabled.store(enabled, std::memory_order_relaxed);
+}
+
+void DnsEngine::set_gateway_ip(Net::IPv4Net ip) noexcept {
+    gateway_ip.store(ip, std::memory_order_release);
+}
+
+void DnsEngine::record_redirect(Net::IPv4Net client_ip, uint16_t sport_nbo,
+                                Net::IPv4Net original_dst) noexcept {
+    const uint64_t k   = redirect_key(client_ip, sport_nbo);
+    const size_t   idx = redirect_slot(k) % REDIRECT_SIZE;
+    auto& e = redirect_table[idx];
+    e.key.store(0, std::memory_order_release);
+    e.original_dst.store(original_dst, std::memory_order_relaxed);
+    e.expire_tick.store(
+        current_tick.load(std::memory_order_relaxed) + REDIRECT_TTL,
+        std::memory_order_relaxed);
+    e.key.store(k, std::memory_order_release);
+}
+
+bool DnsEngine::lookup_redirect(Net::IPv4Net client_ip, uint16_t dport_nbo,
+                                Net::IPv4Net& out_original_dst) noexcept {
+    const uint64_t k   = redirect_key(client_ip, dport_nbo);
+    const size_t   idx = redirect_slot(k) % REDIRECT_SIZE;
+    auto& e = redirect_table[idx];
+    if (e.key.load(std::memory_order_acquire) != k) return false;
+    const Net::IPv4Net dst = e.original_dst.load(std::memory_order_relaxed);
+    const uint32_t     ex  = e.expire_tick.load(std::memory_order_relaxed);
+    if (e.key.load(std::memory_order_acquire) != k) return false;
+    if (current_tick.load(std::memory_order_relaxed) > ex) return false;
+    out_original_dst = dst;
+    return true;
 }
 
 void DnsEngine::reload_static_records() {
@@ -110,15 +167,14 @@ bool DnsEngine::do_bounce(Net::ParsedPacket& pkt, DnsHeader* dns, Net::UDPHeader
     return true;
 }
 
-void DnsEngine::rewrite_upstream(Net::ParsedPacket& pkt, Net::IPv4Net upstream_ip) {
+void DnsEngine::rewrite_upstream(Net::ParsedPacket& pkt, Net::UDPHeader* udp,
+                                 Net::IPv4Net upstream_ip) {
+    const Net::IPv4Net old_daddr = pkt.ipv4->daddr;
     pkt.ipv4->daddr = upstream_ip;
-    pkt.ipv4->check = 0;
-    uint32_t sum = 0;
-    const uint16_t* words = reinterpret_cast<const uint16_t*>(pkt.ipv4);
-    for (size_t i = 0; i < pkt.ihl / 2; ++i) sum += ntohs(words[i]);
-    sum = (sum >> 16) + (sum & 0xFFFF);
-    sum += (sum >> 16);
-    pkt.ipv4->check = htons(~static_cast<uint16_t>(sum));
+    csum_patch_32(pkt.ipv4->check, old_daddr, upstream_ip);
+    // UDP pseudo-header includes daddr: patch transport checksum when present.
+    if (udp && udp->check != 0)
+        csum_patch_32(udp->check, old_daddr, upstream_ip);
 }
 
 DnsQueryDisposition DnsEngine::process_query(Net::ParsedPacket& pkt,
@@ -165,23 +221,39 @@ DnsQueryDisposition DnsEngine::process_query(Net::ParsedPacket& pkt,
         break;
     }
 
-    // Forward to upstream when configured. DHCP option 6 often points clients at this
-    // router; without rewriting daddr here, step_local_delivery_blocker drops dst=gateway.
-    Net::IPv4Net upstream = upstream_primary_ip.load(std::memory_order_relaxed);
-    if (upstream.raw() != 0) {
-        rewrite_upstream(pkt, upstream);
+    // Redirect only queries aimed at this router (DHCP-advertised DNS server) to
+    // upstream. A record of the original dst is kept so the reply's saddr can be
+    // restored on the return path; otherwise the resolver rejects the response.
+    const Net::IPv4Net gw = gateway_ip.load(std::memory_order_acquire);
+    const Net::IPv4Net upstream = upstream_primary_ip.load(std::memory_order_relaxed);
+    if (upstream.raw() != 0 && gw.raw() != 0 && pkt.ipv4->daddr == gw) {
+        record_redirect(pkt.ipv4->saddr, udp->source, pkt.ipv4->daddr);
+        rewrite_upstream(pkt, udp, upstream);
         return DnsQueryDisposition::Redirected;
     }
     return DnsQueryDisposition::NotHandled;
 }
 
-void DnsEngine::intercept_response(const Net::ParsedPacket& pkt) {
-    if (pkt.raw_span.size() > 512 || !pkt.is_valid_ipv4()) return;
-    if (pkt.l4_protocol != 17) return;
+void DnsEngine::process_response(Net::ParsedPacket& pkt) noexcept {
+    if (!pkt.is_valid_ipv4() || pkt.l4_protocol != 17) return;
 
     auto udp = pkt.udp();
     if (!udp || ntohs(udp->source) != 53) return;
 
+    // Restore saddr to the original DNS server IP the client queried. Runs after
+    // NAT DNAT so (daddr, dport) equal the client's (ip, sport) recorded on TX.
+    Net::IPv4Net orig_dst{};
+    if (lookup_redirect(pkt.ipv4->daddr, udp->dest, orig_dst)
+        && orig_dst.raw() != 0
+        && orig_dst != pkt.ipv4->saddr) {
+        const Net::IPv4Net old_saddr = pkt.ipv4->saddr;
+        pkt.ipv4->saddr = orig_dst;
+        csum_patch_32(pkt.ipv4->check, old_saddr, orig_dst);
+        if (udp->check != 0)
+            csum_patch_32(udp->check, old_saddr, orig_dst);
+    }
+
+    if (pkt.raw_span.size() > 512) return;
     DnsMessage msg;
     msg.len = pkt.raw_span.size();
     std::memcpy(msg.data.data(), pkt.raw_span.data(), pkt.raw_span.size());

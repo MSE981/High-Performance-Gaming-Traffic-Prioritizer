@@ -249,10 +249,12 @@ void SelfTest::test_dns(Report& r) {
     // ── DNS_Redirect ──
     auto dns_redir = std::make_unique<Logic::DnsEngine>();
     Net::IPv4Net upstream = Config::parse_ip_str("9.9.9.9").value();
+    Net::IPv4Net gw       = Config::parse_ip_str("192.168.1.1").value();
     dns_redir->set_upstream({upstream, Net::IPv4Net{}});
     dns_redir->set_redirect(true);
+    dns_redir->set_gateway_ip(gw);
     size_t len3 = 0;
-    auto redir_buf = make_dns_query(cli, srv, "redirect.test", len3);
+    auto redir_buf = make_dns_query(cli, gw, "redirect.test", len3);
     auto pkt_redir = Net::ParsedPacket::parse(
         std::span<uint8_t>{redir_buf.data(), len3});
     const auto redir_disp = dns_redir->process_query(pkt_redir, -1); // Redirected + daddr rewrite

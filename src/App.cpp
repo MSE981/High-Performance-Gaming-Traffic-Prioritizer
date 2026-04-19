@@ -193,10 +193,12 @@ public:
 
         // Pipeline steps are fixed at construction (no per-packet branch to select a path).
         if (core_id == 2) {
-            // Core 2 WAN→LAN: DNAT first, then device block on real LAN IP
+            // Core 2 WAN→LAN: DNAT first, then DNS response rewrite (needs
+            // client-side (ip, port)), then device block on real LAN IP.
             pipeline.steps = {{
-                step_dhcp_interceptor, step_dns_interceptor,
+                step_dhcp_interceptor,
                 step_firewall_inbound, step_nat_downstream,
+                step_dns_response,
                 step_eth_rewrite_wan_to_lan,
                 step_block_device_downstream, step_device_shaper_downstream,
                 step_ip_shaper_downstream, step_qos_routing,
@@ -244,17 +246,20 @@ public:
 
     static bool step_dns_interceptor(PacketConsumer& self, Net::ParsedPacket& pkt) {
         if (!Config::global_state.enable_dns_cache.load(std::memory_order_relaxed)) return false;
-        if (self.core_id == 3) {
-            if (self.dns_engine) {
-                const Logic::DnsQueryDisposition d =
-                    self.dns_engine->process_query(pkt, self.rx_fd);
-                if (d == Logic::DnsQueryDisposition::Replied
-                    || d == Logic::DnsQueryDisposition::ReplySendFailed)
-                    return true;
-            }
-        } else if (self.core_id == 2) {
-            if (self.dns_engine) self.dns_engine->intercept_response(pkt);
-        }
+        if (self.core_id != 3 || !self.dns_engine) return false;
+        const Logic::DnsQueryDisposition d =
+            self.dns_engine->process_query(pkt, self.rx_fd);
+        return d == Logic::DnsQueryDisposition::Replied
+            || d == Logic::DnsQueryDisposition::ReplySendFailed;
+    }
+
+    // WAN→LAN DNS response handler. Must run after step_nat_downstream so that
+    // (daddr, dport) have been restored to the client's (ip, sport), which is
+    // the key used to look up the original DNS server address.
+    static bool step_dns_response(PacketConsumer& self, Net::ParsedPacket& pkt) {
+        if (!Config::global_state.enable_dns_cache.load(std::memory_order_relaxed)) return false;
+        if (self.core_id != 2 || !self.dns_engine) return false;
+        self.dns_engine->process_response(pkt);
         return false;
     }
 
@@ -509,8 +514,10 @@ void App::refresh_dhcp_router_from_kernel() noexcept {
     if (s.empty()) return;
     auto e = Config::parse_ip_str(s);
     if (!e) return;
-    if (*e != dhcp_engine->router_ip_snapshot())
+    if (*e != dhcp_engine->router_ip_snapshot()) {
         dhcp_engine->set_router_ip(*e);
+        if (dns_engine) dns_engine->set_gateway_ip(*e);
+    }
 }
 
 App::App() {
@@ -680,6 +687,7 @@ void App::start() {
             {up_pri.value_or(Net::IPv4Net{}), up_sec.value_or(Net::IPv4Net{})});
         dns_engine->set_redirect(
             Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
+        dns_engine->set_gateway_ip(effective_lan_gateway_);
         dns_engine->reload_static_records();
     }
 
