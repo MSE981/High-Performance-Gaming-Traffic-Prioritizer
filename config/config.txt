@@ -6,11 +6,14 @@
 # ── Network interfaces ────────────────────────────────────────────────
 # IFACE_WAN  : Ethernet interface facing your router (internet side).
 # IFACE_LAN  : Ethernet interface facing your local devices.
-# ROUTER_IP  : The Pi's own IP on the LAN side, used by DHCP and NAT.
+# ROUTER_IP  : The Pi's own IP on the LAN side (default gateway for DHCP clients, firewall, UPnP).
 #              Must be on a different subnet from the upstream router.
+# WAN_IP     : Optional. Static IPv4 used for NAT (SNAT / inbound DNAT). Leave empty or omit to use
+#              the IPv4 address assigned to IFACE_WAN (e.g. DHCP from your ISP router).
 IFACE_WAN=eth1
 IFACE_LAN=eth0
-ROUTER_IP=192.168.9.1
+ROUTER_IP=192.168.12.1
+WAN_IP=
 
 # ── Interface role map ────────────────────────────────────────────────
 # These lines take priority over the simple IFACE_WAN / IFACE_LAN keys above.
@@ -57,6 +60,11 @@ enable_upnp=false
 #   Set to false only if you need unsolicited inbound connections (e.g. self-hosted servers).
 enable_firewall=true
 
+# ── DHCP address pool (LAN clients) ──────────────────────────────────
+# Must sit on the same subnet as ROUTER_IP. End may be .255 on /24 (broadcast); use .254 if a client rejects it.
+DHCP_POOL_START=192.168.12.50
+DHCP_POOL_END=192.168.12.255
+
 # ── Game port whitelist ──────────────────────────────────────────────
 # Ports / ranges listed here receive priority queuing when QoS is active.
 # Format: GAME_PORT=<port>:<description>  or  GAME_PORT=<start>-<end>:<description>
@@ -87,5 +95,5 @@ GAME_PORT=50000-50004:Discord voice
 # The token-bucket shaper is applied per-packet in the forwarding hot path.
 # Format: IP_LIMIT=<device-IP>:<limit-in-Mbps>
 # Example:
-# IP_LIMIT=192.168.9.50:20
-# IP_LIMIT=192.168.9.51:10
+# IP_LIMIT=192.168.12.50:20
+# IP_LIMIT=192.168.12.51:10

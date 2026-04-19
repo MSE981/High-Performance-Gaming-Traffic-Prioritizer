@@ -126,6 +126,7 @@ std::expected<void, std::string> load_config(const std::string& path) {
                 if      (!strcmp(key, "IFACE_WAN"))  g_iface_wan  = val;
                 else if (!strcmp(key, "IFACE_LAN"))  g_iface_lan  = val;
                 else if (!strcmp(key, "ROUTER_IP"))  ROUTER_IP  = val;
+                else if (!strcmp(key, "WAN_IP"))     WAN_IP     = val;
                 else if (!strcmp(key, "ENABLE_ACCELERATION"))
                     ENABLE_ACCELERATION.store(!strcmp(val, "true") || !strcmp(val, "1"),
                         std::memory_order_relaxed);
@@ -247,6 +248,7 @@ std::expected<void, std::string> save_config(const std::string& path) {
     dprintf(fd, "IFACE_WAN=%s\n",            g_iface_wan.c_str());
     dprintf(fd, "IFACE_LAN=%s\n",            g_iface_lan.c_str());
     dprintf(fd, "ROUTER_IP=%s\n",            ROUTER_IP.c_str());
+    dprintf(fd, "WAN_IP=%s\n",               WAN_IP.c_str());
     dprintf(fd, "ENABLE_ACCELERATION=%s\n",  b(ENABLE_ACCELERATION.load(std::memory_order_relaxed)));
     for (size_t i = 0; i < BRIDGED_IFACES_COUNT; ++i)
         dprintf(fd, "BRIDGE_IFACE=%s\n", BRIDGED_INTERFACES[i].name.data());

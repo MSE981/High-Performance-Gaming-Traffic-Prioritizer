@@ -81,11 +81,14 @@ namespace HPGTP::Config {
     inline DynamicState global_state;
 
     // Interface configuration (ROUTER_IP and below remain inline; IFACE_* live in Config.cpp)
-    inline std::string ROUTER_IP = "192.168.1.100";
+    inline std::string ROUTER_IP = "192.168.12.1";
+
+    // Optional static IPv4 for NAT (SNAT source / inbound DNAT match). Empty = use WAN iface address from kernel.
+    inline std::string WAN_IP{};
 
     // DHCP pool configuration
-    inline std::string DHCP_POOL_START = "192.168.1.50";
-    inline std::string DHCP_POOL_END   = "192.168.1.249";
+    inline std::string DHCP_POOL_START = "192.168.12.50";
+    inline std::string DHCP_POOL_END   = "192.168.12.255";
     inline std::chrono::seconds DHCP_LEASE_DURATION{86400};
     // DNS upstream server and redirect configuration
     inline std::string DNS_UPSTREAM_PRIMARY   = "8.8.8.8";

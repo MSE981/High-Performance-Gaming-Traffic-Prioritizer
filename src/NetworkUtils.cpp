@@ -16,7 +16,7 @@ namespace HPGTP::Utils {
 
 std::string Network::get_local_ip(const std::string& iface) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0) return "127.0.0.1";
+    if (fd < 0) return {};
 
     struct ifreq ifr {};
     ifr.ifr_addr.sa_family = AF_INET;
@@ -25,7 +25,7 @@ std::string Network::get_local_ip(const std::string& iface) {
 
     if (ioctl(fd, SIOCGIFADDR, &ifr) < 0) {
         close(fd);
-        return "127.0.0.1";
+        return {};
     }
     char ip_buf[INET_ADDRSTRLEN]{};
     inet_ntop(AF_INET, &((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr, ip_buf, sizeof(ip_buf));

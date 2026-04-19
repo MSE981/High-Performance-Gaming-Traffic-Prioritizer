@@ -35,7 +35,7 @@ namespace HPGTP::Logic {
         alignas(64) std::atomic<size_t> upnp_cursor{0};
 
         uint16_t     port_cursor = 10000;
-        Net::IPv4Net wan_ip{};
+        alignas(64) std::atomic<uint32_t> wan_ip_nbo{0};
         std::atomic<uint32_t> current_tick{0};
 
         uint32_t hash_flow(const FlowKey& k) const;
@@ -50,6 +50,9 @@ namespace HPGTP::Logic {
 
         explicit NatEngine();
         void set_wan_ip(Net::IPv4Net ip);
+        [[nodiscard]] Net::IPv4Net wan_ip_snapshot() const noexcept {
+            return Net::IPv4Net{wan_ip_nbo.load(std::memory_order_acquire)};
+        }
         void add_upnp_rule(UpnpRule rule);
         void tick();
         bool process_outbound(Net::ParsedPacket& pkt);

@@ -21,12 +21,48 @@
 #include <string_view>
 #include <mutex>
 #include <string>
+#include <netinet/in.h>
 
 namespace HPGTP {
 
 namespace {
 
 // RX thread uses poll(2) on the raw socket plus stop_efd (-1 timeout). Egress uses DataPlane::TxFrameOutput.
+
+static std::string trim_ws(const std::string& s) {
+    size_t a = s.find_first_not_of(" \t\r\n");
+    if (a == std::string::npos) return {};
+    size_t b = s.find_last_not_of(" \t\r\n");
+    return s.substr(a, b - a + 1);
+}
+
+static bool is_invalid_nat_wan(Net::IPv4Net a) noexcept {
+    if (a.raw() == 0) return true;
+    const uint32_t h = ntohl(a.raw());
+    if ((h >> 24) == 127) return true;
+    return false;
+}
+
+static std::expected<Net::IPv4Net, std::string> resolve_nat_wan_ip() {
+    const std::string cfg = trim_ws(Config::WAN_IP);
+    if (!cfg.empty()) {
+        auto e = Config::parse_ip_str(cfg);
+        if (!e) return std::unexpected(std::string("WAN_IP: ") + e.error());
+        if (is_invalid_nat_wan(*e))
+            return std::unexpected(std::string("WAN_IP must be a non-loopback IPv4 address"));
+        return *e;
+    }
+    std::string s = Utils::Network::get_local_ip(Config::iface_wan());
+    if (s.empty())
+        return std::unexpected(
+            std::string("No IPv4 on WAN interface ") + Config::iface_wan()
+            + " (assign an address or set WAN_IP in config/config.txt)");
+    auto e = Config::parse_ip_str(s);
+    if (!e) return std::unexpected(std::string("WAN address parse failed: ") + e.error());
+    if (is_invalid_nat_wan(*e))
+        return std::unexpected(std::string("WAN interface has unusable address: ") + s);
+    return *e;
+}
 
 // ─── Packet routing context (internal to data plane) ─────────────────────────
 struct RouteContext {
@@ -294,10 +330,6 @@ App::App() {
         std::lock_guard<std::mutex> lk(Config::ip_limit_mutex);
         qos_config->update(Config::IP_LIMIT_TABLE, Config::IP_LIMIT_COUNT);
     }
-    if (auto rip = Config::parse_ip_str(Config::ROUTER_IP); rip)
-        nat_engine->set_wan_ip(*rip);
-    else
-        std::println(stderr, "[App] Invalid ROUTER_IP: {}", rip.error());
 }
 
 App::~App() {
@@ -389,6 +421,15 @@ std::expected<void, std::string> App::init() {
     iface_lan = std::make_unique<Engine::RawSocketManager>(Config::iface_lan());
     if (auto r = iface_wan->init(); !r) return r;
     if (auto r = iface_lan->init(); !r) return r;
+
+    if (Config::global_state.enable_nat.load(std::memory_order_relaxed)) {
+        auto w = resolve_nat_wan_ip();
+        if (!w) return std::unexpected(w.error());
+        nat_engine->set_wan_ip(*w);
+        std::println("[App] NAT WAN address: {}", Config::ip_to_str(*w));
+    } else {
+        nat_engine->set_wan_ip(Net::IPv4Net{});
+    }
     return {};
 }
 
@@ -866,6 +907,23 @@ void App::watchdog_loop() {
 
             scan_ifaces();
             did_iface_scan = true;
+
+            if (Config::global_state.enable_nat.load(std::memory_order_relaxed)
+                && trim_ws(Config::WAN_IP).empty()
+                && nat_engine) {
+                std::string s = Utils::Network::get_local_ip(Config::iface_wan());
+                if (!s.empty()) {
+                    auto e = Config::parse_ip_str(s);
+                    if (e && !is_invalid_nat_wan(*e)) {
+                        Net::IPv4Net cur = nat_engine->wan_ip_snapshot();
+                        if (e->raw() != cur.raw()) {
+                            nat_engine->set_wan_ip(*e);
+                            std::println("[App] NAT WAN address: {} -> {}",
+                                Config::ip_to_str(cur), Config::ip_to_str(*e));
+                        }
+                    }
+                }
+            }
 
             // ARP table → Telemetry::device_table (5 Hz)
             {

@@ -112,7 +112,8 @@ The program loads `config/config.txt` relative to the **current working director
 # ── Network interface assignment ──────────────────────────────────────
 IFACE_WAN=eth0           # Router-facing interface (Internet connection)
 IFACE_LAN=eth1           # Device-facing interface (Local network)
-ROUTER_IP=192.168.1.100  # Device LAN IP address for DHCP and NAT services
+ROUTER_IP=192.168.12.1   # Pi LAN gateway IP (DHCP server, local services)
+WAN_IP=                  # Optional NAT address; empty = use IFACE_WAN IPv4 from the kernel
 
 # ── Interface mode definition ─────────────────────────────────────────
 # Roles are configured by the Graphical Interface
@@ -135,9 +136,13 @@ enable_dns_cache=true
 enable_upnp=true
 enable_firewall=true
 
+# ── DHCP pool (optional; defaults match ROUTER_IP subnet in built-in defaults) ──
+# DHCP_POOL_START=192.168.12.50
+# DHCP_POOL_END=192.168.12.255
+
 # ── Specialized device configurations ──────────────────────────────────
-# IP_LIMIT=192.168.1.50:20     # Enforce a 20 Mbps bandwidth maximum to specific IP
-# IP_LIMIT=192.168.1.51:5      # Enforce a 5 Mbps bandwidth maximum to specific IP
+# IP_LIMIT=192.168.12.50:20    # Enforce a 20 Mbps bandwidth maximum to specific IP
+# IP_LIMIT=192.168.12.51:5     # Enforce a 5 Mbps bandwidth maximum to specific IP
 ```
 
 ---

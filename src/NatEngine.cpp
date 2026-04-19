@@ -31,7 +31,9 @@ NatEngine::NatEngine() {
         p.store(-1, std::memory_order_relaxed);
 }
 
-void NatEngine::set_wan_ip(Net::IPv4Net ip) { wan_ip = ip; }
+void NatEngine::set_wan_ip(Net::IPv4Net ip) {
+    wan_ip_nbo.store(ip.raw(), std::memory_order_release);
+}
 
 void NatEngine::add_upnp_rule(UpnpRule rule) {
     uint16_t net_ext_port = htons(rule.ext_port);
@@ -63,6 +65,7 @@ void NatEngine::tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
 
 bool NatEngine::process_outbound(Net::ParsedPacket& pkt) {
     if (!pkt.is_valid_ipv4()) return false;
+    const Net::IPv4Net wan_ip{wan_ip_nbo.load(std::memory_order_acquire)};
     if (wan_ip.raw() == 0) return false;
 
     auto ip = pkt.ipv4;
@@ -154,6 +157,7 @@ bool NatEngine::process_outbound(Net::ParsedPacket& pkt) {
 bool NatEngine::process_inbound(Net::ParsedPacket& pkt) {
     if (!pkt.is_valid_ipv4()) return false;
     auto ip = pkt.ipv4;
+    const Net::IPv4Net wan_ip{wan_ip_nbo.load(std::memory_order_acquire)};
 
     if (ip->protocol != 6 && ip->protocol != 17) return false;
     if (ip->daddr != wan_ip) return false;
