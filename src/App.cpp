@@ -439,6 +439,7 @@ std::expected<void, std::string> App::sync_lan_subnet_and_dhcp_gateway() {
         const std::string k = Utils::Network::get_local_ip(Config::iface_lan());
         effective_lan_gateway_ = parse_kern(k).value_or(*re);
         if (dhcp_engine) dhcp_engine->set_router_ip(effective_lan_gateway_);
+        if (dns_engine)  dns_engine->set_gateway_ip(effective_lan_gateway_);
         return {};
     }
 
@@ -502,6 +503,7 @@ std::expected<void, std::string> App::sync_lan_subnet_and_dhcp_gateway() {
 
     effective_lan_gateway_ = *kern;
     if (dhcp_engine) dhcp_engine->set_router_ip(effective_lan_gateway_);
+    if (dns_engine)  dns_engine->set_gateway_ip(effective_lan_gateway_);
     std::println("[App] DHCP gateway {} (kernel LAN, pool subnet /{})",
         Config::ip_to_str(effective_lan_gateway_), prefix);
     return {};
