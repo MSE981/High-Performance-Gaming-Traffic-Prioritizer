@@ -262,6 +262,21 @@ void SelfTest::test_dns(Report& r) {
                       && (pkt_redir.ipv4->daddr == upstream);
     r.add("DNS_Redirect", redir_pass,
           redir_pass ? "daddr redirected to upstream" : "daddr not rewritten");
+
+    // ── DNS_Redirect_SecondaryFallback (primary unset, use secondary) ──
+    auto dns_secfb = std::make_unique<Logic::DnsEngine>();
+    Net::IPv4Net sec_fb = Config::parse_ip_str("1.1.1.1").value();
+    dns_secfb->set_upstream({Net::IPv4Net{}, sec_fb});
+    dns_secfb->set_gateway_ip(gw);
+    size_t len4 = 0;
+    auto buf4 = make_dns_query(cli, gw, "secondary.fallback", len4);
+    auto pkt_sec = Net::ParsedPacket::parse(std::span<uint8_t>{buf4.data(), len4});
+    const auto disp_sec = dns_secfb->process_query(pkt_sec, -1);
+    bool secfb_pass = (disp_sec == Redirected) && pkt_sec.is_valid_ipv4()
+                      && (pkt_sec.ipv4->daddr == sec_fb);
+    r.add("DNS_RedirectSecondary", secfb_pass,
+          secfb_pass ? "daddr redirected to secondary when primary is zero"
+                     : "secondary fallback failed");
 }
 
 void SelfTest::test_dhcp(Report& r) {

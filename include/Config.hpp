@@ -73,6 +73,7 @@ namespace HPGTP::Config {
     struct DynamicState {
         std::atomic<bool> enable_nat{true};
         std::atomic<bool> enable_dhcp{true};
+        // When false: RAM TTL cache is off; upstream redirect and static records still apply.
         std::atomic<bool> enable_dns_cache{true};
         std::atomic<bool> enable_upnp{true};
         std::atomic<bool> enable_firewall{true};

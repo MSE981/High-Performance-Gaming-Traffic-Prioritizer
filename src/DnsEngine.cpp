@@ -207,25 +207,29 @@ DnsQueryDisposition DnsEngine::process_query(Net::ParsedPacket& pkt,
                 : DnsQueryDisposition::ReplySendFailed;
     }
 
-    size_t idx = h % CACHE_SIZE;
-    for (;;) {
-        if (!cache[idx].valid.load(std::memory_order_acquire)) break;
-        const uint32_t dh = cache[idx].domain_hash.load(std::memory_order_relaxed);
-        const Net::IPv4Net addr = cache[idx].ipv4_address.load(std::memory_order_relaxed);
-        const uint32_t ex = cache[idx].expire_tick.load(std::memory_order_relaxed);
-        if (!cache[idx].valid.load(std::memory_order_acquire)) continue;
-        if (dh == h && current_tick.load(std::memory_order_relaxed) <= ex)
-            return do_bounce(pkt, dns, udp, addr, bounce_fd) ? DnsQueryDisposition::Replied
-                                                             : DnsQueryDisposition::ReplySendFailed;
-        cache[idx].valid.store(false, std::memory_order_relaxed);
-        break;
+    if (Config::global_state.enable_dns_cache.load(std::memory_order_relaxed)) {
+        size_t idx = h % CACHE_SIZE;
+        for (;;) {
+            if (!cache[idx].valid.load(std::memory_order_acquire)) break;
+            const uint32_t dh = cache[idx].domain_hash.load(std::memory_order_relaxed);
+            const Net::IPv4Net addr = cache[idx].ipv4_address.load(std::memory_order_relaxed);
+            const uint32_t ex = cache[idx].expire_tick.load(std::memory_order_relaxed);
+            if (!cache[idx].valid.load(std::memory_order_acquire)) continue;
+            if (dh == h && current_tick.load(std::memory_order_relaxed) <= ex)
+                return do_bounce(pkt, dns, udp, addr, bounce_fd) ? DnsQueryDisposition::Replied
+                                                                 : DnsQueryDisposition::ReplySendFailed;
+            cache[idx].valid.store(false, std::memory_order_relaxed);
+            break;
+        }
     }
 
     // Redirect only queries aimed at this router (DHCP-advertised DNS server) to
     // upstream. A record of the original dst is kept so the reply's saddr can be
     // restored on the return path; otherwise the resolver rejects the response.
     const Net::IPv4Net gw = gateway_ip.load(std::memory_order_acquire);
-    const Net::IPv4Net upstream = upstream_primary_ip.load(std::memory_order_relaxed);
+    const Net::IPv4Net pri = upstream_primary_ip.load(std::memory_order_relaxed);
+    const Net::IPv4Net sec = upstream_secondary_ip.load(std::memory_order_relaxed);
+    const Net::IPv4Net upstream = (pri.raw() != 0) ? pri : sec;
     if (upstream.raw() != 0 && gw.raw() != 0 && pkt.ipv4->daddr == gw) {
         record_redirect(pkt.ipv4->saddr, udp->source, pkt.ipv4->daddr);
         rewrite_upstream(pkt, udp, upstream);
@@ -254,6 +258,8 @@ void DnsEngine::process_response(Net::ParsedPacket& pkt) noexcept {
     }
 
     if (pkt.raw_span.size() > 512) return;
+    if (!Config::global_state.enable_dns_cache.load(std::memory_order_relaxed))
+        return;
     DnsMessage msg;
     msg.len = pkt.raw_span.size();
     std::memcpy(msg.data.data(), pkt.raw_span.data(), pkt.raw_span.size());

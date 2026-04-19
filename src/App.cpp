@@ -245,7 +245,6 @@ public:
     }
 
     static bool step_dns_interceptor(PacketConsumer& self, Net::ParsedPacket& pkt) {
-        if (!Config::global_state.enable_dns_cache.load(std::memory_order_relaxed)) return false;
         if (self.core_id != 3 || !self.dns_engine) return false;
         const Logic::DnsQueryDisposition d =
             self.dns_engine->process_query(pkt, self.rx_fd);
@@ -257,7 +256,6 @@ public:
     // (daddr, dport) have been restored to the client's (ip, sport), which is
     // the key used to look up the original DNS server address.
     static bool step_dns_response(PacketConsumer& self, Net::ParsedPacket& pkt) {
-        if (!Config::global_state.enable_dns_cache.load(std::memory_order_relaxed)) return false;
         if (self.core_id != 2 || !self.dns_engine) return false;
         self.dns_engine->process_response(pkt);
         return false;
@@ -689,6 +687,13 @@ void App::start() {
             Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
         dns_engine->set_gateway_ip(effective_lan_gateway_);
         dns_engine->reload_static_records();
+        const Net::IPv4Net eff_pri = up_pri.value_or(Net::IPv4Net{});
+        const Net::IPv4Net eff_sec = up_sec.value_or(Net::IPv4Net{});
+        if (eff_pri.raw() == 0 && eff_sec.raw() == 0) {
+            std::println(stderr,
+                "[DNS] No valid upstream DNS (DNS_UPSTREAM_PRIMARY / SECONDARY). "
+                "Clients using the router as DNS cannot resolve names.");
+        }
     }
 
     HPGTP::System::Optimizer::lock_cpu_frequency();
@@ -1297,12 +1302,20 @@ void App::watchdog_loop() {
 
             auto up_pri = Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY);
             auto up_sec = Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY);
-            if (!up_pri || !up_sec) {
-                std::println(stderr, "[DNS] Invalid upstream address: {} / {}",
-                    up_pri ? "" : up_pri.error(), up_sec ? "" : up_sec.error());
-            }
+            if (!up_pri)
+                std::println(stderr, "[DNS] Invalid DNS_UPSTREAM_PRIMARY: {}", up_pri.error());
+            if (!up_sec)
+                std::println(stderr, "[DNS] Invalid DNS_UPSTREAM_SECONDARY: {}", up_sec.error());
             dns_engine->set_upstream(
                 {up_pri.value_or(Net::IPv4Net{}), up_sec.value_or(Net::IPv4Net{})});
+            {
+                const Net::IPv4Net p = up_pri.value_or(Net::IPv4Net{});
+                const Net::IPv4Net s = up_sec.value_or(Net::IPv4Net{});
+                if (p.raw() == 0 && s.raw() == 0) {
+                    std::println(stderr,
+                        "[DNS] No valid upstream DNS after apply; LAN DNS forwarding will not work.");
+                }
+            }
             dns_engine->set_redirect(dns_redirect);
             dns_engine->reload_static_records();
             std::println("[DNS] Config applied: upstream {} / {}, redirect={}, static={}",

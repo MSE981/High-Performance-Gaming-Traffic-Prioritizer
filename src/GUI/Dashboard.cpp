@@ -1776,7 +1776,7 @@ ServicePage::ServicePage(QWidget* parent) : QWidget(parent) {
     ServiceDef defs[5] = {
         {"NAT (Network Address Translation)", "Zero-copy SNAT/DNAT engine",                  &Config::global_state.enable_nat,       nullptr},
         {"DHCP (Dynamic Host Config)",        "Automatically assigns IP addresses to LAN clients", &Config::global_state.enable_dhcp, "Set DHCP"},
-        {"DNS Cache",                         "Local DNS cache for fast resolution",           &Config::global_state.enable_dns_cache, "Set DNS"},
+        {"DNS Cache",                         "RAM TTL cache; upstream DNS proxy stays on when off", &Config::global_state.enable_dns_cache, "Set DNS"},
         {"Firewall",                          "Inbound traffic filter rule engine",            &Config::global_state.enable_firewall,  nullptr},
         {"UPnP (Plug & Play)",                "Automatic port mapping for NAT traversal",      &Config::global_state.enable_upnp,      nullptr},
     };
