@@ -321,6 +321,7 @@ private:
     std::vector<DeviceRow> rows_;
     uint8_t last_device_count = 255;
     uint64_t last_device_policy_revision_ = 0;
+    uint64_t last_device_table_revision_ = 0;
 };
 
 // ═══════════════════════════════════════════
