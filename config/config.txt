@@ -10,8 +10,8 @@
 #              Must be on a different subnet from the upstream router.
 # WAN_IP     : Optional. Static IPv4 used for NAT (SNAT / inbound DNAT). Leave empty or omit to use
 #              the IPv4 address assigned to IFACE_WAN (e.g. DHCP from your ISP router).
-IFACE_WAN=eth1
-IFACE_LAN=eth0
+IFACE_WAN=eth0
+IFACE_LAN=eth1
 ROUTER_IP=192.168.12.1
 WAN_IP=
 
@@ -22,11 +22,11 @@ WAN_IP=
 #        lan      — LAN-side interface; multiple LAN ports are bridged
 #        disabled — interface is ignored by the forwarding engine
 #
-# eth0 : Pi 5 built-in GbE — LAN side (connects to gaming devices)
-# eth1 : USB Ethernet adapter  — WAN side (connects to upstream router)
-IFACE_GATEWAY=eth1
-IFACE_ROLE=eth1:gateway
-IFACE_ROLE=eth0:lan
+# eth0 : Default WAN / gateway (built-in GbE typical) — upstream router / internet
+# eth1 : LAN side — local devices (often USB Ethernet adapter)
+IFACE_GATEWAY=eth0
+IFACE_ROLE=eth0:gateway
+IFACE_ROLE=eth1:lan
 
 # ── Display mode ──────────────────────────────────────────────────────
 # Set to false for headless / SSH operation (no Qt dependency at runtime).
