@@ -364,11 +364,11 @@ void SelfTest::test_classifier(Report& r) {
     }
 
     // ── PRIO_Normal: 1200-byte UDP to high port → Normal ──
-    // sport=40000 avoids game port ranges {3074,27015,12000-12999}
+    // sport/dport must avoid Config::GAME_PORT_TABLE_DOUBLE (e.g. 50000–50004 Discord voice).
     {
         Logic::HeuristicProcessor proc;
         std::array<uint8_t, 1200> big{};
-        auto hdr = make_udp_pkt(src, dst, 40000, 50000);
+        auto hdr = make_udp_pkt(src, dst, 40000, 45000);
         std::memcpy(big.data(), hdr.data(), 42);
         auto* ipv4 = reinterpret_cast<Net::IPv4Header*>(big.data() + 14);
         auto* udp  = reinterpret_cast<Net::UDPHeader*>(big.data() + 34);

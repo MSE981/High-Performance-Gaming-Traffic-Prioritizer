@@ -49,7 +49,7 @@ add_library(engine_firewall  src/FirewallEngine.cpp)
 add_library(engine_scheduler src/Scheduler.cpp)
 
 target_link_libraries(engine_dns       PRIVATE dataplane)
-target_link_libraries(engine_dhcp      PRIVATE dataplane)
+target_link_libraries(engine_dhcp      PRIVATE dataplane utils_network)
 target_link_libraries(engine_scheduler PRIVATE dataplane)
 
 # ── I/O engines ───────────────────────────────────────────────────────────────
@@ -111,7 +111,7 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/demo")
             elseif(demo_name STREQUAL "dns_demo")
                 set(demo_link_libs engine_dns dataplane config)
             elseif(demo_name STREQUAL "dhcp_demo")
-                set(demo_link_libs engine_dhcp dataplane)
+                set(demo_link_libs engine_dhcp dataplane utils_network)
             elseif(demo_name STREQUAL "scheduler_demo")
                 set(demo_link_libs engine_scheduler dataplane)
             elseif(demo_name STREQUAL "firewall_demo")
