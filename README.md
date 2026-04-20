@@ -204,6 +204,7 @@ Bandwidth application adjustments are dynamically written into inactive paramete
 ## Social Media
 
 https://www.reddit.com/r/homelab/comments/1sq50o7/highperformancegamingtrafficprioritizer/?solution=64704c72d53bc35364704c72d53bc353&js_challenge=1&token=bbbe4bf1c9a2b5160829c4be34da5861a8bd7ba03ea8fb9885c4add909ff7214&utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button
+(It's normal that you might not be able to open the post. Three accounts have already been banned for posting.)
 
 ---
 
