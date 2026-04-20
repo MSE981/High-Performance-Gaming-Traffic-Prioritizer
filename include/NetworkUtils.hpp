@@ -16,6 +16,8 @@ namespace HPGTP::Utils {
     public:
         // Returns dotted IPv4 or empty string if the interface has no address or ioctl fails.
         static std::string get_local_ip(const std::string& iface);
+        // Prefix length 0–32 from SIOCGIFNETMASK; -1 if ioctl fails or mask is non-contiguous.
+        static int         get_iface_ipv4_prefix_len(const std::string& iface);
         // Default route (0.0.0.0/0) gateway from /proc/net/route — first matching line (legacy).
         static std::string get_gateway_ip();
         // Default route gateway IP for a specific interface name (WAN).

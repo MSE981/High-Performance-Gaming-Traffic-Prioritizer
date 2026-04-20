@@ -6,6 +6,8 @@
 # Usage:  chmod +x start_release.sh && sudo ./start_release.sh
 #         Optional: user-owned build tree (e.g. after root-owned build/):
 #           sudo env HPGTP_BUILD_DIR=build-user ./start_release.sh
+#         Skip kernel prep (ip_forward, iptables MASQUERADE on WAN, NM/dnsmasq):
+#           sudo env HPGTP_SKIP_KERNEL_NET_PREP=1 ./start_release.sh
 # =============================================================================
 set -euo pipefail
 
@@ -144,6 +146,28 @@ for iface in "$WAN_IFACE" "$LAN_IFACE"; do
     fi
 done
 notify "[3/4] Network" "WAN=$WAN_IFACE LAN=$LAN_IFACE | ${NET_STATUS% }"
+
+# -- 3b. Kernel hygiene for userspace NAT/forwarding -----------------------------
+# ip_forward off; drop only POSTROUTING MASQUERADE -o WAN (does not remove ts-postrouting jumps).
+echo ""
+if [[ "${HPGTP_SKIP_KERNEL_NET_PREP:-}" == "1" ]]; then
+    echo "    [3b] Skipped (HPGTP_SKIP_KERNEL_NET_PREP=1)"
+    notify "[3b] Kernel prep" "skipped"
+else
+    echo "    [3b] ip_forward=0, MASQUERADE -o $WAN_IFACE removed, dnsmasq stop, NM LAN unmanaged"
+    sysctl -w net.ipv4.ip_forward=0 >/dev/null
+    n=0
+    command -v iptables >/dev/null 2>&1 && {
+        while iptables -t nat -C POSTROUTING -o "$WAN_IFACE" -j MASQUERADE 2>/dev/null; do
+            iptables -t nat -D POSTROUTING -o "$WAN_IFACE" -j MASQUERADE
+            ((++n))
+        done
+    }
+    echo "        removed $n MASQUERADE rule(s); dnsmasq+nmcli best-effort"
+    command -v systemctl >/dev/null 2>&1 && systemctl stop dnsmasq 2>/dev/null || true
+    command -v nmcli >/dev/null 2>&1 && nmcli device set "$LAN_IFACE" managed no 2>/dev/null || true
+    notify "[3b] Kernel prep" "ip_forward=0 masq_rm=$n"
+fi
 
 # -- 4. Launch ----------------------------------------------------------------
 echo ""

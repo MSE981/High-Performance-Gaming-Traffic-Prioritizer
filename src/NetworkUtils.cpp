@@ -17,6 +17,33 @@
 
 namespace HPGTP::Utils {
 
+int Network::get_iface_ipv4_prefix_len(const std::string& iface) {
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return -1;
+
+    struct ifreq ifr {};
+    auto n = std::string_view{iface}.copy(ifr.ifr_name, IFNAMSIZ - 1);
+    ifr.ifr_name[n] = '\0';
+
+    if (ioctl(fd, SIOCGIFNETMASK, &ifr) < 0) {
+        close(fd);
+        return -1;
+    }
+    close(fd);
+
+    auto* sin = reinterpret_cast<struct sockaddr_in*>(&ifr.ifr_netmask);
+    uint32_t m = ntohl(sin->sin_addr.s_addr);
+    if (m == 0) return -1;
+
+    int prefix = 0;
+    while (m & 0x80000000u) {
+        ++prefix;
+        m <<= 1;
+    }
+    if (m != 0) return -1;
+    return prefix;
+}
+
 std::string Network::get_local_ip(const std::string& iface) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return {};

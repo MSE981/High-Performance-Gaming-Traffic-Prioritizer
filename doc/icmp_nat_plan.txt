@@ -1,0 +1,67 @@
+================================================================================
+ICMP NAT — 实施计划（草案）
+================================================================================
+编码：UTF-8
+状态：未实现；与当前仅 TCP/UDP 的 NatEngine 正交。L2 下一跳（on-link / off-link）
+      已对任意 IPv4 协议生效，ICMP 转发 correctness 依赖本计划完成后的三层改写。
+
+────────────────────────────────────────────────────────────────────────────────
+一、目标与范围
+────────────────────────────────────────────────────────────────────────────────
+
+1.1 目标
+  - LAN 主机经本机 SNAT 访问外网时，ICMP Echo / Echo Reply 等「可识别流」能正确往返。
+  - 与现有 TCP/UDP 会话表、端口分配策略共存；不破坏 zero-copy 热路径原则（表查找 + 固定字段改写）。
+
+1.2 本期可交付（建议分阶段）
+  - P-ICMP-1：ICMP Echo / Echo Reply（Type 8 / 0），以 Identifier 作为「伪端口」做 OUTBOUND 映射与 INBOUND 反查。
+  - P-ICMP-2：（可选）ICMP 错误报文（Destination Unreachable、Time Exceeded 等）中带内嵌 IPv4 头时，
+    仅当内嵌头为已建立会话的 TCP/UDP 时做受限改写 — 复杂度高，可后置。
+
+1.3 非目标（首轮明确不做）
+  - 分片重组后再做 ICMP NAT；首轮可文档化「勿对分片内层做映射」或统计丢弃。
+  - traceroute 全路径各类 ICMP 的完整语义（部分依赖 P-ICMP-2）。
+
+────────────────────────────────────────────────────────────────────────────────
+二、数据面设计要点
+────────────────────────────────────────────────────────────────────────────────
+
+2.1 会话键（与 FlowKey 对齐思路）
+  - OUTBOUND（LAN→WAN，process_outbound）：内部 (saddr, daddr, icmp_id, icmp_seq 可选)
+    → 分配或复用 external_id（可与现有 port 空间隔离，例如独立 icmp_id 池或高位端口映射策略）。
+  - 实际实现二选一：
+    (A) 扩展 NatSession：protocol 字段 + union（tcp/udp port vs icmp id）；
+    (B) 并行 `IcmpNatSession` 表 + 独立 `id_to_index`（与 TCP/UDP port_to_index 分离，避免 65536 冲突）。
+
+2.2 校验和
+  - IPv4 头：SNAT 改 saddr 后按现有 update_checksum_32 路径更新。
+  - ICMP：整包校验和覆盖 ICMP 头与 payload；改 identifier / 内嵌头时须重算 icmp->checksum
+    （或增量更新若仅改 16-bit 字段且实现 RFC 1071 兼容的增量法）。
+
+2.3 流水线位置
+  - 保持 `step_nat_upstream` / `step_nat_downstream` 在 `step_eth_rewrite_*` 之前；
+  - NatEngine::process_outbound / process_inbound 增加 `ip->protocol == IPPROTO_ICMP` 分支；
+  - 与防火墙：确认 FirewallEngine 对 protocol 1 的策略与 config 中「ICMP 放行」描述一致。
+
+2.4 与 pdf_text.txt / 审查标准的精神对齐
+  - 热路径：无阻塞 I/O；仅内存表 + 校验和 + 已解析的 L2 头。
+  - 会话创建/超时清理：沿用 `tick()` + `last_active_tick`，与 TCP/UDP 相同老化策略或略长 TTL（可配置）。
+
+────────────────────────────────────────────────────────────────────────────────
+三、控制面与测试
+────────────────────────────────────────────────────────────────────────────────
+
+3.1 SelfTest / demo
+  - 构造最小 IPv4+ICMP Echo 请求/应答帧，断言 identifier 映射与 IPv4/ICMP 校验和。
+
+3.2 回归
+  - 现有 nat_demo / SelfTest NAT_SNAT 不受影响；新增 ICMP 用例或条件编译。
+
+────────────────────────────────────────────────────────────────────────────────
+四、建议实施顺序
+────────────────────────────────────────────────────────────────────────────────
+
+  1) Headers / ParsedPacket：确认能安全取得 ICMP 头指针（单分片、长度检查）。
+  2) NatEngine：Icmp 会话表 + outbound/inbound Type 8/0。
+  3) SelfTest + 真机 ping 验证（双网卡拓扑）。
+  4) （可选）P-ICMP-2 错误报文与内嵌头改写 — 单独评审后再编码。

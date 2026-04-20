@@ -73,6 +73,8 @@ struct alignas(64) ForwardL2Snapshot {
     std::array<uint8_t, 6> lan_hw{};
     std::array<uint8_t, 6> wan_hw{};
     std::array<uint8_t, 6> gw_hw{};
+    uint32_t               wan_ip_nbo     = 0;
+    int32_t                wan_prefix_len = -1;
     static constexpr size_t MAX_ARP = 128;
     struct ArpEntry {
         uint32_t ip_nbo = 0;
@@ -80,11 +82,25 @@ struct alignas(64) ForwardL2Snapshot {
     };
     std::array<ArpEntry, MAX_ARP> arp{};
     uint32_t arp_count = 0;
-    bool     ready     = false;
+    bool     gw_hw_valid              = false;
+    bool     wan_cfg_valid            = false;
+    bool     default_gw_ip_configured = false;
+    bool     ready                    = false;
 };
 
 static std::array<ForwardL2Snapshot, 2> g_fwd_snap{};
 static std::atomic<unsigned>            g_fwd_active{0};
+
+static bool resolve_mac_onlink_wan(const ForwardL2Snapshot& s, uint32_t dst_ip_nbo,
+    uint8_t out_mac[6]) noexcept {
+    for (uint32_t i = 0; i < s.arp_count; ++i) {
+        if (s.arp[i].ip_nbo == dst_ip_nbo) {
+            std::memcpy(out_mac, s.arp[i].mac, 6);
+            return true;
+        }
+    }
+    return false;
+}
 
 static void refresh_forward_layer2_macs() {
     const unsigned w = 1u - g_fwd_active.load(std::memory_order_relaxed);
@@ -93,16 +109,27 @@ static void refresh_forward_layer2_macs() {
     const bool lan_ok = Utils::Network::get_iface_hwaddr(Config::iface_lan(), snap.lan_hw.data());
     const bool wan_ok = Utils::Network::get_iface_hwaddr(Config::iface_wan(), snap.wan_hw.data());
 
+    snap.wan_prefix_len = static_cast<int32_t>(
+        Utils::Network::get_iface_ipv4_prefix_len(Config::iface_wan()));
+    if (auto wan = resolve_nat_wan_ip()) {
+        snap.wan_ip_nbo = wan->raw();
+    } else {
+        snap.wan_ip_nbo = 0;
+    }
+    snap.wan_cfg_valid = snap.wan_ip_nbo != 0 && !is_invalid_nat_wan(Net::IPv4Net{snap.wan_ip_nbo})
+        && snap.wan_prefix_len >= 0 && snap.wan_prefix_len <= 32;
+
     std::string gw_ip = Utils::Network::get_default_gateway_for_iface(Config::iface_wan());
     if (gw_ip.empty())
         gw_ip = Utils::Network::get_gateway_ip();
+    snap.default_gw_ip_configured = !gw_ip.empty();
     if (!gw_ip.empty())
         Utils::Network::force_arp_resolution(gw_ip);
 
     Utils::ArpTableRow rows[ForwardL2Snapshot::MAX_ARP];
     const size_t n = Utils::Network::read_arp_table(rows, ForwardL2Snapshot::MAX_ARP);
 
-    bool gw_ok = false;
+    snap.gw_hw_valid = false;
     if (!gw_ip.empty()) {
         struct in_addr gw_addr {};
         if (inet_pton(AF_INET, gw_ip.c_str(), &gw_addr) == 1) {
@@ -110,7 +137,7 @@ static void refresh_forward_layer2_macs() {
             for (size_t i = 0; i < n; ++i) {
                 if (rows[i].ip_nbo == gw_nbo) {
                     std::memcpy(snap.gw_hw.data(), rows[i].mac, 6);
-                    gw_ok = true;
+                    snap.gw_hw_valid = true;
                     break;
                 }
             }
@@ -125,7 +152,7 @@ static void refresh_forward_layer2_macs() {
         std::memcpy(snap.arp[i].mac, rows[i].mac, 6);
     }
 
-    snap.ready = lan_ok && wan_ok && gw_ok;
+    snap.ready = lan_ok && wan_ok && (snap.gw_hw_valid || snap.wan_cfg_valid);
     g_fwd_active.store(w, std::memory_order_release);
 }
 
@@ -287,7 +314,24 @@ public:
         const ForwardL2Snapshot& s = g_fwd_snap[a];
         if (!s.ready || !pkt.eth || !pkt.ipv4) return false;
         if (!ipv4_needs_eth_rewrite_for_forward(pkt.ipv4)) return false;
+
+        const Net::IPv4Net dst = pkt.ipv4->daddr;
+        bool on_link = false;
+        if (s.wan_cfg_valid)
+            on_link = Utils::Network::ipv4_in_subnet(
+                dst, static_cast<int>(s.wan_prefix_len), Net::IPv4Net{s.wan_ip_nbo});
+
         std::memcpy(pkt.eth->src, s.wan_hw.data(), 6);
+
+        if (on_link) {
+            uint8_t nh[6]{};
+            if (!resolve_mac_onlink_wan(s, dst.raw(), nh)) return true;
+            std::memcpy(pkt.eth->dest, nh, 6);
+            return false;
+        }
+
+        if (!s.default_gw_ip_configured) return true;
+        if (!s.gw_hw_valid) return true;
         std::memcpy(pkt.eth->dest, s.gw_hw.data(), 6);
         return false;
     }
