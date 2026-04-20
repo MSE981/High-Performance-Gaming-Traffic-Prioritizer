@@ -27,7 +27,6 @@ namespace HPGTP {
         std::array<CoreMetrics, 4> core_metrics{};
 
         // Diagnostics and control data (low-frequency read/write, no need for separation)
-        std::atomic<bool> bridge_mode{ false }; // legacy mirror of effective_bridge_mode
         std::atomic<bool> effective_bridge_mode{ false };
         std::atomic<bool> effective_acceleration{ true };
         std::atomic<double> cpu_temp_celsius{ 0.0 };  // updated by Core 1 watchdog via timerfd, read by Qt UI

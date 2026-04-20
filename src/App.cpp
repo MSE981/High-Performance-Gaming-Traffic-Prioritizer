@@ -792,7 +792,6 @@ void App::start() {
     tel.mode_config_dirty.store(false, std::memory_order_relaxed);
     tel.effective_acceleration.store(accel, std::memory_order_release);
     tel.effective_bridge_mode.store(!accel, std::memory_order_release);
-    tel.bridge_mode.store(!accel, std::memory_order_relaxed);
     {
         std::array<Config::StaticDnsRecord, Config::MAX_STATIC_DNS> dns_snapshot{};
         size_t dns_count =
@@ -1367,7 +1366,6 @@ void App::watchdog_loop() {
             Config::ENABLE_ACCELERATION.store(accel_on, std::memory_order_relaxed);
             tel.effective_acceleration.store(accel_on, std::memory_order_release);
             tel.effective_bridge_mode.store(!accel_on, std::memory_order_release);
-            tel.bridge_mode.store(!accel_on, std::memory_order_relaxed);
             std::println("[Mode] Applied: {}", accel_on ? "Acceleration" : "Bridge");
         }
 

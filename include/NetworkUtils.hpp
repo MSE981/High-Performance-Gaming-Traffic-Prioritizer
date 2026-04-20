@@ -22,7 +22,6 @@ namespace HPGTP::Utils {
         static std::string get_gateway_ip();
         // Default route gateway IP for a specific interface name (WAN).
         static std::string get_default_gateway_for_iface(const std::string& iface);
-        static std::string get_mac_from_arp(const std::string& target_ip);
         static void        force_arp_resolution(const std::string& target_ip);
         static bool        disable_hardware_offloads(const std::string& iface);
         // Ethernet MAC via SIOCGIFHWADDR; returns false on failure.

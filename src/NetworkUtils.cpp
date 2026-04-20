@@ -164,30 +164,6 @@ bool Network::parse_mac_colon(std::string_view s, uint8_t out[6]) {
     return true;
 }
 
-std::string Network::get_mac_from_arp(const std::string& target_ip) {
-    char buf[4096]{};
-    int fd = ::open("/proc/net/arp", O_RDONLY);
-    if (fd < 0) return "";
-    ssize_t n = ::read(fd, buf, sizeof(buf) - 1);
-    ::close(fd);
-    if (n <= 0) return "";
-
-    char* line = buf;
-    char* end  = buf + n;
-    while (line < end && *line != '\n') ++line;
-    if (line < end) ++line;
-
-    while (line < end) {
-        char ip[32]{}, hw[8]{}, flags[8]{}, mac[20]{};
-        if (sscanf(line, "%31s %7s %7s %19s", ip, hw, flags, mac) >= 4) {
-            if (target_ip == ip) return mac;
-        }
-        while (line < end && *line != '\n') ++line;
-        if (line < end) ++line;
-    }
-    return "";
-}
-
 size_t Network::read_arp_table(ArpTableRow* out, size_t max_out) {
     if (!out || max_out == 0) return 0;
     char buf[65536]{};

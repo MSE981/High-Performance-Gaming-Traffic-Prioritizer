@@ -45,7 +45,7 @@ namespace HPGTP::Engine {
             poll_error_callback_ = std::move(cb);
         }
 
-        /// `telemetry_flag`: bit0 = do_poll path; bit1 = worker RX thread (see Telemetry::raw_socket_poll_errors).
+        // telemetry_flag: bit0 = do_poll path; bit1 = worker RX thread (Telemetry::raw_socket_poll_errors).
         void notify_rx_poll_fatal(int err, std::uint8_t telemetry_flag);
 
         void poll_rx(int timeout_ms) { do_poll(timeout_ms); }
