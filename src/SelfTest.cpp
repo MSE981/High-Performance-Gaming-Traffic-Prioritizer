@@ -21,6 +21,29 @@
 
 namespace HPGTP::SelfTest {
 
+namespace {
+
+uint16_t fold_ip_header_checksum(const Net::IPv4Header* ip) noexcept {
+    const auto* w = reinterpret_cast<const uint8_t*>(ip);
+    uint32_t        sum = 0;
+    for (int i = 0; i < 20; i += 2)
+        sum += (uint32_t(w[i]) << 8) | w[i + 1];
+    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+    return static_cast<uint16_t>(~sum & 0xFFFF);
+}
+
+uint16_t fold_icmp_checksum(const Net::IcmpEchoHeader* icmp, size_t icmp_len) noexcept {
+    const auto* p = reinterpret_cast<const uint8_t*>(icmp);
+    uint32_t    sum = 0;
+    for (size_t i = 0; i + 1 < icmp_len; i += 2)
+        sum += (uint32_t(p[i]) << 8) | p[i + 1];
+    if (icmp_len & 1) sum += uint32_t(p[icmp_len - 1]) << 8;
+    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+    return static_cast<uint16_t>(~sum & 0xFFFF);
+}
+
+} // namespace
+
 // Wire-format DHCP header — mirrors the internal layout used by DhcpEngine.
 // Defined locally here so DhcpEngine's private type stays confined to its TU.
 #pragma pack(push, 1)
@@ -208,6 +231,65 @@ void SelfTest::test_nat(Report& r) {
     bool session_pass = (ext_port >= 10000 && ext_port <= 60000);
     r.add("NAT_Session", session_pass,
           session_pass ? "ephemeral port in valid range" : "port out of range");
+
+    std::array<uint8_t, 42> icmp_req{};
+    {
+        auto* eth  = reinterpret_cast<Net::EthernetHeader*>(icmp_req.data());
+        auto* ipv4 = reinterpret_cast<Net::IPv4Header*>(icmp_req.data() + 14);
+        auto* icmp = reinterpret_cast<Net::IcmpEchoHeader*>(icmp_req.data() + 34);
+        eth->proto        = htons(0x0800);
+        ipv4->ver_ihl     = 0x45;
+        ipv4->protocol    = 1;
+        ipv4->tot_len     = htons(28);
+        ipv4->frag_off    = 0;
+        ipv4->ttl         = 64;
+        ipv4->saddr       = lan_ip;
+        ipv4->daddr       = ext_ip;
+        ipv4->check       = 0;
+        ipv4->check       = htons(fold_ip_header_checksum(ipv4));
+        icmp->type        = 8;
+        icmp->code        = 0;
+        icmp->check       = 0;
+        icmp->id          = htons(4242);
+        icmp->sequence    = htons(1);
+        icmp->check       = htons(fold_icmp_checksum(icmp, 8));
+    }
+    auto pkt_icmp = Net::ParsedPacket::parse(std::span<uint8_t>{icmp_req.data(), icmp_req.size()});
+    bool icmp_out = nat->process_outbound(pkt_icmp);
+    auto* ie = pkt_icmp.icmp_echo();
+    const bool icmp_snat = icmp_out && pkt_icmp.ipv4->saddr == wan_ip && ie
+        && ntohs(ie->id) >= 10000 && ntohs(ie->id) <= 60000;
+
+    std::array<uint8_t, 42> icmp_rep{};
+    {
+        auto* eth  = reinterpret_cast<Net::EthernetHeader*>(icmp_rep.data());
+        auto* ipv4 = reinterpret_cast<Net::IPv4Header*>(icmp_rep.data() + 14);
+        auto* icmp = reinterpret_cast<Net::IcmpEchoHeader*>(icmp_rep.data() + 34);
+        eth->proto        = htons(0x0800);
+        ipv4->ver_ihl     = 0x45;
+        ipv4->protocol    = 1;
+        ipv4->tot_len     = htons(28);
+        ipv4->frag_off    = 0;
+        ipv4->ttl         = 64;
+        ipv4->saddr       = ext_ip;
+        ipv4->daddr       = wan_ip;
+        ipv4->check       = 0;
+        ipv4->check       = htons(fold_ip_header_checksum(ipv4));
+        icmp->type        = 0;
+        icmp->code        = 0;
+        icmp->check       = 0;
+        icmp->id          = ie ? ie->id : 0;
+        icmp->sequence    = htons(1);
+        icmp->check       = htons(fold_icmp_checksum(icmp, 8));
+    }
+    auto pkt_rep = Net::ParsedPacket::parse(std::span<uint8_t>{icmp_rep.data(), icmp_rep.size()});
+    bool icmp_in  = nat->process_inbound(pkt_rep);
+    auto* ir      = pkt_rep.icmp_echo();
+    const bool icmp_dnat = icmp_in && pkt_rep.ipv4->daddr == lan_ip && ir && ir->id == htons(4242);
+
+    const bool icmp_pass = icmp_snat && icmp_dnat;
+    r.add("NAT_ICMP", icmp_pass,
+          icmp_pass ? "echo SNAT/DNAT id map and checksums" : "ICMP NAT path failed");
 }
 
 void SelfTest::test_dns(Report& r) {

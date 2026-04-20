@@ -55,6 +55,15 @@ namespace HPGTP::Net {
         uint16_t check;
         uint16_t urg_ptr;
     };
+
+    // Echo request/reply (type 8 / 0): fixed 8-byte header after IPv4.
+    struct IcmpEchoHeader {
+        uint8_t  type;
+        uint8_t  code;
+        uint16_t check;
+        uint16_t id;
+        uint16_t sequence;
+    };
 #pragma pack(pop)
 
     // Zero-copy SPSC lock-free ring buffer (cross-core data from data plane to control plane, no mutex)
@@ -98,6 +107,9 @@ namespace HPGTP::Net {
 
         Net::UDPHeader* udp() const { return (l4_protocol == 17) ? reinterpret_cast<Net::UDPHeader*>(l4_header) : nullptr; }
         Net::TCPHeader* tcp() const { return (l4_protocol == 6) ? reinterpret_cast<Net::TCPHeader*>(l4_header) : nullptr; }
+        Net::IcmpEchoHeader* icmp_echo() const {
+            return (l4_protocol == 1) ? reinterpret_cast<Net::IcmpEchoHeader*>(l4_header) : nullptr;
+        }
         
         bool is_valid_ipv4() const { return ipv4 != nullptr; }
 
@@ -120,6 +132,8 @@ namespace HPGTP::Net {
             if (p.l4_protocol == 17 && span.size() >= p.l4_offset + sizeof(Net::UDPHeader)) {
                 p.l4_header = span.data() + p.l4_offset;
             } else if (p.l4_protocol == 6 && span.size() >= p.l4_offset + sizeof(Net::TCPHeader)) {
+                p.l4_header = span.data() + p.l4_offset;
+            } else if (p.l4_protocol == 1 && span.size() >= p.l4_offset + sizeof(Net::IcmpEchoHeader)) {
                 p.l4_header = span.data() + p.l4_offset;
             }
 

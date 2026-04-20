@@ -26,8 +26,157 @@ uint32_t NatEngine::hash_flow(const FlowKey& k) const {
     return h;
 }
 
+uint32_t NatEngine::hash_icmp_flow(Net::IPv4Net sa, Net::IPv4Net da, uint16_t id_nbo) const {
+    uint32_t h = 2166136261U;
+    auto proc = [&](const auto& val) {
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(&val);
+        for (size_t i = 0; i < sizeof(val); ++i) { h ^= p[i]; h *= 16777619U; }
+    };
+    proc(sa);
+    proc(da);
+    proc(id_nbo);
+    return h;
+}
+
+uint16_t NatEngine::alloc_external_icmp_id() noexcept {
+    for (int n = 0; n < 512; ++n) {
+        const uint16_t host = icmp_id_cursor++;
+        if (icmp_id_cursor > 60000) icmp_id_cursor = 10000;
+        const int32_t idx = icmp_id_to_index[host].load(std::memory_order_acquire);
+        if (idx < 0) return htons(host);
+        if (static_cast<size_t>(idx) < MAX_ICMP_SESSIONS
+            && !icmp_sessions[static_cast<size_t>(idx)].active.load(std::memory_order_acquire)) {
+            int32_t expect = static_cast<int32_t>(idx);
+            (void)icmp_id_to_index[host].compare_exchange_strong(
+                expect, -1, std::memory_order_release, std::memory_order_relaxed);
+            return htons(host);
+        }
+    }
+    return 0;
+}
+
+bool NatEngine::process_outbound_icmp(Net::ParsedPacket& pkt) {
+    auto ip = pkt.ipv4;
+    const Net::IPv4Net wan_ip{wan_ip_nbo.load(std::memory_order_acquire)};
+    if (wan_ip.raw() == 0) return false;
+
+    auto icmp = pkt.icmp_echo();
+    if (!icmp) return false;
+    if (ntohs(ip->frag_off) & 0x3FFF) return false;
+    if (icmp->type != 8 || icmp->code != 0) return false;
+
+    const uint16_t id_nbo = icmp->id;
+    const uint32_t h    = hash_icmp_flow(ip->saddr, ip->daddr, id_nbo) % MAX_ICMP_SESSIONS;
+    const uint32_t tick = current_tick.load(std::memory_order_relaxed);
+    uint16_t       ext_nbo = 0;
+
+    for (size_t n = 0; n < 32; ++n) {
+        const size_t idx      = (h + n) % MAX_ICMP_SESSIONS;
+        const bool   is_active = icmp_sessions[idx].active.load(std::memory_order_acquire);
+        const bool   expired =
+            is_active
+            && (tick - icmp_sessions[idx].last_active_tick.load(std::memory_order_relaxed) > 300);
+
+        if (!is_active || expired) {
+            IcmpEchoSession& sess = icmp_sessions[idx];
+            sess.seq.fetch_add(1, std::memory_order_acq_rel);
+            if (is_active) {
+                const uint16_t oh = ntohs(sess.ext_id_nbo);
+                int32_t        exp = static_cast<int32_t>(idx);
+                (void)icmp_id_to_index[oh].compare_exchange_strong(
+                    exp, -1, std::memory_order_release, std::memory_order_relaxed);
+                sess.active.store(false, std::memory_order_release);
+            }
+            const uint16_t new_ext = alloc_external_icmp_id();
+            if (!new_ext) {
+                sess.seq.fetch_add(1, std::memory_order_acq_rel);
+                return false;
+            }
+            sess.int_saddr     = ip->saddr;
+            sess.remote_daddr  = ip->daddr;
+            sess.int_id_nbo    = id_nbo;
+            sess.ext_id_nbo    = new_ext;
+            sess.last_active_tick.store(tick, std::memory_order_relaxed);
+            icmp_id_to_index[ntohs(new_ext)].store(static_cast<int32_t>(idx), std::memory_order_release);
+            sess.seq.fetch_add(1, std::memory_order_acq_rel);
+            sess.active.store(true, std::memory_order_release);
+            ext_nbo = new_ext;
+            break;
+        }
+
+        if (icmp_sessions[idx].int_saddr == ip->saddr
+            && icmp_sessions[idx].remote_daddr == ip->daddr
+            && icmp_sessions[idx].int_id_nbo == id_nbo) {
+            icmp_sessions[idx].last_active_tick.store(tick, std::memory_order_relaxed);
+            ext_nbo = icmp_sessions[idx].ext_id_nbo;
+            break;
+        }
+    }
+
+    if (!ext_nbo) return false;
+
+    const uint16_t old_id = icmp->id;
+    update_checksum_32(ip->check, ip->saddr, wan_ip);
+    if (icmp->check != 0)
+        update_checksum_16(icmp->check, old_id, ext_nbo);
+    ip->saddr = wan_ip;
+    icmp->id  = ext_nbo;
+    return true;
+}
+
+bool NatEngine::process_inbound_icmp(Net::ParsedPacket& pkt) {
+    auto ip = pkt.ipv4;
+    const Net::IPv4Net wan_ip{wan_ip_nbo.load(std::memory_order_acquire)};
+    if (ip->daddr != wan_ip) return false;
+
+    auto icmp = pkt.icmp_echo();
+    if (!icmp) return false;
+    if (ntohs(ip->frag_off) & 0x3FFF) return false;
+    if (icmp->type != 0 || icmp->code != 0) return false;
+
+    const uint16_t     ext_host = ntohs(icmp->id);
+    const int32_t      idx      = icmp_id_to_index[ext_host].load(std::memory_order_acquire);
+    if (idx < 0 || static_cast<size_t>(idx) >= MAX_ICMP_SESSIONS) return false;
+
+    Net::IPv4Net int_sa{};
+    uint16_t     int_id = 0;
+    bool         resolved = false;
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        IcmpEchoSession& sess = icmp_sessions[static_cast<size_t>(idx)];
+        uint32_t         s0   = sess.seq.load(std::memory_order_acquire);
+        if (s0 & 1u) continue;
+        const bool        act      = sess.active.load(std::memory_order_acquire);
+        const Net::IPv4Net rem     = sess.remote_daddr;
+        const Net::IPv4Net int_sa_c = sess.int_saddr;
+        const uint16_t     int_id_c = sess.int_id_nbo;
+        const uint16_t     ext_id_c = sess.ext_id_nbo;
+        uint32_t           s1       = sess.seq.load(std::memory_order_acquire);
+        if (s0 != s1 || (s1 & 1u)) continue;
+        if (!act) return false;
+        if (rem != ip->saddr || ext_id_c != icmp->id) return false;
+        int_sa    = int_sa_c;
+        int_id    = int_id_c;
+        resolved  = true;
+        break;
+    }
+    if (!resolved) return false;
+
+    const uint16_t old_icmp_id = icmp->id;
+    update_checksum_32(ip->check, ip->daddr, int_sa);
+    if (icmp->check != 0)
+        update_checksum_16(icmp->check, old_icmp_id, int_id);
+    ip->daddr = int_sa;
+    icmp->id  = int_id;
+
+    icmp_sessions[static_cast<size_t>(idx)].last_active_tick.store(
+        current_tick.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    return true;
+}
+
 NatEngine::NatEngine() {
     for (auto& p : port_to_index)
+        p.store(-1, std::memory_order_relaxed);
+    for (auto& p : icmp_id_to_index)
         p.store(-1, std::memory_order_relaxed);
 }
 
@@ -69,6 +218,7 @@ bool NatEngine::process_outbound(Net::ParsedPacket& pkt) {
     if (wan_ip.raw() == 0) return false;
 
     auto ip = pkt.ipv4;
+    if (ip->protocol == 1) return process_outbound_icmp(pkt);
     if (ip->protocol != 6 && ip->protocol != 17) return false;
 
     uint16_t* sport_ptr = nullptr;
@@ -159,6 +309,7 @@ bool NatEngine::process_inbound(Net::ParsedPacket& pkt) {
     auto ip = pkt.ipv4;
     const Net::IPv4Net wan_ip{wan_ip_nbo.load(std::memory_order_acquire)};
 
+    if (ip->protocol == 1) return process_inbound_icmp(pkt);
     if (ip->protocol != 6 && ip->protocol != 17) return false;
     if (ip->daddr != wan_ip) return false;
 
