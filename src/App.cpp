@@ -91,6 +91,25 @@ struct alignas(64) ForwardL2Snapshot {
 static std::array<ForwardL2Snapshot, 2> g_fwd_snap{};
 static std::atomic<unsigned>            g_fwd_active{0};
 
+static uint16_t ip_header_checksum_fold(const Net::IPv4Header* ip) noexcept {
+    const auto* w = reinterpret_cast<const uint8_t*>(ip);
+    const size_t  ihl = static_cast<size_t>(ip->ver_ihl & 0x0Fu) * 4u;
+    uint32_t      sum = 0;
+    for (size_t i = 0; i + 1 < ihl; i += 2)
+        sum += (uint32_t(w[i]) << 8) | w[i + 1];
+    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+    return static_cast<uint16_t>(~sum & 0xFFFF);
+}
+
+static uint16_t icmp_body_checksum_fold(const uint8_t* icmp, size_t icmp_len) noexcept {
+    uint32_t sum = 0;
+    for (size_t i = 0; i + 1 < icmp_len; i += 2)
+        sum += (uint32_t(icmp[i]) << 8) | icmp[i + 1];
+    if (icmp_len & 1) sum += uint32_t(icmp[icmp_len - 1]) << 8;
+    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+    return static_cast<uint16_t>(~sum & 0xFFFF);
+}
+
 static bool resolve_mac_onlink_wan(const ForwardL2Snapshot& s, uint32_t dst_ip_nbo,
     uint8_t out_mac[6]) noexcept {
     for (uint32_t i = 0; i < s.arp_count; ++i) {
@@ -183,6 +202,7 @@ class PacketConsumer {
 public:
     int rx_fd;
     int tx_fd;
+    int tx_fd_lan;
     int core_id;
     Telemetry::BatchStats          stats;
     Logic::HeuristicProcessor      processor;
@@ -206,7 +226,7 @@ public:
     PacketPipeline pipeline;
 
     PacketConsumer(int rx_fd_, const PacketWorkerConfig& cfg)
-        : rx_fd(rx_fd_), tx_fd(cfg.tx_fd), core_id(cfg.core_id),
+        : rx_fd(rx_fd_), tx_fd(cfg.tx_fd), tx_fd_lan(cfg.tx_fd_lan), core_id(cfg.core_id),
           ctx{cfg.tx_fd, cfg.route_shaper},
           nat_engine(cfg.nat_engine), dns_engine(cfg.dns_engine),
           qos_config(cfg.qos_config), device_shaper(cfg.device_shaper),
@@ -235,6 +255,7 @@ public:
             // Core 3 LAN→WAN: block and SNAT before sending upstream
             pipeline.steps = {{
                 step_dhcp_interceptor, step_dns_interceptor,
+                step_lan_subnet_forward,
                 step_local_delivery_blocker, step_block_device_upstream,
                 step_firewall_track_outbound, step_nat_downstream,
                 step_nat_upstream, step_eth_rewrite_lan_to_wan,
@@ -251,12 +272,83 @@ public:
         if (!pkt.is_valid_ipv4()) return false;
         if (self.core_id == 3) {
             Net::IPv4Net d = pkt.ipv4->daddr;
-            if (d == self.gateway_ip              ||
-                d == Net::IPv4Net{0xFAFFFFEF}     ||  // 239.255.255.250 SSDP multicast (NBO on LE)
+            if (d == Net::IPv4Net{0xFAFFFFEF}     ||  // 239.255.255.250 SSDP multicast (NBO on LE)
                 d == Net::IPv4Net{0xFFFFFFFF})        // broadcast
                 return true;
         }
         return false;
+    }
+
+    // LAN RX (core 3): same-subnet traffic must egress LAN (hairpin), not WAN. Includes
+    // ICMP echo reply to ROUTER_IP and L2 forward to other LAN hosts.
+    static bool step_lan_subnet_forward(PacketConsumer& self, Net::ParsedPacket& pkt) {
+        if (self.core_id != 3 || self.tx_fd_lan < 0) return false;
+        if (!pkt.eth || !pkt.is_valid_ipv4()) return false;
+        const int pl = Config::LAN_PREFIX_LEN;
+        if (pl < 1 || pl > 32) return false;
+
+        const Net::IPv4Net d = pkt.ipv4->daddr;
+        if (!Utils::Network::ipv4_in_subnet(d, pl, self.gateway_ip)) return false;
+
+        const unsigned           fa = g_fwd_active.load(std::memory_order_acquire);
+        const ForwardL2Snapshot& s  = g_fwd_snap[fa];
+        if (!s.ready) return true;
+
+        auto* ip = pkt.ipv4;
+
+        if (ip->protocol == 1) {
+            auto* icmp = pkt.icmp_echo();
+            if (icmp && icmp->type == 8 && icmp->code == 0 && d == self.gateway_ip) {
+                const size_t ihl = static_cast<size_t>(ip->ver_ihl & 0x0Fu) * 4u;
+                const size_t icmp_off = sizeof(Net::EthernetHeader) + ihl;
+                if (pkt.raw_span.size() < icmp_off + sizeof(Net::IcmpEchoHeader)) return true;
+                const size_t icmp_len = pkt.raw_span.size() - icmp_off;
+                if (icmp_len < 8) return true;
+
+                std::array<uint8_t, 2048> buf{};
+                if (pkt.raw_span.size() > buf.size()) return true;
+                std::memcpy(buf.data(), pkt.raw_span.data(), pkt.raw_span.size());
+                const size_t total = pkt.raw_span.size();
+
+                auto* e2 = reinterpret_cast<Net::EthernetHeader*>(buf.data());
+                auto* i2 = reinterpret_cast<Net::IPv4Header*>(buf.data() + sizeof(Net::EthernetHeader));
+                auto* c2 = reinterpret_cast<Net::IcmpEchoHeader*>(buf.data() + icmp_off);
+
+                std::array<uint8_t, 6> tmp{};
+                std::memcpy(tmp.data(), e2->dest, 6);
+                std::memcpy(e2->dest, e2->src, 6);
+                std::memcpy(e2->src, tmp.data(), 6);
+
+                const Net::IPv4Net os = i2->saddr;
+                i2->saddr            = i2->daddr;
+                i2->daddr            = os;
+                i2->ttl              = 64;
+                i2->check            = 0;
+                i2->check            = htons(ip_header_checksum_fold(i2));
+
+                c2->type = 0;
+                c2->code = 0;
+                c2->check = 0;
+                c2->check = htons(icmp_body_checksum_fold(
+                    reinterpret_cast<uint8_t*>(c2), icmp_len));
+
+                DataPlane::TxFrameOutput::send_best_effort(
+                    self.tx_fd_lan, std::span<const uint8_t>(buf.data(), total),
+                    self.core_id, 0);
+                return true;
+            }
+        }
+
+        if (d == self.gateway_ip) return true;
+
+        uint8_t nh[6]{};
+        if (!resolve_mac_onlink_wan(s, d.raw(), nh)) return true;
+
+        std::memcpy(pkt.eth->dest, nh, 6);
+        std::memcpy(pkt.eth->src, s.lan_hw.data(), 6);
+        DataPlane::TxFrameOutput::send_best_effort(
+            self.tx_fd_lan, pkt.raw_span, self.core_id, 0);
+        return true;
     }
 
     static bool step_dhcp_interceptor(PacketConsumer& self, Net::ParsedPacket& pkt) {
@@ -798,7 +890,7 @@ void App::start() {
             worker_event_loop(std::move(iface), std::move(cfg), *ps);
         },
         std::move(iface_wan),
-        PacketWorkerConfig{ fd_lan, 2, global_shaper_dl, nat_engine, dns_engine,
+        PacketWorkerConfig{ fd_lan, -1, 2, global_shaper_dl, nat_engine, dns_engine,
                             qos_config, device_shaper_dl, dhcp_engine,
                             firewall_engine, gw_ip });
 
@@ -808,7 +900,7 @@ void App::start() {
             worker_event_loop(std::move(iface), std::move(cfg), *ps);
         },
         std::move(iface_lan),
-        PacketWorkerConfig{ fd_wan, 3, global_shaper_ul, nat_engine, dns_engine,
+        PacketWorkerConfig{ fd_wan, fd_lan, 3, global_shaper_ul, nat_engine, dns_engine,
                             qos_config, device_shaper_ul, dhcp_engine,
                             firewall_engine, gw_ip });
 

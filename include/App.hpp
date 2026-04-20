@@ -102,8 +102,10 @@ struct QoSConfig {
 
 // Per-thread routing and engine handles passed into each packet worker.
 struct PacketWorkerConfig {
-    int tx_fd;
-    int core_id;
+    int tx_fd{};
+    // Upstream (LAN RX): egress back to LAN for same-subnet hairpin. Downstream: -1.
+    int tx_fd_lan{-1};
+    int core_id{};
     std::shared_ptr<Traffic::Shaper>       route_shaper;
     std::shared_ptr<Logic::NatEngine>      nat_engine;
     std::shared_ptr<Logic::DnsEngine>      dns_engine;
