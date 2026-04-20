@@ -2,7 +2,7 @@
 
 **A dedicated Raspberry Pi 5 network device that prioritizes gaming data over general network traffic using microsecond precision.**
 
-GamingTrafficPrioritizer is software built in C++23 using Linux real-time programming concepts. It inspects network packets using raw sockets and fixed-size, allocation-free data structures to operate as an **IPv4 gateway-style forwarder** between WAN and LAN interfaces (NAT and routing), not as a classic layer-2 transparent bridge.
+GamingTrafficPrioritizer is software built in C++23 using Linux real-time programming concepts. It inspects network packets using raw sockets and fixed-size, allocation-free data structures to operate as an **IPv4 gateway-style forwarder** between WAN and LAN interfaces , not as a classic layer-2 transparent bridge.
 
 ---
 
@@ -31,7 +31,7 @@ The system classifies every network packet into one of three distinct categories
 
 | Category | Traffic Type | Forwarding Protocol |
 |----------|---------------|-----------|
-| **Critical** | DNS (UDP/TCP port 53); very small TCP segments (including typical handshake-sized traffic and other short TCP segments) | Immediate forwarding |
+| **Critical** | DNS with UDP/TCP port 53; very small TCP segments | Immediate forwarding |
 | **High** | Gaming packets, small UDP data | Zero-wait forwarding |
 | **Normal** | Large downloads, video streaming | Rate-controlled forwarding |
 
@@ -41,13 +41,13 @@ The classifier is automated. It analyzes packet sizes and generation frequencies
 
 ## Core Features
 
-- **High-throughput RX path**: Receives frames via a Linux `AF_PACKET` RX ring (`PACKET_RX_RING` + `mmap`). Each frame is copied into an internal bounded queue for parsing and forwarding; the hot path avoids extra allocation but is **not** end-to-end zero-copy from ring to wire.
+- **High-throughput RX path**: Receives frames via a Linux `AF_PACKET` RX ring . Each frame is copied into an internal bounded queue for parsing and forwarding; the hot path avoids extra allocation but is **not** end-to-end zero-copy from ring to wire.
 - **Lock-free processing**: Implements fixed-size hash tables to eliminate memory allocation and threading locks during active network transmission.
 - **Dedicated CPU core allocation**: Assigns specific runtime tasks to individual processing cores to prevent context-switching delays.
 - **Real-time execution**: Employs synchronous system calls for periodic tasks, avoiding blocking timeout functions in the primary packet forwarding cycle.
 - **Device bandwidth limits**: Applies a configurable rate limiter for individual IP addresses, with capabilities to update these limits instantly during execution.
-- **Integrated network services**: Includes NAT (SNAT/DNAT), a DHCP server, a DNS cache, UPnP/IGD mapping, and a stateful firewall. All services can be controlled directly via the interface.
-- **Local dashboard**: Features a custom Qt6 interface displaying real-time packet rates, core performance metrics, and service controls using Direct Rendering Manager (DRM) hardware acceleration.
+- **Integrated network services**: Includes NAT , a DHCP server, a DNS cache, UPnP/IGD mapping, and a stateful firewall. All services can be controlled directly via the interface.
+- **Local dashboard**: Features a custom Qt6 interface displaying real-time packet rates, core performance metrics, and service controls using Direct Rendering Manager hardware acceleration.
 - **Interactive system notifications**: Displays system alerts via a graphical user interface panel without disrupting background network processing.
 - **Command-line mode**: With `enable_gui=false`, no dashboard window is shown. The binary is still dynamically linked to Qt 6; install compatible Qt 6 runtime libraries on the target system even when running headless.
 
@@ -77,7 +77,7 @@ For single-device configurations, connect the destination device directly to the
 |---------|-----|
 | GCC 14 and CMake 3.20+ | Required for compiling C++23 standard library components |
 | `qt6-base-dev` | Required to build the local dashboard interface |
-| `qt6-qpa-plugins` | Required for direct Direct Rendering Manager (DRM) display output |
+| `qt6-qpa-plugins` | Required for direct Direct Rendering Manager display output |
 | `ethtool` | Needed to disable hardware offloads that alter raw-socket packet properties |
 | `speedtest-cli` | Optional module for automated bandwidth capability measurement |
 
@@ -92,21 +92,20 @@ cd High-Performance-Gaming-Traffic-Prioritizer
 
 # 2. Build and launch: start.sh runs start_release.sh, which on Debian-based
 #    systems can install missing build/runtime packages (e.g. via apt), then builds if needed.
-sudo ./start.sh
+sudo ./start_release.sh
 
 # Headless (no Qt window): set enable_gui=false in config/config.txt, then run the
 # binary with the current working directory set to the repository root so
 # config/config.txt is found (paths are relative to CWD):
-sudo ./build/GamingTrafficPrioritizer
 ```
 
-First-time setup on a minimal image usually requires installing compiler, CMake, Qt development packages, and related tools—either manually or by relying on `start_release.sh` / `start.sh` where applicable. After a successful build, the main executable is `build/GamingTrafficPrioritizer`; keep using the repo root as the working directory when launching so configuration and assets resolve correctly. The process runs until you stop it (signal, dashboard shutdown, etc.); it is not a one-shot command.
+First-time setup on a minimal image usually requires installing compiler, CMake, Qt development packages, and related tools—either manually or by relying on `start_release.sh` where applicable. After a successful build, the main executable is `build/GamingTrafficPrioritizer`; keep using the repo root as the working directory when launching so configuration and assets resolve correctly. The process runs until you stop it ; it is not a one-shot command.
 
 ---
 
 ## Configuration Variables
 
-The program loads `config/config.txt` relative to the **current working directory** (typically the repository root). All parameters are optional; the system will initialize with default variables if the file is missing. The local graphical interface writes active parameters to this file on clean exit when saving is enabled.
+The program loads `config/config.txt` relative to the **current working directory** . All parameters are optional; the system will initialize with default variables if the file is missing. The local graphical interface writes active parameters to this file on clean exit when saving is enabled.
 
 ```ini
 # ── Network interface assignment ──────────────────────────────────────
@@ -147,17 +146,6 @@ enable_firewall=true
 
 ---
 
-## Managing the Service
-
-```bash
-# Launch with the graphical dashboard visualization:
-sudo ./start.sh
-
-# Launch without the start script (binary must exist; CWD should be repo root):
-sudo ./build/GamingTrafficPrioritizer
-```
-
-The `start.sh` / `start_release.sh` flow checks dependencies, rebuilds when sources are newer than the binary, adjusts interfaces with `ethtool` where possible, then starts the application.
 
 ### Safe Termination
 
@@ -212,6 +200,9 @@ Bandwidth application adjustments are dynamically written into inactive paramete
 - [√] Integrated notification response interfaces
 - [O] Remote network administration API configuration
 
+## Social Media
+
+https://www.reddit.com/r/homelab/comments/1sq50o7/highperformancegamingtrafficprioritizer/?solution=64704c72d53bc35364704c72d53bc353&js_challenge=1&token=bbbe4bf1c9a2b5160829c4be34da5861a8bd7ba03ea8fb9885c4add909ff7214&utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button
 
 ---
 
