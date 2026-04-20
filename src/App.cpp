@@ -260,8 +260,7 @@ public:
                 step_firewall_track_outbound, step_nat_downstream,
                 step_nat_upstream, step_eth_rewrite_lan_to_wan,
                 step_device_shaper_upstream,
-                step_ip_shaper_upstream, step_qos_routing,
-                nullptr
+                step_ip_shaper_upstream, step_qos_routing
             }};
         }
     }

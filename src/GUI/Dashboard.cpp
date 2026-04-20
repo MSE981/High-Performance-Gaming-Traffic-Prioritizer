@@ -533,6 +533,7 @@ void InterfacePage::scan_interfaces() {
 
     auto& si = Telemetry::instance().sys_info;
     uint8_t cnt = si.iface_count.load(std::memory_order_acquire);
+    if (cnt > Telemetry::SystemInfo::MAX_IFACES) cnt = Telemetry::SystemInfo::MAX_IFACES;
 
     using IfacePair = std::pair<std::string, std::string>;
     std::array<IfacePair, Telemetry::SystemInfo::MAX_IFACES> buf;
