@@ -88,10 +88,11 @@ For single-device configurations, connect the destination device directly to the
 ```bash
 # 1. Download the repository source
 git clone <repo-url>
-cd High-Performance-Gaming-Traffic-Prioritizer
+cd ./High-Performance-Gaming-Traffic-Prioritizer
 
-# 2. Build and launch: start.sh runs start_release.sh, which on Debian-based
-#    systems can install missing build/runtime packages (e.g. via apt), then builds if needed.
+# 2. Build and launch:runs start_release.sh, which on Debian-based
+#    systems can install missing build/runtime packages, then builds if needed.
+chmod +x ./start_release.sh
 sudo ./start_release.sh
 
 # Headless (no Qt window): set enable_gui=false in config/config.txt, then run the
