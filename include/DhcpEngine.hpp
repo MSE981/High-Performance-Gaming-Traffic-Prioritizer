@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <expected>
+#include <mutex>
 #include <span>
 #include <string>
 #include "Headers.hpp"
@@ -40,6 +41,10 @@ namespace HPGTP::Logic {
         std::chrono::seconds lease_duration{86400};
         std::array<uint8_t, 6> lan_if_mac_{};
 
+        // Serialises DHCP pool/lease/router state between the background-task
+        // thread and the control event thread that applies GUI config.
+        mutable std::mutex mutex_{};
+
         std::expected<void, std::string> init_pool(Net::IPv4Net start_ip, Net::IPv4Net end_ip);
         void handle_dhcp_request(DhcpMessage& msg, int lan_fd);
         Net::IPv4Net find_or_assign_lease(std::span<const uint8_t, 6> mac);
@@ -48,8 +53,14 @@ namespace HPGTP::Logic {
     public:
         explicit DhcpEngine(const std::string& lan_ip, DhcpPoolConfig cfg);
         std::expected<void, std::string> reconfigure(DhcpPoolConfig cfg);
-        void set_router_ip(Net::IPv4Net ip) noexcept { router_ip = ip; }
-        [[nodiscard]] Net::IPv4Net router_ip_snapshot() const noexcept { return router_ip; }
+        void set_router_ip(Net::IPv4Net ip) noexcept {
+            std::lock_guard<std::mutex> guard(mutex_);
+            router_ip = ip;
+        }
+        [[nodiscard]] Net::IPv4Net router_ip_snapshot() const noexcept {
+            std::lock_guard<std::mutex> guard(mutex_);
+            return router_ip;
+        }
         void intercept_request(const Net::ParsedPacket& pkt);
         void process_background_tasks(int lan_fd);
     };

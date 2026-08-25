@@ -1,12 +1,12 @@
 #include "App.hpp"
+#include "EventCallbacks.hpp"
+#include "WatchdogServices.hpp"
 #include "DataPlane.hpp"
 #include "GUI/Dashboard.hpp"
-// POSIX C headers — visible only in this translation unit, hidden from all
-// clients that include App.hpp.
+// POSIX C headers, visible only in this translation unit.
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <poll.h>
-#include <sys/timerfd.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <cstring>
@@ -30,159 +30,30 @@ namespace HPGTP {
 
 namespace {
 
-// RX thread uses poll(2) on the raw socket plus stop_efd (-1 timeout). Egress uses DataPlane::TxFrameOutput.
-
-static std::string trim_ws(const std::string& s) {
-    size_t a = s.find_first_not_of(" \t\r\n");
-    if (a == std::string::npos) return {};
-    size_t b = s.find_last_not_of(" \t\r\n");
-    return s.substr(a, b - a + 1);
-}
-
-static bool is_invalid_nat_wan(Net::IPv4Net a) noexcept {
-    if (a.raw() == 0) return true;
-    const uint32_t h = ntohl(a.raw());
-    if ((h >> 24) == 127) return true;
-    return false;
-}
-
-static std::expected<Net::IPv4Net, std::string> resolve_nat_wan_ip() {
-    const std::string cfg = trim_ws(Config::WAN_IP);
-    if (!cfg.empty()) {
-        auto e = Config::parse_ip_str(cfg);
-        if (!e) return std::unexpected(std::string("WAN_IP: ") + e.error());
-        if (is_invalid_nat_wan(*e))
-            return std::unexpected(std::string("WAN_IP must be a non-loopback IPv4 address"));
-        return *e;
+// Registered data-plane event subscriber: commits batched telemetry. The frame/
+// packet/tx hooks are reserved so future clients can subscribe without touching
+// the forwarding pipeline.
+class TelemetryObserver final : public Events::PacketObserver {
+public:
+    void on_frame(std::span<const uint8_t>) override {}
+    void on_packet(const Net::ParsedPacket&, Net::Priority) override {}
+    void on_batch(const Telemetry::BatchStats& stats, int core_id) override {
+        Telemetry::instance().commit_batch(stats, core_id);
     }
-    std::string s = Utils::Network::get_local_ip(Config::iface_wan());
-    if (s.empty())
-        return std::unexpected(
-            std::string("No IPv4 on WAN interface ") + Config::iface_wan()
-            + " (assign an address or set WAN_IP in config/config.txt)");
-    auto e = Config::parse_ip_str(s);
-    if (!e) return std::unexpected(std::string("WAN address parse failed: ") + e.error());
-    if (is_invalid_nat_wan(*e))
-        return std::unexpected(std::string("WAN interface has unusable address: ") + s);
-    return *e;
-}
-
-// L2 rewrite for routed IPv4: raw AF_PACKET egress needs correct Ethernet src/dst per segment.
-// Watchdog publishes a double-buffered snapshot (no /proc on Core 2/3 hot path).
-struct alignas(64) ForwardL2Snapshot {
-    std::array<uint8_t, 6> lan_hw{};
-    std::array<uint8_t, 6> wan_hw{};
-    std::array<uint8_t, 6> gw_hw{};
-    uint32_t               wan_ip_nbo     = 0;
-    int32_t                wan_prefix_len = -1;
-    static constexpr size_t MAX_ARP = 128;
-    struct ArpEntry {
-        uint32_t ip_nbo = 0;
-        uint8_t  mac[6]{};
-    };
-    std::array<ArpEntry, MAX_ARP> arp{};
-    uint32_t arp_count = 0;
-    bool     gw_hw_valid              = false;
-    bool     wan_cfg_valid            = false;
-    bool     default_gw_ip_configured = false;
-    bool     ready                    = false;
+    void on_tx_result(Traffic::TxResult, size_t) override {}
 };
 
-static std::array<ForwardL2Snapshot, 2> g_fwd_snap{};
-static std::atomic<unsigned>            g_fwd_active{0};
+// RX thread uses poll(2) on the raw socket plus stop_efd (-1 timeout). Egress uses DataPlane::TxFrameOutput.
+// L2/ARP snapshot and the kernel WAN address are owned by DataPlane::ForwardingPlane.
 
-static uint16_t ip_header_checksum_fold(const Net::IPv4Header* ip) noexcept {
-    const auto* w = reinterpret_cast<const uint8_t*>(ip);
-    const size_t  ihl = static_cast<size_t>(ip->ver_ihl & 0x0Fu) * 4u;
-    uint32_t      sum = 0;
-    for (size_t i = 0; i + 1 < ihl; i += 2)
-        sum += (uint32_t(w[i]) << 8) | w[i + 1];
-    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
-    return static_cast<uint16_t>(~sum & 0xFFFF);
-}
-
-static uint16_t icmp_body_checksum_fold(const uint8_t* icmp, size_t icmp_len) noexcept {
-    uint32_t sum = 0;
-    for (size_t i = 0; i + 1 < icmp_len; i += 2)
-        sum += (uint32_t(icmp[i]) << 8) | icmp[i + 1];
-    if (icmp_len & 1) sum += uint32_t(icmp[icmp_len - 1]) << 8;
-    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
-    return static_cast<uint16_t>(~sum & 0xFFFF);
-}
-
-static bool resolve_mac_onlink_wan(const ForwardL2Snapshot& s, uint32_t dst_ip_nbo,
-    uint8_t out_mac[6]) noexcept {
-    for (uint32_t i = 0; i < s.arp_count; ++i) {
-        if (s.arp[i].ip_nbo == dst_ip_nbo) {
-            std::memcpy(out_mac, s.arp[i].mac, 6);
-            return true;
-        }
-    }
-    return false;
-}
-
-static void refresh_forward_layer2_macs() {
-    const unsigned w = 1u - g_fwd_active.load(std::memory_order_relaxed);
-    ForwardL2Snapshot& snap = g_fwd_snap[w];
-
-    const bool lan_ok = Utils::Network::get_iface_hwaddr(Config::iface_lan(), snap.lan_hw.data());
-    const bool wan_ok = Utils::Network::get_iface_hwaddr(Config::iface_wan(), snap.wan_hw.data());
-
-    snap.wan_prefix_len = static_cast<int32_t>(
-        Utils::Network::get_iface_ipv4_prefix_len(Config::iface_wan()));
-    if (auto wan = resolve_nat_wan_ip()) {
-        snap.wan_ip_nbo = wan->raw();
-    } else {
-        snap.wan_ip_nbo = 0;
-    }
-    snap.wan_cfg_valid = snap.wan_ip_nbo != 0 && !is_invalid_nat_wan(Net::IPv4Net{snap.wan_ip_nbo})
-        && snap.wan_prefix_len >= 0 && snap.wan_prefix_len <= 32;
-
-    std::string gw_ip = Utils::Network::get_default_gateway_for_iface(Config::iface_wan());
-    if (gw_ip.empty())
-        gw_ip = Utils::Network::get_gateway_ip();
-    snap.default_gw_ip_configured = !gw_ip.empty();
-    if (!gw_ip.empty())
-        Utils::Network::force_arp_resolution(gw_ip);
-
-    Utils::ArpTableRow rows[ForwardL2Snapshot::MAX_ARP];
-    const size_t n = Utils::Network::read_arp_table(rows, ForwardL2Snapshot::MAX_ARP);
-
-    snap.gw_hw_valid = false;
-    if (!gw_ip.empty()) {
-        struct in_addr gw_addr {};
-        if (inet_pton(AF_INET, gw_ip.c_str(), &gw_addr) == 1) {
-            const uint32_t gw_nbo = gw_addr.s_addr;
-            for (size_t i = 0; i < n; ++i) {
-                if (rows[i].ip_nbo == gw_nbo) {
-                    std::memcpy(snap.gw_hw.data(), rows[i].mac, 6);
-                    snap.gw_hw_valid = true;
-                    break;
-                }
-            }
-        }
-    }
-
-    const uint32_t ac = static_cast<uint32_t>(
-        std::min(n, static_cast<size_t>(ForwardL2Snapshot::MAX_ARP)));
-    snap.arp_count = ac;
-    for (uint32_t i = 0; i < ac; ++i) {
-        snap.arp[i].ip_nbo = rows[i].ip_nbo;
-        std::memcpy(snap.arp[i].mac, rows[i].mac, 6);
-    }
-
-    snap.ready = lan_ok && wan_ok && (snap.gw_hw_valid || snap.wan_cfg_valid);
-    g_fwd_active.store(w, std::memory_order_release);
-}
-
-// ─── Packet routing context (internal to data plane) ─────────────────────────
+// Packet routing context (internal to data plane)
 struct RouteContext {
     int tx_fd;
-    std::shared_ptr<Traffic::Shaper> shaper;
+    Traffic::Shaper* shaper;
 };
 using RouteFunc = void (*)(const RouteContext&, std::span<uint8_t>, size_t, int);
 
-// ─── Data-plane route handlers ───────────────────────────────────────────────
+// Data-plane route handlers
 
 void fast_path_handler(const RouteContext& ctx, std::span<uint8_t> pkt,
                         size_t prio_idx, int core_id) {
@@ -194,28 +65,24 @@ void shaper_handler(const RouteContext& ctx, std::span<uint8_t> pkt,
     if (ctx.shaper) ctx.shaper->enqueue_normal(pkt);
 }
 
-// ─── PacketConsumer ──────────────────────────────────────────────────────────
+// PacketConsumer
 // Internal data-plane class: assembled callback pipeline, zero runtime
-// branching.  Hidden from all App clients.
+// branching. Hidden from all App clients.
 
 class PacketConsumer {
 public:
     int rx_fd;
     int tx_fd;
-    int tx_fd_lan;
     int core_id;
     Telemetry::BatchStats          stats;
     Logic::HeuristicProcessor      processor;
     RouteContext                   ctx;
-    std::shared_ptr<Logic::NatEngine>      nat_engine;
-    std::shared_ptr<Logic::DnsEngine>      dns_engine;
-    std::shared_ptr<QoSConfig>             qos_config;
-    std::shared_ptr<QoSConfig>             device_shaper;
-    std::shared_ptr<Logic::DhcpEngine>     dhcp_engine;
-    std::shared_ptr<Logic::FirewallEngine> firewall_engine;
-    Net::IPv4Net gateway_ip{};
+    Logic::NatEngine*              nat_engine;
+    Logic::DhcpEngine*             dhcp_engine;
+    Events::CallbackRegistry&      callbacks;
+    DataPlane::ForwardingPlane&       plane;
 
-    std::array<std::array<RouteFunc, 3>, 2> routes;
+    std::array<std::array<RouteFunc, 2>, 2> routes;
 
     using PipelineStep = bool (*)(PacketConsumer&, Net::ParsedPacket&);
 
@@ -225,130 +92,43 @@ public:
     };
     PacketPipeline pipeline;
 
-    PacketConsumer(int rx_fd_, const PacketWorkerConfig& cfg)
-        : rx_fd(rx_fd_), tx_fd(cfg.tx_fd), tx_fd_lan(cfg.tx_fd_lan), core_id(cfg.core_id),
+    PacketConsumer(int rx_fd_, const PacketWorkerConfig& cfg,
+                   DataPlane::ForwardingPlane& plane_)
+        : rx_fd(rx_fd_), tx_fd(cfg.tx_fd), core_id(cfg.core_id),
           ctx{cfg.tx_fd, cfg.route_shaper},
-          nat_engine(cfg.nat_engine), dns_engine(cfg.dns_engine),
-          qos_config(cfg.qos_config), device_shaper(cfg.device_shaper),
+          nat_engine(cfg.nat_engine),
           dhcp_engine(cfg.dhcp_engine),
-          firewall_engine(cfg.firewall_engine), gateway_ip(cfg.gateway_ip) {
+          callbacks(*cfg.callbacks),
+          plane(plane_) {
 
         routes = {{
-            { fast_path_handler, fast_path_handler, shaper_handler }, // acceleration
-            { fast_path_handler, fast_path_handler, fast_path_handler } // bridge
+            { fast_path_handler, shaper_handler }, // acceleration: High fast, Normal throttled
+            { fast_path_handler, fast_path_handler } // bridge: everything unthrottled
         }};
 
         // Pipeline steps are fixed at construction (no per-packet branch to select a path).
         if (core_id == 2) {
-            // Core 2 WAN→LAN: DNAT first, then DNS response rewrite (needs
-            // client-side (ip, port)), then device block on real LAN IP.
+            // Core 2 WAN→LAN: DNAT, then L2 rewrite and QoS routing.
             pipeline.steps = {{
                 step_dhcp_interceptor,
-                step_firewall_inbound, step_nat_downstream,
-                step_dns_response,
+                step_nat_downstream,
                 step_eth_rewrite_wan_to_lan,
-                step_block_device_downstream, step_device_shaper_downstream,
-                step_ip_shaper_downstream, step_qos_routing,
-                nullptr, nullptr, nullptr
+                step_qos_routing,
+                nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr
             }};
         } else {
-            // Core 3 LAN→WAN: block and SNAT before sending upstream
+            // Core 3 LAN→WAN: SNAT before sending upstream.
             pipeline.steps = {{
-                step_dhcp_interceptor, step_dns_interceptor,
-                step_lan_subnet_forward,
-                step_local_delivery_blocker, step_block_device_upstream,
-                step_firewall_track_outbound, step_nat_downstream,
+                step_dhcp_interceptor,
+                step_nat_downstream,
                 step_nat_upstream, step_eth_rewrite_lan_to_wan,
-                step_device_shaper_upstream,
-                step_ip_shaper_upstream, step_qos_routing
+                step_qos_routing,
+                nullptr, nullptr, nullptr, nullptr, nullptr
             }};
         }
     }
 
-    // ── Pipeline steps ────────────────────────────────────────────────────────
-
-    static bool step_local_delivery_blocker(PacketConsumer& self, Net::ParsedPacket& pkt) {
-        if (!pkt.is_valid_ipv4()) return false;
-        if (self.core_id == 3) {
-            Net::IPv4Net d = pkt.ipv4->daddr;
-            if (d == Net::IPv4Net{0xFAFFFFEF}     ||  // 239.255.255.250 SSDP multicast (NBO on LE)
-                d == Net::IPv4Net{0xFFFFFFFF})        // broadcast
-                return true;
-        }
-        return false;
-    }
-
-    // LAN RX (core 3): same-subnet traffic must egress LAN (hairpin), not WAN. Includes
-    // ICMP echo reply to ROUTER_IP and L2 forward to other LAN hosts.
-    static bool step_lan_subnet_forward(PacketConsumer& self, Net::ParsedPacket& pkt) {
-        if (self.core_id != 3 || self.tx_fd_lan < 0) return false;
-        if (!pkt.eth || !pkt.is_valid_ipv4()) return false;
-        const int pl = Config::LAN_PREFIX_LEN;
-        if (pl < 1 || pl > 32) return false;
-
-        const Net::IPv4Net d = pkt.ipv4->daddr;
-        if (!Utils::Network::ipv4_in_subnet(d, pl, self.gateway_ip)) return false;
-
-        const unsigned           fa = g_fwd_active.load(std::memory_order_acquire);
-        const ForwardL2Snapshot& s  = g_fwd_snap[fa];
-        if (!s.ready) return true;
-
-        auto* ip = pkt.ipv4;
-
-        if (ip->protocol == 1) {
-            auto* icmp = pkt.icmp_echo();
-            if (icmp && icmp->type == 8 && icmp->code == 0 && d == self.gateway_ip) {
-                const size_t ihl = static_cast<size_t>(ip->ver_ihl & 0x0Fu) * 4u;
-                const size_t icmp_off = sizeof(Net::EthernetHeader) + ihl;
-                if (pkt.raw_span.size() < icmp_off + sizeof(Net::IcmpEchoHeader)) return true;
-                const size_t icmp_len = pkt.raw_span.size() - icmp_off;
-                if (icmp_len < 8) return true;
-
-                std::array<uint8_t, 2048> buf{};
-                if (pkt.raw_span.size() > buf.size()) return true;
-                std::memcpy(buf.data(), pkt.raw_span.data(), pkt.raw_span.size());
-                const size_t total = pkt.raw_span.size();
-
-                auto* e2 = reinterpret_cast<Net::EthernetHeader*>(buf.data());
-                auto* i2 = reinterpret_cast<Net::IPv4Header*>(buf.data() + sizeof(Net::EthernetHeader));
-                auto* c2 = reinterpret_cast<Net::IcmpEchoHeader*>(buf.data() + icmp_off);
-
-                std::array<uint8_t, 6> tmp{};
-                std::memcpy(tmp.data(), e2->dest, 6);
-                std::memcpy(e2->dest, e2->src, 6);
-                std::memcpy(e2->src, tmp.data(), 6);
-
-                const Net::IPv4Net os = i2->saddr;
-                i2->saddr            = i2->daddr;
-                i2->daddr            = os;
-                i2->ttl              = 64;
-                i2->check            = 0;
-                i2->check            = htons(ip_header_checksum_fold(i2));
-
-                c2->type = 0;
-                c2->code = 0;
-                c2->check = 0;
-                c2->check = htons(icmp_body_checksum_fold(
-                    reinterpret_cast<uint8_t*>(c2), icmp_len));
-
-                DataPlane::TxFrameOutput::send_best_effort(
-                    self.tx_fd_lan, std::span<const uint8_t>(buf.data(), total),
-                    self.core_id, 0);
-                return true;
-            }
-        }
-
-        if (d == self.gateway_ip) return true;
-
-        uint8_t nh[6]{};
-        if (!resolve_mac_onlink_wan(s, d.raw(), nh)) return true;
-
-        std::memcpy(pkt.eth->dest, nh, 6);
-        std::memcpy(pkt.eth->src, s.lan_hw.data(), 6);
-        DataPlane::TxFrameOutput::send_best_effort(
-            self.tx_fd_lan, pkt.raw_span, self.core_id, 0);
-        return true;
-    }
+    // Pipeline steps
 
     static bool step_dhcp_interceptor(PacketConsumer& self, Net::ParsedPacket& pkt) {
         if (!Config::global_state.enable_dhcp.load(std::memory_order_relaxed)) return false;
@@ -359,23 +139,6 @@ public:
                 return true;
             }
         }
-        return false;
-    }
-
-    static bool step_dns_interceptor(PacketConsumer& self, Net::ParsedPacket& pkt) {
-        if (self.core_id != 3 || !self.dns_engine) return false;
-        const Logic::DnsQueryDisposition d =
-            self.dns_engine->process_query(pkt, self.rx_fd);
-        return d == Logic::DnsQueryDisposition::Replied
-            || d == Logic::DnsQueryDisposition::ReplySendFailed;
-    }
-
-    // WAN→LAN DNS response handler. Must run after step_nat_downstream so that
-    // (daddr, dport) have been restored to the client's (ip, sport), which is
-    // the key used to look up the original DNS server address.
-    static bool step_dns_response(PacketConsumer& self, Net::ParsedPacket& pkt) {
-        if (self.core_id != 2 || !self.dns_engine) return false;
-        self.dns_engine->process_response(pkt);
         return false;
     }
 
@@ -399,10 +162,8 @@ public:
     }
 
     static bool step_eth_rewrite_lan_to_wan(PacketConsumer& self, Net::ParsedPacket& pkt) {
-        (void)self;
         if (!Config::global_state.enable_nat.load(std::memory_order_relaxed)) return false;
-        const unsigned a = g_fwd_active.load(std::memory_order_acquire);
-        const ForwardL2Snapshot& s = g_fwd_snap[a];
+        const auto& s = self.plane.snapshot();
         if (!s.ready || !pkt.eth || !pkt.ipv4) return false;
         if (!ipv4_needs_eth_rewrite_for_forward(pkt.ipv4)) return false;
 
@@ -416,7 +177,7 @@ public:
 
         if (on_link) {
             uint8_t nh[6]{};
-            if (!resolve_mac_onlink_wan(s, dst.raw(), nh)) return true;
+            if (!self.plane.resolve_mac_onlink(s, dst.raw(), nh)) return true;
             std::memcpy(pkt.eth->dest, nh, 6);
             return false;
         }
@@ -428,89 +189,17 @@ public:
     }
 
     static bool step_eth_rewrite_wan_to_lan(PacketConsumer& self, Net::ParsedPacket& pkt) {
-        (void)self;
         if (!Config::global_state.enable_nat.load(std::memory_order_relaxed)) return false;
-        const unsigned a = g_fwd_active.load(std::memory_order_acquire);
-        const ForwardL2Snapshot& s = g_fwd_snap[a];
+        const auto& s = self.plane.snapshot();
         if (!s.ready || !pkt.eth || !pkt.ipv4) return false;
         if (!ipv4_needs_eth_rewrite_for_forward(pkt.ipv4)) return false;
         const uint32_t key = pkt.ipv4->daddr.raw();
         for (uint32_t i = 0; i < s.arp_count; ++i) {
             if (s.arp[i].ip_nbo == key) {
                 std::memcpy(pkt.eth->src, s.lan_hw.data(), 6);
-                std::memcpy(pkt.eth->dest, s.arp[i].mac, 6);
+                std::memcpy(pkt.eth->dest, s.arp[i].mac.data(), 6);
                 return false;
             }
-        }
-        return false;
-    }
-
-    static bool step_ip_shaper_downstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
-        if (!pkt.is_valid_ipv4() || !self.qos_config) return false;
-        size_t ai     = self.qos_config->active_idx.load(std::memory_order_acquire);
-        auto shaper   = self.qos_config->buffers[ai].find(pkt.ipv4->daddr);
-        if (shaper) {
-            RouteContext ip_ctx{self.tx_fd, shaper};
-            shaper_handler(ip_ctx, pkt.raw_span, 2, self.core_id);
-            return true;
-        }
-        return false;
-    }
-
-    static bool step_ip_shaper_upstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
-        if (!pkt.is_valid_ipv4() || !self.qos_config) return false;
-        size_t ai   = self.qos_config->active_idx.load(std::memory_order_acquire);
-        auto shaper = self.qos_config->buffers[ai].find(pkt.ipv4->saddr);
-        if (shaper) {
-            RouteContext ip_ctx{self.tx_fd, shaper};
-            shaper_handler(ip_ctx, pkt.raw_span, 2, self.core_id);
-            return true;
-        }
-        return false;
-    }
-
-    static bool step_firewall_inbound(PacketConsumer& self, Net::ParsedPacket& pkt) {
-        if (!Config::global_state.enable_firewall.load(std::memory_order_relaxed)) return false;
-        if (!self.firewall_engine) return false;
-        return !self.firewall_engine->check_inbound(pkt); // true = drop
-    }
-
-    static bool step_firewall_track_outbound(PacketConsumer& self, Net::ParsedPacket& pkt) {
-        if (!Config::global_state.enable_firewall.load(std::memory_order_relaxed)) return false;
-        if (self.firewall_engine) self.firewall_engine->track_outbound(pkt);
-        return false;
-    }
-
-    static bool step_block_device_downstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
-        if (!pkt.is_valid_ipv4() || !self.firewall_engine) return false;
-        return self.firewall_engine->is_blocked_ip(pkt.ipv4->daddr);
-    }
-
-    static bool step_block_device_upstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
-        if (!pkt.is_valid_ipv4() || !self.firewall_engine) return false;
-        return self.firewall_engine->is_blocked_ip(pkt.ipv4->saddr);
-    }
-
-    static bool step_device_shaper_downstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
-        if (!pkt.is_valid_ipv4() || !self.device_shaper) return false;
-        size_t ai   = self.device_shaper->active_idx.load(std::memory_order_acquire);
-        auto shaper = self.device_shaper->buffers[ai].find(pkt.ipv4->daddr);
-        if (shaper) {
-            RouteContext c{self.tx_fd, shaper};
-            shaper_handler(c, pkt.raw_span, 2, self.core_id);
-            return true;
-        }
-        return false;
-    }
-
-    static bool step_device_shaper_upstream(PacketConsumer& self, Net::ParsedPacket& pkt) {
-        if (!pkt.is_valid_ipv4() || !self.device_shaper) return false;
-        size_t ai   = self.device_shaper->active_idx.load(std::memory_order_acquire);
-        auto shaper = self.device_shaper->buffers[ai].find(pkt.ipv4->saddr);
-        if (shaper) {
-            RouteContext c{self.tx_fd, shaper};
-            shaper_handler(c, pkt.raw_span, 2, self.core_id);
-            return true;
         }
         return false;
     }
@@ -522,18 +211,19 @@ public:
         self.stats.bytes += pkt.raw_span.size();
         self.stats.prio_pkts[pi]++;
         self.stats.prio_bytes[pi] += pkt.raw_span.size();
+        self.callbacks.dispatch_packet(pkt, prio);
         size_t mode = Telemetry::instance().effective_bridge_mode.load(std::memory_order_acquire) ? 1U : 0U;
         self.routes[mode][pi](self.ctx, pkt.raw_span, pi, self.core_id);
         return true;
     }
 
-    // ── Packet entry point ────────────────────────────────────────────────────
+    // Packet entry point
     void on_packet_event(Net::ParsedPacket& pkt) {
         for (auto* step : pipeline.steps)
             if (step && step(*this, pkt)) break;
         // Batch-commit telemetry every 32 packets (& 31 avoids division)
         if ((stats.pkts & 31) == 0) {
-            Telemetry::instance().commit_batch(stats, core_id);
+            callbacks.dispatch_batch(stats, core_id);
             stats.reset();
         }
     }
@@ -546,9 +236,23 @@ struct RxFrameCopy {
     uint16_t                len = 0;
 };
 
+// Blocks for period_ms or until the shared watchdog stop eventfd has a token.
+// Returns 0 on timeout, 1 on stop, -1 on poll failure.
+int wait_watchdog_period(int stop_efd, int period_ms) {
+    struct pollfd pfd{stop_efd, POLLIN, 0};
+    const int pr = ::poll(&pfd, 1, period_ms);
+    if (pr < 0) return errno == EINTR ? 0 : -1;
+    if ((pfd.revents & POLLIN) != 0) {
+        uint64_t v{};
+        (void)::eventfd_read(stop_efd, &v);
+        return 1;
+    }
+    return 0;
+}
+
 } // anonymous namespace
 
-// ─── App method definitions ───────────────────────────────────────────────────
+// App method definitions
 
 std::expected<void, std::string> App::sync_lan_subnet_and_dhcp_gateway() {
     auto parse_kern = [](const std::string& s) -> std::optional<Net::IPv4Net> {
@@ -571,8 +275,7 @@ std::expected<void, std::string> App::sync_lan_subnet_and_dhcp_gateway() {
         if (!re) return std::unexpected(std::string("ROUTER_IP: ") + re.error());
         const std::string k = Utils::Network::get_local_ip(Config::iface_lan());
         effective_lan_gateway_ = parse_kern(k).value_or(*re);
-        if (dhcp_engine) dhcp_engine->set_router_ip(effective_lan_gateway_);
-        if (dns_engine)  dns_engine->set_gateway_ip(effective_lan_gateway_);
+        if (dhcp_engine_) dhcp_engine_->set_router_ip(effective_lan_gateway_);
         return {};
     }
 
@@ -635,54 +338,41 @@ std::expected<void, std::string> App::sync_lan_subnet_and_dhcp_gateway() {
                         "with ROUTER_IP inside the pool subnet, or assign manually."));
 
     effective_lan_gateway_ = *kern;
-    if (dhcp_engine) dhcp_engine->set_router_ip(effective_lan_gateway_);
-    if (dns_engine)  dns_engine->set_gateway_ip(effective_lan_gateway_);
+    if (dhcp_engine_) dhcp_engine_->set_router_ip(effective_lan_gateway_);
     std::println("[App] DHCP gateway {} (kernel LAN, pool subnet /{})",
         Config::ip_to_str(effective_lan_gateway_), prefix);
     return {};
 }
 
 void App::refresh_dhcp_router_from_kernel() noexcept {
-    if (!dhcp_engine || !Config::global_state.enable_dhcp.load(std::memory_order_relaxed))
+    if (!dhcp_engine_ || !Config::global_state.enable_dhcp.load(std::memory_order_relaxed))
         return;
     const std::string s = Utils::Network::get_local_ip(Config::iface_lan());
     if (s.empty()) return;
     auto e = Config::parse_ip_str(s);
     if (!e) return;
-    if (*e != dhcp_engine->router_ip_snapshot()) {
-        dhcp_engine->set_router_ip(*e);
-        if (dns_engine) dns_engine->set_gateway_ip(*e);
+    if (*e != dhcp_engine_->router_ip_snapshot()) {
+        dhcp_engine_->set_router_ip(*e);
     }
 }
 
 App::App() {
-    shutdown_future = shutdown_promise.get_future();
+    telemetry_observer_ = std::make_unique<TelemetryObserver>();
 
     // Service flags are loaded from config/config.txt before App is constructed;
     // do not override them here.
-    nat_engine      = std::make_shared<Logic::NatEngine>();
-    dns_engine      = std::make_shared<Logic::DnsEngine>();
-    dhcp_engine     = std::make_shared<Logic::DhcpEngine>(
+    nat_engine_     = std::make_unique<Logic::NatEngine>();
+    dhcp_engine_    = std::make_unique<Logic::DhcpEngine>(
         Config::ROUTER_IP,
         Logic::DhcpPoolConfig{
             Net::parse_ipv4(Config::DHCP_POOL_START.c_str()),
             Net::parse_ipv4(Config::DHCP_POOL_END.c_str()),
             Config::DHCP_LEASE_DURATION});
-    firewall_engine = std::make_shared<Logic::FirewallEngine>();
-    if (Config::global_state.enable_upnp.load(std::memory_order_relaxed))
-        upnp_engine = std::make_shared<Logic::UpnpEngine>(nat_engine, Config::ROUTER_IP);
-    qos_config       = std::make_shared<QoSConfig>();
-    device_shaper_dl = std::make_shared<QoSConfig>();
-    device_shaper_ul = std::make_shared<QoSConfig>();
-    {
-        std::lock_guard<std::mutex> lk(Config::ip_limit_mutex);
-        qos_config->update(Config::IP_LIMIT_TABLE, Config::IP_LIMIT_COUNT);
-    }
 }
 
 App::~App() {
-    // Stop data-plane workers (Cores 2/3) before watchdog (Core 1) so
-    // the watchdog does not read stale shaper state after workers exit.
+    // Stop data-plane workers (Cores 2/3) before control service threads so
+    // they do not read stale shaper state after workers exit.
     running_workers.store(false, std::memory_order_relaxed);
     wake_proc_threads_for_shutdown();
     if (worker_downstream.joinable()) worker_downstream.join();
@@ -690,8 +380,10 @@ App::~App() {
     close_worker_poll_fds();
     running_watchdog.store(false, std::memory_order_relaxed);
     wake_watchdog_for_shutdown();
-    if (watchdog.joinable()) watchdog.join();
+    for (auto& t : service_threads) if (t.joinable()) t.join();
+    if (control_event_thread.joinable()) control_event_thread.join();
     close_watchdog_stop_efd();
+    close_dhcp_cfg_efd();
 }
 
 std::expected<void, std::string> App::open_worker_poll_fds_for_start() {
@@ -699,7 +391,7 @@ std::expected<void, std::string> App::open_worker_poll_fds_for_start() {
     for (auto& w : worker_poll_) {
         w.frame_efd = ::eventfd(0, EFD_CLOEXEC);
         // Semaphore mode: RX and proc threads both poll+read the same stop_efd; a single
-        // non-semaphore write(1) wakes both but only one read drains — the other blocks
+        // non-semaphore write(1) wakes both but only one read drains - the other blocks
         // forever on read(), so App::stop() hangs on worker join.
         w.stop_efd  = ::eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE);
         if (w.frame_efd < 0 || w.stop_efd < 0) {
@@ -736,7 +428,7 @@ void App::wake_proc_threads_for_shutdown() {
 
 void App::wake_watchdog_for_shutdown() {
     if (watchdog_stop_efd_ >= 0)
-        (void)::eventfd_write(watchdog_stop_efd_, 1);
+        (void)::eventfd_write(watchdog_stop_efd_, WATCHDOG_SERVICE_COUNT + 1);
 }
 
 void App::close_watchdog_stop_efd() {
@@ -746,10 +438,36 @@ void App::close_watchdog_stop_efd() {
     }
 }
 
+void App::close_dhcp_cfg_efd() {
+    if (dhcp_cfg_efd_ >= 0) {
+        ::close(dhcp_cfg_efd_);
+        dhcp_cfg_efd_ = -1;
+    }
+}
+
+void App::applyDhcpConfig() {
+    if (!dhcp_engine_) return;
+    auto pool_s = Config::parse_ip_str(Config::DHCP_POOL_START);
+    auto pool_e = Config::parse_ip_str(Config::DHCP_POOL_END);
+    if (!pool_s || !pool_e) {
+        std::println(stderr, "[DHCP] Invalid pool bounds: {} / {}",
+            pool_s ? "" : pool_s.error(), pool_e ? "" : pool_e.error());
+        return;
+    }
+    if (auto dr = dhcp_engine_->reconfigure({*pool_s, *pool_e, Config::DHCP_LEASE_DURATION}); !dr) {
+        std::println(stderr, "[DHCP] reconfigure failed: {}", dr.error());
+        return;
+    }
+    if (auto s = sync_lan_subnet_and_dhcp_gateway(); !s)
+        std::println(stderr, "[DHCP] LAN subnet sync after pool change: {}", s.error());
+    if (auto sr = Config::save_config(); !sr)
+        std::println(stderr, "[Config] save after DHCP change: {}", sr.error());
+}
+
 void App::stop() {
     if (shutdown_sequence_started_.exchange(true, std::memory_order_acq_rel)) return;
-    // Stop data-plane workers (Cores 2/3) before watchdog (Core 1) so
-    // the watchdog does not read stale shaper state after workers exit.
+    // Stop data-plane workers (Cores 2/3) before control service threads so
+    // they do not read stale shaper state after workers exit.
     running_workers.store(false, std::memory_order_relaxed);
     wake_proc_threads_for_shutdown();
     if (worker_downstream.joinable()) worker_downstream.join();
@@ -757,9 +475,14 @@ void App::stop() {
     close_worker_poll_fds();
     running_watchdog.store(false, std::memory_order_release);
     wake_watchdog_for_shutdown();
-    if (watchdog.joinable()) watchdog.join();
+    for (auto& t : service_threads) if (t.joinable()) t.join();
+    if (control_event_thread.joinable()) control_event_thread.join();
     close_watchdog_stop_efd();
-    std::call_once(shutdown_notify_once_, [this]() { shutdown_promise.set_value(); });
+    {
+        std::lock_guard lock(shutdown_mutex_);
+        shutdown_complete_.store(true, std::memory_order_release);
+    }
+    shutdown_cv_.notify_all();
 }
 
 std::expected<void, std::string> App::init() {
@@ -773,12 +496,12 @@ std::expected<void, std::string> App::init() {
     if (auto s = sync_lan_subnet_and_dhcp_gateway(); !s) return s;
 
     if (Config::global_state.enable_nat.load(std::memory_order_relaxed)) {
-        auto w = resolve_nat_wan_ip();
+        auto w = forwarding_plane_.resolve_nat_wan_ip();
         if (!w) return std::unexpected(w.error());
-        nat_engine->set_wan_ip(*w);
+        nat_engine_->set_wan_ip(*w);
         std::println("[App] NAT WAN address: {}", Config::ip_to_str(*w));
     } else {
-        nat_engine->set_wan_ip(Net::IPv4Net{});
+        nat_engine_->set_wan_ip(Net::IPv4Net{});
     }
     return {};
 }
@@ -791,46 +514,6 @@ void App::start() {
     tel.mode_config_dirty.store(false, std::memory_order_relaxed);
     tel.effective_acceleration.store(accel, std::memory_order_release);
     tel.effective_bridge_mode.store(!accel, std::memory_order_release);
-    {
-        std::array<Config::StaticDnsRecord, Config::MAX_STATIC_DNS> dns_snapshot{};
-        size_t dns_count =
-            Config::copy_static_dns_snapshot(dns_snapshot.data(), dns_snapshot.size());
-        std::lock_guard<std::mutex> lock(tel.dns_pending_mutex);
-        tel.dns_upstream_primary_pending = Config::DNS_UPSTREAM_PRIMARY;
-        tel.dns_upstream_secondary_pending = Config::DNS_UPSTREAM_SECONDARY;
-        tel.dns_redirect_pending =
-            Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed);
-        tel.dns_static_pending_count = dns_count;
-        for (size_t i = 0; i < dns_count; ++i) {
-            std::strncpy(
-                tel.dns_static_pending[i].hostname.data(),
-                dns_snapshot[i].hostname.data(), 63);
-            tel.dns_static_pending[i].hostname[63] = '\0';
-            std::string ip = Config::ip_to_str(dns_snapshot[i].ip);
-            std::strncpy(tel.dns_static_pending[i].ip_str.data(), ip.c_str(), 15);
-            tel.dns_static_pending[i].ip_str[15] = '\0';
-        }
-    }
-
-    // Apply DNS upstream + static records from config before workers run. Watchdog only
-    // refreshes when dns_config_dirty (GUI Apply); without this, upstream stayed 0 on headless boot.
-    if (dns_engine) {
-        auto up_pri = Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY);
-        auto up_sec = Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY);
-        dns_engine->set_upstream(
-            {up_pri.value_or(Net::IPv4Net{}), up_sec.value_or(Net::IPv4Net{})});
-        dns_engine->set_redirect(
-            Config::DNS_REDIRECT_ENABLED.load(std::memory_order_relaxed));
-        dns_engine->set_gateway_ip(effective_lan_gateway_);
-        dns_engine->reload_static_records();
-        const Net::IPv4Net eff_pri = up_pri.value_or(Net::IPv4Net{});
-        const Net::IPv4Net eff_sec = up_sec.value_or(Net::IPv4Net{});
-        if (eff_pri.raw() == 0 && eff_sec.raw() == 0) {
-            std::println(stderr,
-                "[DNS] No valid upstream DNS (DNS_UPSTREAM_PRIMARY / SECONDARY). "
-                "Clients using the router as DNS cannot resolve names.");
-        }
-    }
 
     HPGTP::System::Optimizer::lock_cpu_frequency();
 
@@ -842,43 +525,59 @@ void App::start() {
     base_ul_mbps = tel.qos_global_ul_mbps_pending.load(std::memory_order_relaxed);
     tel.effective_qos_global_dl_mbps.store(base_dl_mbps, std::memory_order_release);
     tel.effective_qos_global_ul_mbps.store(base_ul_mbps, std::memory_order_release);
-    global_shaper_dl = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_dl_mbps});
-    global_shaper_ul = std::make_shared<Traffic::Shaper>(Traffic::Mbps{base_ul_mbps});
+    shaper_dl_ = std::make_unique<Traffic::Shaper>(Traffic::Mbps{base_dl_mbps});
+    shaper_ul_ = std::make_unique<Traffic::Shaper>(Traffic::Mbps{base_ul_mbps});
 
-    // DHCP gateway tracks kernel via DhcpEngine::set_router_ip; local-delivery uses
-    // this snapshot at worker start (no per-packet hot-path update).
-    Net::IPv4Net gw_ip = effective_lan_gateway_;
-    if (gw_ip.raw() == 0) {
-        auto gw_e = Config::parse_ip_str(Config::ROUTER_IP);
-        if (!gw_e) {
-            std::println(stderr, "[App] Invalid ROUTER_IP: {}", gw_e.error());
-            return;
-        }
-        gw_ip = *gw_e;
-    }
+    dl_events_.register_observer(telemetry_observer_.get());
+    ul_events_.register_observer(telemetry_observer_.get());
+
+    shaper_dl_->set_tx_result_callback(
+        Traffic::TxResultCallback([this](Traffic::TxResult result, size_t bytes) {
+            dl_events_.dispatch_tx_result(result, bytes);
+            if (result == Traffic::TxResult::Fatal)
+                std::println(stderr, "[App] downstream shaper TX callback: fatal after {} bytes", bytes);
+        }));
+    shaper_ul_->set_tx_result_callback(
+        Traffic::TxResultCallback([this](Traffic::TxResult result, size_t bytes) {
+            ul_events_.dispatch_tx_result(result, bytes);
+            if (result == Traffic::TxResult::Fatal)
+                std::println(stderr, "[App] upstream shaper TX callback: fatal after {} bytes", bytes);
+        }));
+
     if (auto pr = open_worker_poll_fds_for_start(); !pr) {
         std::println(stderr, "[App] {}", pr.error());
         return;
     }
 
     if (watchdog_stop_efd_ < 0) {
-        watchdog_stop_efd_ = ::eventfd(0, EFD_CLOEXEC);
+        watchdog_stop_efd_ = ::eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE);
         if (watchdog_stop_efd_ < 0) {
             std::println(stderr, "[Fatal] watchdog stop eventfd: {}",
                 std::strerror(errno));
             std::exit(1);
         }
     }
-    running_watchdog.store(true, std::memory_order_relaxed);
-    watchdog = std::thread([this]() { watchdog_loop(); });
-
-    refresh_forward_layer2_macs();
-    {
-        const unsigned fa = g_fwd_active.load(std::memory_order_acquire);
-        if (!g_fwd_snap[fa].ready)
-            std::println(stderr,
-                "[App] Warning: Ethernet MACs for L3 forwarding not ready (interfaces or default route / ARP).");
+    if (dhcp_cfg_efd_ < 0) {
+        dhcp_cfg_efd_ = ::eventfd(0, EFD_CLOEXEC);
+        if (dhcp_cfg_efd_ < 0) {
+            std::println(stderr, "[Fatal] DHCP config eventfd: {}",
+                std::strerror(errno));
+            std::exit(1);
+        }
     }
+    running_watchdog.store(true, std::memory_order_relaxed);
+    service_threads[0] = std::thread(&App::watchdog_telemetry_loop, this);
+    service_threads[1] = std::thread(&App::watchdog_l2_refresh_loop, this);
+    service_threads[2] = std::thread(&App::watchdog_wan_tracker_loop, this);
+    service_threads[3] = std::thread(&App::watchdog_dhcp_worker_loop, this);
+    service_threads[4] = std::thread(&App::watchdog_qos_loop, this);
+    service_threads[5] = std::thread(&App::watchdog_nat_ticker_loop, this);
+    control_event_thread = std::thread(&App::control_event_loop, this);
+
+    forwarding_plane_.refresh_l2();
+    if (!forwarding_plane_.snapshot().ready)
+        std::println(stderr,
+            "[App] Warning: Ethernet MACs for L3 forwarding not ready (interfaces or default route / ARP).");
 
     running_workers.store(true, std::memory_order_relaxed);
 
@@ -888,9 +587,8 @@ void App::start() {
             worker_event_loop(std::move(iface), std::move(cfg), *ps);
         },
         std::move(iface_wan),
-        PacketWorkerConfig{ fd_lan, -1, 2, global_shaper_dl, nat_engine, dns_engine,
-                            qos_config, device_shaper_dl, dhcp_engine,
-                            firewall_engine, gw_ip });
+        PacketWorkerConfig{ fd_lan, 2, shaper_dl_.get(), nat_engine_.get(),
+                            dhcp_engine_.get(), &dl_events_ });
 
     worker_upstream = std::thread(
         [this, ps = &worker_poll_[1]](std::unique_ptr<Engine::RawSocketManager> iface,
@@ -898,19 +596,21 @@ void App::start() {
             worker_event_loop(std::move(iface), std::move(cfg), *ps);
         },
         std::move(iface_lan),
-        PacketWorkerConfig{ fd_wan, fd_lan, 3, global_shaper_ul, nat_engine, dns_engine,
-                            qos_config, device_shaper_ul, dhcp_engine,
-                            firewall_engine, gw_ip });
+        PacketWorkerConfig{ fd_wan, 3, shaper_ul_.get(), nat_engine_.get(),
+                            dhcp_engine_.get(), &ul_events_ });
 
     std::println("[App] Data plane and control plane started.");
 }
 
 void App::wait_for_shutdown() {
-    shutdown_future.wait();
-    std::println("\n[System] Shutdown signal received, core services terminated gracefully.");
+    std::unique_lock lock(shutdown_mutex_);
+    shutdown_cv_.wait(lock, [this]() {
+        return shutdown_complete_.load(std::memory_order_acquire);
+    });
+    std::println("\n[System] GUI shutdown requested, core services terminated gracefully.");
 }
 
-// ─── Worker event loop (Core 2 / Core 3) ─────────────────────────────────────
+// Worker event loop (Core 2 / Core 3)
 // RX thread: blocking poll(2) on AF_PACKET and stop_efd; copy each frame into an
 // SPSC ring. Processing thread: parse and run PacketConsumer::on_packet_event;
 // waits on frame_efd/stop_efd with no periodic timeout.
@@ -918,10 +618,11 @@ void App::wait_for_shutdown() {
 void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
                              PacketWorkerConfig cfg,
                              WorkerPollSync& poll_sync) {
+    HPGTP::System::Optimizer::set_current_thread_affinity_control(); // container: control cores 0-1
     std::println("[App] Core {} pipeline mounted and ready.", cfg.core_id);
 
     const int rx_fd_saved = rx_mgr->get_fd();
-    PacketConsumer consumer(rx_fd_saved, cfg);
+    PacketConsumer consumer(rx_fd_saved, cfg, forwarding_plane_);
     Net::SpscRingBuffer<RxFrameCopy, 1024> frame_q{};
 
     std::thread rx_thread(
@@ -977,24 +678,14 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
         while (this->running_workers.load(std::memory_order_relaxed)) {
             RxFrameCopy copy{};
             while (frame_q.pop(copy)) {
+                consumer.callbacks.dispatch_frame(
+                    std::span<const uint8_t>(copy.data.data(), copy.len));
                 auto pkt = Net::ParsedPacket::parse(
                     std::span<uint8_t>(copy.data.data(), copy.len));
                 consumer.on_packet_event(pkt);
             }
 
             if (cfg.route_shaper) cfg.route_shaper->process_queue(cfg.tx_fd);
-
-            if (consumer.qos_config
-                && Config::IP_LIMIT_ACTIVE.load(std::memory_order_relaxed)) {
-                size_t ai =
-                    consumer.qos_config->active_idx.load(std::memory_order_acquire);
-                consumer.qos_config->buffers[ai].for_each_occupied([&](auto& shaper) {
-                    shaper->process_queue(cfg.tx_fd);
-                });
-            }
-
-            Telemetry::instance().core_metrics[cfg.core_id].last_heartbeat.fetch_add(
-                1, std::memory_order_relaxed);
 
             if (poll_sync.frame_efd < 0 || poll_sync.stop_efd < 0) break;
 
@@ -1022,516 +713,120 @@ void App::worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
     rx_thread.join();
 }
 
-// ─── Watchdog loop (Core 1, 1 Hz timerfd) ────────────────────────────────────
+// Watchdog service threads (control cores 0-1). Each task owns its own
+// thread and blocks on the shared stop eventfd with a period timeout.
 
-void App::watchdog_loop() {
-    HPGTP::System::Optimizer::set_current_thread_affinity(1);
+void App::watchdog_telemetry_loop() {
+    HPGTP::System::Optimizer::set_current_thread_affinity_control();
     auto& tel = Telemetry::instance();
-
-    int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
-    if (tfd == -1) {
-        std::println(stderr, "[App] Fatal: timerfd_create: {}", std::strerror(errno));
-        running_watchdog.store(false, std::memory_order_relaxed);
-        std::call_once(shutdown_notify_once_, [this]() { shutdown_promise.set_value(); });
-        return;
-    }
-
-    struct itimerspec its{};
-    its.it_value.tv_sec    = 1;
-    its.it_interval.tv_sec = 1;
-    if (timerfd_settime(tfd, 0, &its, nullptr) == -1) {
-        std::println(stderr, "[App] Fatal: timerfd_settime: {}", std::strerror(errno));
-        ::close(tfd);
-        running_watchdog.store(false, std::memory_order_relaxed);
-        std::call_once(shutdown_notify_once_, [this]() { shutdown_promise.set_value(); });
-        return;
-    }
-
-    uint64_t expirations;
-    uint64_t last_bytes[4]  = {};
-    uint64_t stat_idle[4]   = {};
-    uint64_t stat_total[4]  = {};
-    uint64_t watchdog_tick  = 0;
-    int      last_throttle_pct = 100;
-
-    auto& si = tel.sys_info;
-
-    // Raw-fd sysfs reader — no heap, no ifstream
-    auto read_sysfd = [](const char* path, std::span<char> out) {
-        int fd = ::open(path, O_RDONLY);
-        if (fd < 0) { out[0] = '\0'; return; }
-        ssize_t n = ::read(fd, out.data(), out.size() - 1);
-        ::close(fd);
-        if (n > 0) {
-            out[n] = '\0';
-            if (out[n - 1] == '\n') out[n - 1] = '\0';
-        } else {
-            out[0] = '\0';
-        }
-    };
-
-    // Interface scan — shared by 5-tick refresh and on-demand UI rescan paths
-    auto scan_ifaces = [&]() {
-        uint8_t cnt = 0;
-        DIR* d = opendir("/sys/class/net");
-        if (d) {
-            struct dirent* de;
-            while ((de = readdir(d)) != nullptr &&
-                   cnt < Telemetry::SystemInfo::MAX_IFACES) {
-                if (de->d_name[0] == '.'
-                    || std::string_view{de->d_name} == "lo")
-                    continue;
-                {
-                    std::string_view name_sv{de->d_name};
-                    auto nn = name_sv.copy(si.ifaces[cnt].name.data(), 15);
-                    si.ifaces[cnt].name[nn] = '\0';
-                }
-                char path[64];
-                snprintf(path, sizeof(path),
-                    "/sys/class/net/%s/operstate", de->d_name);
-                char sbuf[8]{};
-                int sfd = ::open(path, O_RDONLY);
-                if (sfd >= 0) {
-                    ssize_t n = ::read(sfd, sbuf, sizeof(sbuf) - 1);
-                    ::close(sfd);
-                    if (n > 0 && sbuf[n - 1] == '\n') sbuf[n - 1] = '\0';
-                }
-                {
-                    std::string_view op_sv{sbuf[0] ? sbuf : "unknown"};
-                    auto no = op_sv.copy(si.ifaces[cnt].operstate.data(), 7);
-                    si.ifaces[cnt].operstate[no] = '\0';
-                }
-                ++cnt;
-            }
-            closedir(d);
-        }
-        si.iface_count.store(cnt, std::memory_order_release);
-    };
-
+    Core::TelemetryCollector telemetry(tel);
+    uint64_t tick5 = 0;
+    uint8_t prev_pe = 0;
     while (running_watchdog.load(std::memory_order_acquire)) {
-        const int rescan_fd = si.rescan_poll_fd();
-        struct pollfd pfds[3]{};
-        pfds[0] = { tfd, POLLIN, 0 };
-        pfds[1] = { watchdog_stop_efd_, POLLIN, 0 };
-        int nfds = 2;
-        if (rescan_fd >= 0) {
-            pfds[2] = { rescan_fd, POLLIN, 0 };
-            nfds    = 3;
+        const int r = wait_watchdog_period(watchdog_stop_efd_, 1000);
+        if (r != 0) break;
+        if (!running_watchdog.load(std::memory_order_acquire)) break;
+        telemetry.tick1Hz();
+        if (++tick5 % 5 == 0) telemetry.tick5s();
+        const uint8_t pe = tel.raw_socket_poll_errors.load(std::memory_order_relaxed);
+        if (pe != prev_pe && pe != 0) {
+            std::println(stderr, "[App] Packet RX poll failure (telemetry mask {})", pe);
+            prev_pe = pe;
         }
-        int pr = poll(pfds, nfds, -1);
+    }
+}
+
+void App::watchdog_l2_refresh_loop() {
+    HPGTP::System::Optimizer::set_current_thread_affinity_control();
+    Core::L2ForwardRefresher l2_refresher([this]() { forwarding_plane_.refresh_l2(); });
+    while (running_watchdog.load(std::memory_order_acquire)) {
+        const int r = wait_watchdog_period(watchdog_stop_efd_, 5000);
+        if (r != 0) break;
+        if (!running_watchdog.load(std::memory_order_acquire)) break;
+        l2_refresher.tick5s();
+    }
+}
+
+void App::watchdog_wan_tracker_loop() {
+    HPGTP::System::Optimizer::set_current_thread_affinity_control();
+    Core::NatWanTracker wan_tracker(*nat_engine_,
+        [this]() { return Utils::Network::get_local_ip(Config::iface_wan()); });
+    while (running_watchdog.load(std::memory_order_acquire)) {
+        const int r = wait_watchdog_period(watchdog_stop_efd_, 5000);
+        if (r != 0) break;
+        if (!running_watchdog.load(std::memory_order_acquire)) break;
+        wan_tracker.tick5s();
+    }
+}
+
+void App::watchdog_dhcp_worker_loop() {
+    HPGTP::System::Optimizer::set_current_thread_affinity_control();
+    Core::DhcpWorker dhcp_worker(*dhcp_engine_, lan_fd_,
+        [this]() { refresh_dhcp_router_from_kernel(); });
+    uint64_t tick5 = 0;
+    while (running_watchdog.load(std::memory_order_acquire)) {
+        const int r = wait_watchdog_period(watchdog_stop_efd_, 1000);
+        if (r != 0) break;
+        if (!running_watchdog.load(std::memory_order_acquire)) break;
+        dhcp_worker.tick1Hz();
+        if (++tick5 % 5 == 0) dhcp_worker.tick5s();
+    }
+}
+
+void App::watchdog_qos_loop() {
+    HPGTP::System::Optimizer::set_current_thread_affinity_control();
+    auto& tel = Telemetry::instance();
+    Core::QosController qos(tel, shaper_dl_.get(), shaper_ul_.get(),
+                            base_dl_mbps, base_ul_mbps);
+    while (running_watchdog.load(std::memory_order_acquire)) {
+        const int r = wait_watchdog_period(watchdog_stop_efd_, 1000);
+        if (r != 0) break;
+        if (!running_watchdog.load(std::memory_order_acquire)) break;
+        qos.tick1Hz();
+    }
+}
+
+void App::watchdog_nat_ticker_loop() {
+    HPGTP::System::Optimizer::set_current_thread_affinity_control();
+    Core::EngineTicker ticker(*nat_engine_);
+    while (running_watchdog.load(std::memory_order_acquire)) {
+        const int r = wait_watchdog_period(watchdog_stop_efd_, 1000);
+        if (r != 0) break;
+        if (!running_watchdog.load(std::memory_order_acquire)) break;
+        ticker.tick1Hz();
+    }
+}
+
+// Event-driven control thread: GUI writes dhcp_cfg_efd_; this thread applies
+// the DHCP config. Also handles the shared shutdown token.
+void App::control_event_loop() {
+    HPGTP::System::Optimizer::set_current_thread_affinity_control();
+    while (running_watchdog.load(std::memory_order_acquire)) {
+        struct pollfd pfds[2]{};
+        pfds[0] = { dhcp_cfg_efd_, POLLIN, 0 };
+        pfds[1] = { watchdog_stop_efd_, POLLIN, 0 };
+        const int pr = ::poll(pfds, 2, -1);
         if (pr < 0) {
             if (errno == EINTR) continue;
             break;
         }
-
         if ((pfds[1].revents & POLLIN) != 0) {
-            uint64_t v;
+            uint64_t v{};
             (void)::eventfd_read(watchdog_stop_efd_, &v);
-            continue;
+            break;
         }
-
-        bool timer_fired = (pfds[0].revents & POLLIN) != 0;
-        bool force_scan  = false;
-
-        if (timer_fired && ::read(tfd, &expirations, sizeof(expirations)) <= 0)
-            timer_fired = false;
-        if (nfds == 3 && (pfds[2].revents & POLLIN)) {
-            si.consume_rescan();
-            force_scan = true;
-        }
-
-        // On-demand rescan only — skip all 1 Hz work
-        if (force_scan && !timer_fired) {
-            scan_ifaces();
-            si.signal_done();
-            continue;
-        }
-        if (!timer_fired) continue;
-
-        // CPU temperature (1 Hz)
-        {
-            char tbuf[16]{};
-            int fd = ::open("/sys/class/thermal/thermal_zone0/temp", O_RDONLY);
-            if (fd >= 0) {
-                ssize_t n = ::read(fd, tbuf, sizeof(tbuf) - 1);
-                ::close(fd);
-                if (n > 0) tel.cpu_temp_celsius.store(
-                    atof(tbuf) / 1000.0, std::memory_order_relaxed);
-            }
-        }
-
-        // Per-core CPU load from /proc/stat (1 Hz)
-        {
-            char sbuf[1024]{};
-            int sfd = ::open("/proc/stat", O_RDONLY);
-            if (sfd >= 0) {
-                ssize_t n = ::read(sfd, sbuf, sizeof(sbuf) - 1);
-                ::close(sfd);
-                if (n > 0) {
-                    sbuf[n] = '\0';
-                    const char* p = sbuf;
-                    long nproc = ::sysconf(_SC_NPROCESSORS_ONLN);
-                    if (nproc < 1) nproc = 1;
-                    int max_ci = static_cast<int>(std::min<long>(
-                        nproc, static_cast<long>(tel.core_metrics.size())));
-                    for (int ci = 0; ci < max_ci; ++ci) {
-                        char tag[8];
-                        snprintf(tag, sizeof(tag), "cpu%d ", ci);
-                        const char* ln = strstr(p, tag);
-                        if (!ln) break;
-                        ln += strlen(tag);
-                        uint64_t user, nice, sys, idle, iowait, irq, softirq;
-                        if (sscanf(ln, "%lu %lu %lu %lu %lu %lu %lu",
-                                &user, &nice, &sys, &idle,
-                                &iowait, &irq, &softirq) == 7) {
-                            uint64_t total = user+nice+sys+idle+iowait+irq+softirq;
-                            uint64_t dt    = total - stat_total[ci];
-                            uint64_t di    = idle  - stat_idle[ci];
-                            int pct = (dt > 0) ? static_cast<int>(100*(dt-di)/dt) : 0;
-                            tel.core_metrics[ci].cpu_load_pct.store(
-                                pct, std::memory_order_relaxed);
-                            stat_total[ci] = total;
-                            stat_idle[ci]  = idle;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Shaper stats: hot path only increments atomics; log here at 1 Hz.
-        {
-            static uint64_t prev_ok = 0, prev_ovf = 0, prev_big = 0;
-            uint64_t ok   = tel.shaper_normal_tx_complete.load(std::memory_order_relaxed);
-            uint64_t ovf  = tel.shaper_queue_overflow_drops.load(std::memory_order_relaxed);
-            uint64_t big  = tel.shaper_oversized_drops.load(std::memory_order_relaxed);
-            uint64_t dok  = ok - prev_ok;
-            uint64_t dovf = ovf - prev_ovf;
-            uint64_t dbig = big - prev_big;
-            if (dok != 0 || dovf != 0 || dbig != 0) {
-                std::println(
-                    "[Shaper] last 1s: normal_tx_ok +{}, queue_overflow_drops +{}, oversized_drops +{}",
-                    dok, dovf, dbig);
-            }
-            prev_ok  = ok;
-            prev_ovf = ovf;
-            prev_big = big;
-        }
-
-        {
-            static uint64_t prev_ct = 0;
-            uint64_t ct = tel.conntrack_track_drops.load(std::memory_order_relaxed);
-            uint64_t dct = ct - prev_ct;
-            if (dct != 0) {
-                std::println(
-                    "[Conntrack] last 1s: track_drops (probe exhausted) +{}", dct);
-            }
-            prev_ct = ct;
-        }
-
-        {
-            static uint8_t prev_pe = 0;
-            uint8_t pe = tel.raw_socket_poll_errors.load(std::memory_order_relaxed);
-            if (pe != prev_pe && pe != 0) {
-                GUI::Dashboard::post_notification(
-                    QStringLiteral("Network"),
-                    QStringLiteral(
-                        "Packet RX poll failure (telemetry mask %1). See stderr / interface state.")
-                        .arg(pe));
-                prev_pe = pe;
-            }
-        }
-
-        // System info refresh every 5 ticks (5 s)
-        bool did_iface_scan = false;
-        ++watchdog_tick;
-
-        // First tick: report UPnP bind errors to GUI
-        if (watchdog_tick == 1 && upnp_engine) {
-            uint8_t errs = upnp_engine->bind_errors.load(std::memory_order_relaxed);
-            if (errs) {
-                const char* detail =
-                    (errs & 3) == 3 ? "SSDP (1900) and SOAP (5000)" :
-                    (errs & 1)      ? "SSDP (1900)" :
-                    (errs & 2)      ? "SOAP (5000)" : "SOAP listen";
-                GUI::Dashboard::post_notification(
-                    QStringLiteral("UPnP"),
-                    QStringLiteral("Port bind failed: %1. UPnP is partially disabled.")
-                        .arg(detail));
-            }
-        }
-
-        if (watchdog_tick % 5 == 0) {
-            read_sysfd("/etc/hostname",   std::span<char>(si.hostname));
-            read_sysfd("/proc/version",   std::span<char>(si.kernel_short));
-
-            char ubuf[32]{};
-            read_sysfd("/proc/uptime", std::span<char>(ubuf));
-            if (ubuf[0])
-                si.uptime_seconds.store(
-                    static_cast<uint64_t>(atof(ubuf)), std::memory_order_relaxed);
-
-            char mbuf[512]{};
-            int mfd = ::open("/proc/meminfo", O_RDONLY);
-            if (mfd >= 0) {
-                ssize_t nr = ::read(mfd, mbuf, sizeof(mbuf) - 1);
-                ::close(mfd);
-                if (nr > 0) {
-                    uint64_t total = 0, avail = 0;
-                    const char* mt = strstr(mbuf, "MemTotal:");
-                    const char* ma = strstr(mbuf, "MemAvailable:");
-                    if (mt) sscanf(mt, "MemTotal: %lu",     &total);
-                    if (ma) sscanf(ma, "MemAvailable: %lu", &avail);
-                    si.mem_total_kb.store(total, std::memory_order_relaxed);
-                    si.mem_avail_kb.store(avail, std::memory_order_relaxed);
-                }
-            }
-
-            scan_ifaces();
-            did_iface_scan = true;
-            refresh_forward_layer2_macs();
-            refresh_dhcp_router_from_kernel();
-
-            if (Config::global_state.enable_nat.load(std::memory_order_relaxed)
-                && trim_ws(Config::WAN_IP).empty()
-                && nat_engine) {
-                std::string s = Utils::Network::get_local_ip(Config::iface_wan());
-                if (!s.empty()) {
-                    auto e = Config::parse_ip_str(s);
-                    if (e && !is_invalid_nat_wan(*e)) {
-                        Net::IPv4Net cur = nat_engine->wan_ip_snapshot();
-                        if (e->raw() != cur.raw()) {
-                            nat_engine->set_wan_ip(*e);
-                            std::println("[App] NAT WAN address: {} -> {}",
-                                Config::ip_to_str(cur), Config::ip_to_str(*e));
-                        }
-                    }
-                }
-            }
-
-            // ARP table → Telemetry::device_table (5 Hz)
-            {
-                char arp[4096]{};
-                int afd = ::open("/proc/net/arp", O_RDONLY);
-                if (afd >= 0) {
-                    ssize_t nr = ::read(afd, arp, sizeof(arp) - 1);
-                    ::close(afd);
-                    uint8_t dcnt = 0;
-                    bool changed = false;
-                    const uint8_t prev_cnt =
-                        tel.device_count.load(std::memory_order_relaxed);
-                    if (nr > 0) {
-                        char* line = arp;
-                        char* end  = arp + nr;
-                        while (line < end && *line != '\n') ++line;
-                        if (line < end) ++line;
-                        while (line < end && dcnt < Telemetry::MAX_TRACKED_DEVICES) {
-                            char ip_str[20]{}, hw[8]{}, flags[8]{}, mac[20]{};
-                            if (sscanf(line, "%19s %7s %7s %19s",
-                                       ip_str, hw, flags, mac) == 4) {
-                                Net::IPv4Net ip{};
-                                if (Net::try_parse_ipv4(ip_str, ip) && strcmp(flags, "0x0") != 0) {
-                                    auto& slot = tel.device_table[dcnt];
-                                    if (slot.ip != ip) { slot.ip = ip; changed = true; }
-                                    std::array<char, 18> mac_buf{};
-                                    std::string_view mac_sv{mac};
-                                    auto nm = mac_sv.copy(mac_buf.data(), 17);
-                                    mac_buf[nm] = '\0';
-                                    if (std::memcmp(slot.mac.data(), mac_buf.data(),
-                                                    mac_buf.size()) != 0) {
-                                        slot.mac = mac_buf;
-                                        changed  = true;
-                                    }
-                                    ++dcnt;
-                                }
-                            }
-                            while (line < end && *line != '\n') ++line;
-                            if (line < end) ++line;
-                        }
-                    }
-                    if (dcnt != prev_cnt) changed = true;
-                    tel.device_count.store(dcnt, std::memory_order_release);
-                    if (changed)
-                        tel.device_table_revision.fetch_add(1, std::memory_order_release);
-                }
-            }
-        }
-
-        if (force_scan && !did_iface_scan) scan_ifaces();
-        if (force_scan) si.signal_done();
-
-        // Mode sync (GUI pending -> control-plane apply)
-        if (tel.mode_config_dirty.exchange(false, std::memory_order_acq_rel)) {
-            bool accel_on = tel.acceleration_pending.load(std::memory_order_relaxed);
-            Config::ENABLE_ACCELERATION.store(accel_on, std::memory_order_relaxed);
-            tel.effective_acceleration.store(accel_on, std::memory_order_release);
-            tel.effective_bridge_mode.store(!accel_on, std::memory_order_release);
-            std::println("[Mode] Applied: {}", accel_on ? "Acceleration" : "Bridge");
-        }
-
-        // Bandwidth (1 Hz)
-        uint64_t bd = tel.core_metrics[2].bytes.load(std::memory_order_relaxed);
-        uint64_t bu = tel.core_metrics[3].bytes.load(std::memory_order_relaxed);
-        std::println("[Monitor] DL: {:.2f} Mbps | UL: {:.2f} Mbps | Mode: {}",
-            (bd - last_bytes[2]) * 8.0 / 1e6,
-            (bu - last_bytes[3]) * 8.0 / 1e6,
-            tel.effective_bridge_mode.load(std::memory_order_acquire) ? "Bridge" : "Accel");
-        last_bytes[2] = bd;
-        last_bytes[3] = bu;
-
-        // Game port whitelist (GUI staging → double-buffer swap)
-        if (Config::GAME_PORTS_DIRTY.exchange(false, std::memory_order_acq_rel))
-            Config::apply_pended_game_ports();
-
-        // Device policy sync
-        if (Config::DEVICE_POLICY_DIRTY.exchange(false, std::memory_order_acq_rel)) {
-            const std::lock_guard<std::mutex> plk(Config::device_policy_mutex);
-            if (firewall_engine) firewall_engine->sync_blocked_ips_locked();
-
-            auto rebuild_device_shaper = [&](std::shared_ptr<QoSConfig>& cfg_ptr, bool use_dl) {
-                if (!cfg_ptr) return;
-                size_t active   = cfg_ptr->active_idx.load(std::memory_order_acquire);
-                size_t inactive = 1 - active;
-                cfg_ptr->buffers[inactive] = {};
-                for (size_t i = 0; i < Config::DEVICE_POLICY_COUNT; ++i) {
-                    const auto& p = Config::DEVICE_POLICY_TABLE[i];
-                    if (p.rate_limited && p.ip.raw() != 0)
-                        cfg_ptr->buffers[inactive].insert(
-                            p.ip, std::make_shared<Traffic::Shaper>(
-                                use_dl ? p.dl : p.ul));
-                }
-                cfg_ptr->active_idx.store(inactive, std::memory_order_release);
-            };
-            rebuild_device_shaper(device_shaper_dl, true);
-            rebuild_device_shaper(device_shaper_ul, false);
-            std::println("[Device] Policy synced: {} entries", Config::DEVICE_POLICY_COUNT);
-        }
-
-        // DNS config sync
-        if (dns_engine && tel.dns_config_dirty.exchange(false, std::memory_order_acq_rel)) {
-            std::string dns_primary;
-            std::string dns_secondary;
-            bool dns_redirect = false;
-            std::array<Telemetry::DnsPendingRecord, Config::MAX_STATIC_DNS> dns_records{};
-            size_t dns_record_count = 0;
-            {
-                std::lock_guard<std::mutex> lock(tel.dns_pending_mutex);
-                dns_primary = tel.dns_upstream_primary_pending;
-                dns_secondary = tel.dns_upstream_secondary_pending;
-                dns_redirect = tel.dns_redirect_pending;
-                dns_record_count =
-                    std::min(tel.dns_static_pending_count, dns_records.size());
-                for (size_t i = 0; i < dns_record_count; ++i)
-                    dns_records[i] = tel.dns_static_pending[i];
-            }
-
-            std::array<Config::StaticDnsRecord, Config::MAX_STATIC_DNS> dns_snapshot{};
-            size_t dns_snapshot_valid = 0;
-            for (size_t i = 0; i < dns_record_count; ++i) {
-                auto ip_e = Config::parse_ip_str(std::string_view{dns_records[i].ip_str.data()});
-                if (!ip_e) {
-                    std::println(stderr, "[DNS] Skipping static record (bad IP): {}",
-                        ip_e.error());
-                    continue;
-                }
-                dns_snapshot[dns_snapshot_valid].domain_hash =
-                    Config::dns_hash_hostname(dns_records[i].hostname.data());
-                dns_snapshot[dns_snapshot_valid].ip = *ip_e;
-                std::strncpy(
-                    dns_snapshot[dns_snapshot_valid].hostname.data(),
-                    dns_records[i].hostname.data(), 63);
-                dns_snapshot[dns_snapshot_valid].hostname[63] = '\0';
-                ++dns_snapshot_valid;
-            }
-
-            Config::DNS_UPSTREAM_PRIMARY = dns_primary;
-            Config::DNS_UPSTREAM_SECONDARY = dns_secondary;
-            Config::DNS_REDIRECT_ENABLED.store(dns_redirect, std::memory_order_relaxed);
-            Config::apply_static_dns_snapshot(dns_snapshot.data(), dns_snapshot_valid);
-
-            auto up_pri = Config::parse_ip_str(Config::DNS_UPSTREAM_PRIMARY);
-            auto up_sec = Config::parse_ip_str(Config::DNS_UPSTREAM_SECONDARY);
-            if (!up_pri)
-                std::println(stderr, "[DNS] Invalid DNS_UPSTREAM_PRIMARY: {}", up_pri.error());
-            if (!up_sec)
-                std::println(stderr, "[DNS] Invalid DNS_UPSTREAM_SECONDARY: {}", up_sec.error());
-            dns_engine->set_upstream(
-                {up_pri.value_or(Net::IPv4Net{}), up_sec.value_or(Net::IPv4Net{})});
-            {
-                const Net::IPv4Net p = up_pri.value_or(Net::IPv4Net{});
-                const Net::IPv4Net s = up_sec.value_or(Net::IPv4Net{});
-                if (p.raw() == 0 && s.raw() == 0) {
-                    std::println(stderr,
-                        "[DNS] No valid upstream DNS after apply; LAN DNS forwarding will not work.");
-                }
-            }
-            dns_engine->set_redirect(dns_redirect);
-            dns_engine->reload_static_records();
-            std::println("[DNS] Config applied: upstream {} / {}, redirect={}, static={}",
-                Config::DNS_UPSTREAM_PRIMARY, Config::DNS_UPSTREAM_SECONDARY,
-                dns_redirect ? "on":"off",
-                dns_snapshot_valid);
-        }
-
-        // DHCP config sync
-        if (dhcp_engine && tel.dhcp_config_dirty.exchange(false, std::memory_order_acq_rel)) {
-            auto pool_s = Config::parse_ip_str(Config::DHCP_POOL_START);
-            auto pool_e = Config::parse_ip_str(Config::DHCP_POOL_END);
-            if (!pool_s || !pool_e) {
-                std::println(stderr, "[DHCP] Invalid pool bounds: {} / {}",
-                    pool_s ? "" : pool_s.error(), pool_e ? "" : pool_e.error());
-            } else if (auto dr = dhcp_engine->reconfigure({
-                           *pool_s, *pool_e, Config::DHCP_LEASE_DURATION});
-                     !dr) {
-                std::println(stderr, "[DHCP] reconfigure failed: {}", dr.error());
-            } else {
-                std::println("[DHCP] Pool reconfigured: {} – {}, lease {}s",
-                    Config::DHCP_POOL_START, Config::DHCP_POOL_END,
-                    Config::DHCP_LEASE_DURATION.count());
-                if (auto s = sync_lan_subnet_and_dhcp_gateway(); !s)
-                    std::println(stderr, "[DHCP] LAN subnet sync after pool change: {}", s.error());
-            }
-        }
-
-        // 1 Hz engine ticks
-        if (nat_engine)      nat_engine->tick();
-        if (dns_engine)    { dns_engine->tick(); dns_engine->process_background_tasks(); }
-        if (dhcp_engine)     dhcp_engine->process_background_tasks(lan_fd_);
-        if (firewall_engine) { firewall_engine->tick(); firewall_engine->cleanup(); }
-
-        // Global bandwidth caps from QoS page (Apply button)
-        if (tel.qos_global_bw_dirty.exchange(false, std::memory_order_acq_rel)) {
-            base_dl_mbps = tel.qos_global_dl_mbps_pending.load(std::memory_order_relaxed);
-            base_ul_mbps = tel.qos_global_ul_mbps_pending.load(std::memory_order_relaxed);
-            tel.effective_qos_global_dl_mbps.store(base_dl_mbps, std::memory_order_release);
-            tel.effective_qos_global_ul_mbps.store(base_ul_mbps, std::memory_order_release);
-            int pct = tel.qos_throttle_pct.load(std::memory_order_relaxed);
-            double factor = pct / 100.0;
-            if (global_shaper_dl)
-                global_shaper_dl->set_rate_limit(Traffic::Mbps{base_dl_mbps * factor});
-            if (global_shaper_ul)
-                global_shaper_ul->set_rate_limit(Traffic::Mbps{base_ul_mbps * factor});
-            last_throttle_pct = pct;
-            std::println("[QoS] Global limits applied — base DL {:.1f} / UL {:.1f} Mbps (throttle {}%)",
-                base_dl_mbps, base_ul_mbps, pct);
-        }
-
-        // QoS throttle from GUI slider
-        {
-            int pct = tel.qos_throttle_pct.load(std::memory_order_relaxed);
-            if (pct != last_throttle_pct) {
-                last_throttle_pct = pct;
-                double factor = pct / 100.0;
-                if (global_shaper_dl)
-                    global_shaper_dl->set_rate_limit(Traffic::Mbps{base_dl_mbps * factor});
-                if (global_shaper_ul)
-                    global_shaper_ul->set_rate_limit(Traffic::Mbps{base_ul_mbps * factor});
-                std::println("[QoS] Throttle {}% — DL {:.1f} Mbps / UL {:.1f} Mbps",
-                    pct, base_dl_mbps * factor, base_ul_mbps * factor);
-            }
+        if ((pfds[0].revents & POLLIN) != 0) {
+            uint64_t v{};
+            (void)::eventfd_read(dhcp_cfg_efd_, &v);
+            if (running_watchdog.load(std::memory_order_acquire))
+                applyDhcpConfig();
         }
     }
+}
 
-    close(tfd);
+void App::request_dhcp_config_apply() {
+    if (dhcp_cfg_efd_ >= 0)
+        (void)::eventfd_write(dhcp_cfg_efd_, 1);
 }
 
 } // namespace HPGTP

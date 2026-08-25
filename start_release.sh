@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
-# start_release.sh — high-performance gaming traffic prioritizer (release / production GUI)
-# One-shot setup and launch for Raspberry Pi 5 + DSI 800x1280 portrait display
+# start_release.sh: high-performance gaming traffic prioritizer (release / production GUI)
+# One-shot setup and launch for Raspberry Pi (Cortex-A72) + DSI display
 #
 # Usage:  chmod +x start_release.sh && sudo ./start_release.sh
 #         Optional: user-owned build tree (e.g. after root-owned build/):
@@ -47,7 +47,6 @@ REQUIRED_PKGS=(
 
 OPTIONAL_PKGS=(
     qt6-qpa-plugins
-    speedtest-cli
 )
 
 pkg_installed() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"; }
@@ -156,6 +155,23 @@ if [[ "${HPGTP_SKIP_KERNEL_NET_PREP:-}" == "1" ]]; then
 else
     echo "    [3b] ip_forward=0, MASQUERADE -o $WAN_IFACE removed, dnsmasq stop, NM LAN unmanaged"
     sysctl -w net.ipv4.ip_forward=0 >/dev/null
+
+    # Userspace data plane forwards packets with raw sockets; the kernel must
+    # not see inbound TCP on the WAN, or it answers with RST and kills the
+    # forwarded connections. SSH on the WAN interface stays allowed.
+    NFT_BIN="$(command -v nft 2>/dev/null || true)"
+    [[ -z "$NFT_BIN" && -x /usr/sbin/nft ]] && NFT_BIN=/usr/sbin/nft
+    if [[ -n "$NFT_BIN" ]]; then
+        $NFT_BIN delete table inet hpgtp 2>/dev/null || true
+        $NFT_BIN add table inet hpgtp
+        $NFT_BIN add chain inet hpgtp input '{ type filter hook input priority 0; policy accept; }'
+        $NFT_BIN add rule inet hpgtp input iif "$WAN_IFACE" tcp dport 22 accept
+        $NFT_BIN add rule inet hpgtp input iif "$WAN_IFACE" drop
+        echo "        nft INPUT drop on $WAN_IFACE (SSH 22 kept): kernel cannot RST forwarded TCP"
+    else
+        echo "        [Warn] nft not found; kernel may RST forwarded TCP on $WAN_IFACE"
+    fi
+
     n=0
     command -v iptables >/dev/null 2>&1 && {
         while iptables -t nat -C POSTROUTING -o "$WAN_IFACE" -j MASQUERADE 2>/dev/null; do

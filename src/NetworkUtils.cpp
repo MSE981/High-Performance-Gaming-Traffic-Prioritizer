@@ -248,7 +248,7 @@ bool Network::set_iface_ipv4_and_prefix(const std::string& iface, const std::str
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return false;
 
-    // Names must not be ifr_addr / ifr_netmask — linux/netdevice.h macros break `struct ifreq ifr_*`.
+    // Names must not be ifr_addr / ifr_netmask - linux/netdevice.h macros break `struct ifreq ifr_*`.
     struct ifreq req_addr {};
     iface.copy(req_addr.ifr_name, IFNAMSIZ - 1);
     req_addr.ifr_name[IFNAMSIZ - 1] = '\0';

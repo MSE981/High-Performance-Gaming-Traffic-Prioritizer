@@ -71,9 +71,9 @@ std::expected<void, std::string> RawSocketManager::init() {
 }
 
 void RawSocketManager::notify_rx_poll_fatal(int err, std::uint8_t telemetry_flag) {
+    (void)err;
     Telemetry::instance().raw_socket_poll_errors.fetch_or(
         telemetry_flag, std::memory_order_relaxed);
-    if (poll_error_callback_) poll_error_callback_(err);
 }
 
 void RawSocketManager::do_poll(int timeout_ms) {
@@ -86,7 +86,7 @@ void RawSocketManager::do_poll(int timeout_ms) {
         const int e = errno;
         notify_rx_poll_fatal(e, 1);
         std::println(stderr,
-            "[Engine] poll failed on {}: {} — closing RX socket",
+            "[Engine] poll failed on {}: {}, closing RX socket",
             iface.data(), std::strerror(e));
         ::close(fd);
         fd = -1;

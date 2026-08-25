@@ -12,7 +12,7 @@
 
 namespace HPGTP::Logic {
 
-// DhcpHeader is an internal wire-format struct — hidden from all clients
+// DhcpHeader is an internal wire-format struct for this translation unit.
 #pragma pack(push, 1)
 struct DhcpHeader {
     uint8_t  op;
@@ -33,7 +33,7 @@ struct DhcpHeader {
 };
 #pragma pack(pop)
 
-// ── private helpers ──────────────────────────────────────────────────────────
+// private helpers
 
 std::expected<void, std::string> DhcpEngine::init_pool(Net::IPv4Net start_ip, Net::IPv4Net end_ip) {
     uint32_t start_h = start_ip.to_host().raw();
@@ -113,7 +113,7 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
     }
     Net::IPv4Net requested_ip{raw_requested_ip};
 
-    // Build and send response — all wire construction happens below
+    // Build and send response - all wire construction happens below
     auto send_response = [&](uint8_t type, Net::IPv4Net yiaddr) {
         alignas(64) std::array<uint8_t, 512> response{};
 
@@ -158,7 +158,8 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
         *o++ = 53; *o++ = 1; *o++ = type;
         *o++ = 1;  *o++ = 4; *o++ = 255; *o++ = 255; *o++ = 255; *o++ = 0;
         { uint32_t r = router_ip.raw(); *o++ = 3; *o++ = 4; std::memcpy(o, &r, 4); o += 4; }
-        { uint32_t r = router_ip.raw(); *o++ = 6; *o++ = 4; std::memcpy(o, &r, 4); o += 4; }
+        { uint32_t d1 = htonl(0x08080808u); uint32_t d2 = htonl(0x08040404u);
+          *o++ = 6; *o++ = 8; std::memcpy(o, &d1, 4); o += 4; std::memcpy(o, &d2, 4); o += 4; }
         { uint32_t lt = htonl(static_cast<uint32_t>(lease_duration.count())); *o++ = 51; *o++ = 4; std::memcpy(o, &lt, 4); o += 4; }
         { uint32_t r = router_ip.raw(); *o++ = 54; *o++ = 4; std::memcpy(o, &r, 4); o += 4; }
         *o++ = 255;
@@ -209,7 +210,7 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
     }
 }
 
-// ── public API ────────────────────────────────────────────────────────────────
+// public API
 
 DhcpEngine::DhcpEngine(const std::string& lan_ip, DhcpPoolConfig cfg) {
     router_ip      = Net::parse_ipv4(lan_ip.c_str());
@@ -222,6 +223,7 @@ DhcpEngine::DhcpEngine(const std::string& lan_ip, DhcpPoolConfig cfg) {
 }
 
 std::expected<void, std::string> DhcpEngine::reconfigure(DhcpPoolConfig cfg) {
+    std::lock_guard<std::mutex> guard(mutex_);
     lease_duration = cfg.lease;
     return init_pool(cfg.pool_start, cfg.pool_end);
 }
@@ -234,6 +236,7 @@ void DhcpEngine::intercept_request(const Net::ParsedPacket& pkt) {
 }
 
 void DhcpEngine::process_background_tasks(int lan_fd) {
+    std::lock_guard<std::mutex> guard(mutex_);
     DhcpMessage msg;
     for (unsigned n = 0;
          n < kBackgroundTaskBudget && request_queue.pop(msg);

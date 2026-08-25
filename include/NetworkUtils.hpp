@@ -16,9 +16,9 @@ namespace HPGTP::Utils {
     public:
         // Returns dotted IPv4 or empty string if the interface has no address or ioctl fails.
         static std::string get_local_ip(const std::string& iface);
-        // Prefix length 0–32 from SIOCGIFNETMASK; -1 if ioctl fails or mask is non-contiguous.
+        // Prefix length 0-32 from SIOCGIFNETMASK; -1 if ioctl fails or mask is non-contiguous.
         static int         get_iface_ipv4_prefix_len(const std::string& iface);
-        // Default route (0.0.0.0/0) gateway from /proc/net/route — first matching line (legacy).
+        // Default route (0.0.0.0/0) gateway from /proc/net/route - first matching line (legacy).
         static std::string get_gateway_ip();
         // Default route gateway IP for a specific interface name (WAN).
         static std::string get_default_gateway_for_iface(const std::string& iface);
@@ -34,7 +34,7 @@ namespace HPGTP::Utils {
         // Returns false on failure (caller may inspect errno).
         static bool        set_iface_ipv4_and_prefix(const std::string& iface,
             const std::string& ipv4_dotted, int prefix_len);
-        // Smallest prefix length (1–32) so that pool_start and pool_end share one network; 32 if equal.
+        // Smallest prefix length (1-32) so that pool_start and pool_end share one network; 32 if equal.
         static int         infer_prefix_covering_pool(Net::IPv4Net pool_start, Net::IPv4Net pool_end) noexcept;
         // True if ip is in the subnet defined by anchor and prefix_len (host bits masked).
         static bool        ipv4_in_subnet(Net::IPv4Net ip, int prefix_len, Net::IPv4Net anchor) noexcept;

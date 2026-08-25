@@ -184,31 +184,6 @@ void NatEngine::set_wan_ip(Net::IPv4Net ip) {
     wan_ip_nbo.store(ip.raw(), std::memory_order_release);
 }
 
-void NatEngine::add_upnp_rule(UpnpRule rule) {
-    uint16_t net_ext_port = htons(rule.ext_port);
-    uint16_t net_int_port = htons(rule.int_port);
-
-    for (auto& r : upnp_rules) {
-        if (r.active.load(std::memory_order_acquire)) {
-            if (r.external_port == net_ext_port && r.protocol == rule.proto) {
-                r.seq.fetch_add(1, std::memory_order_acq_rel);
-                r.internal_ip   = rule.int_ip;
-                r.internal_port = net_int_port;
-                r.seq.fetch_add(1, std::memory_order_acq_rel);
-                return;
-            }
-        }
-    }
-    size_t idx = upnp_cursor.fetch_add(1, std::memory_order_relaxed) % upnp_rules.size();
-    auto& slot = upnp_rules[idx];
-    slot.seq.fetch_add(1, std::memory_order_acq_rel);
-    slot.internal_ip   = rule.int_ip;
-    slot.internal_port = net_int_port;
-    slot.external_port = net_ext_port;
-    slot.protocol      = rule.proto;
-    slot.seq.fetch_add(1, std::memory_order_acq_rel);
-    slot.active.store(true, std::memory_order_release);
-}
 
 void NatEngine::tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
 
@@ -233,26 +208,6 @@ bool NatEngine::process_outbound(Net::ParsedPacket& pkt) {
         auto tcp = pkt.tcp();
         if (!tcp) return false;
         sport_ptr = &tcp->source; dport = tcp->dest; check_ptr = &tcp->check;
-    }
-
-    if (upnp_cursor.load(std::memory_order_relaxed) > 0) for (auto& rule : upnp_rules) {
-        if (!rule.active.load(std::memory_order_acquire)) continue;
-        uint32_t s0 = rule.seq.load(std::memory_order_acquire);
-        if (s0 & 1u) continue;
-        Net::IPv4Net r_int_ip   = rule.internal_ip;
-        uint16_t     r_int_port = rule.internal_port;
-        uint16_t     r_ext_port = rule.external_port;
-        uint8_t      r_prot     = rule.protocol;
-        uint32_t s1 = rule.seq.load(std::memory_order_acquire);
-        if (s0 != s1 || (s1 & 1u)) continue;
-        if (r_prot == ip->protocol && r_int_ip == ip->saddr && r_int_port == *sport_ptr) {
-            update_checksum_32(ip->check, ip->saddr, wan_ip);
-            if (check_ptr && *check_ptr != 0)
-                update_checksum_32(*check_ptr, ip->saddr, wan_ip);
-            ip->saddr  = wan_ip;
-            *sport_ptr = r_ext_port;
-            return true;
-        }
     }
 
     FlowKey key{ip->saddr, ip->daddr, *sport_ptr, dport};
@@ -325,26 +280,6 @@ bool NatEngine::process_inbound(Net::ParsedPacket& pkt) {
         auto tcp = pkt.tcp();
         if (!tcp) return false;
         dport_ptr = &tcp->dest; sport = tcp->source; check_ptr = &tcp->check;
-    }
-
-    if (upnp_cursor.load(std::memory_order_relaxed) > 0) for (auto& rule : upnp_rules) {
-        if (!rule.active.load(std::memory_order_acquire)) continue;
-        uint32_t s0 = rule.seq.load(std::memory_order_acquire);
-        if (s0 & 1u) continue;
-        Net::IPv4Net r_int_ip   = rule.internal_ip;
-        uint16_t     r_int_port = rule.internal_port;
-        uint16_t     r_ext_port = rule.external_port;
-        uint8_t      r_prot     = rule.protocol;
-        uint32_t s1 = rule.seq.load(std::memory_order_acquire);
-        if (s0 != s1 || (s1 & 1u)) continue;
-        if (r_prot == ip->protocol && r_ext_port == *dport_ptr) {
-            update_checksum_32(ip->check, ip->daddr, r_int_ip);
-            if (check_ptr && *check_ptr != 0)
-                update_checksum_32(*check_ptr, ip->daddr, r_int_ip);
-            ip->daddr  = r_int_ip;
-            *dport_ptr = r_int_port;
-            return true;
-        }
     }
 
     const uint16_t dport_host = ntohs(*dport_ptr);

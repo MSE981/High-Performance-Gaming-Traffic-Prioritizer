@@ -18,6 +18,10 @@ void Shaper::set_rate_limit(Mbps limit) {
     bucket.set_rate(limit);
 }
 
+void Shaper::set_tx_result_callback(TxResultCallback cb) {
+    tx_callback_ = std::move(cb);
+}
+
 void Shaper::enqueue_normal(std::span<const uint8_t> pkt) {
     lock_spin();
     if (!normal_queue.push(pkt)) {
@@ -51,8 +55,9 @@ void Shaper::process_queue(int tx_fd) {
         }
         TxResult res = try_hardware_send(tx_fd, std::span(pkt_copy.data(), sz));
         lock_spin();
-        result_handlers[static_cast<size_t>(res)](this, sz);
+        result_handlers_[static_cast<size_t>(res)](sz);
         unlock_spin();
+        if (tx_callback_) tx_callback_(res, sz);
         if (res == TxResult::Congested) break;
     }
 }

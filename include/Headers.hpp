@@ -13,9 +13,8 @@ namespace HPGTP::Net {
     }
 
     enum class Priority : uint8_t {
-        Critical = 0, // DNS, TCP-ACK
-        High = 1, // Gaming
-        Normal = 2  // Download, Video
+        High   = 0, // 小包、DNS、TCP 握手、游戏
+        Normal = 1  // 大包、下载、视频
     };
 
 #pragma pack(push, 1)
@@ -34,8 +33,8 @@ namespace HPGTP::Net {
         uint8_t  ttl;
         uint8_t  protocol;
         uint16_t check;
-        IPv4Net  saddr;   // always NBO — from wire
-        IPv4Net  daddr;   // always NBO — from wire
+        IPv4Net  saddr;   // always NBO - from wire
+        IPv4Net  daddr;   // always NBO - from wire
     };
 
     struct UDPHeader {

@@ -1,5 +1,5 @@
 #pragma once
-// Minimal header: Mbps unit wrapper shared by Config and Scheduler.
+// Minimal header: Mb (megabits/sec) unit wrapper shared by Config and Scheduler.
 
 namespace HPGTP::Traffic {
 

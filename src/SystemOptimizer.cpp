@@ -34,6 +34,15 @@ void set_current_thread_affinity(int core_id) {
         std::println(stderr, "[System] Warning: Failed to bind thread to core {}", core_id);
 }
 
+void set_current_thread_affinity_control() {
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(0, &cpuset);
+    CPU_SET(1, &cpuset);
+    if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0)
+        std::println(stderr, "[System] Warning: Failed to bind thread to control cores 0-1");
+}
+
 void set_realtime_priority() {
     sched_param param{ .sched_priority = 50 };
     if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0)

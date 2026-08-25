@@ -5,6 +5,7 @@
 #include <span>
 #include <cstring>
 #include <algorithm>
+#include <functional>
 #include <thread>
 #include "Headers.hpp"
 #include "Telemetry.hpp"
@@ -12,7 +13,7 @@
 
 namespace HPGTP::Traffic {
 
-    // Token bucket rate limiter — kept inline (hot path, called every packet)
+    // Token bucket rate limiter - kept inline (hot path, called every packet)
     class TokenBucket {
         double tokens;
         double capacity;
@@ -63,7 +64,7 @@ namespace HPGTP::Traffic {
         }
     };
 
-    // Zero dynamic allocation ring buffer — kept inline (template + hot path)
+    // Zero dynamic allocation ring buffer - kept inline (template + hot path)
     template<size_t Capacity = 8192>
     class ZeroAllocRingBuffer {
         struct alignas(64) PacketSlot {
@@ -106,7 +107,9 @@ namespace HPGTP::Traffic {
     // Low-level hardware send result
     enum class TxResult : size_t { Success = 0, Congested = 1, Fatal = 2 };
 
-    // Traffic shaper — non-trivial methods defined in Scheduler.cpp
+    using TxResultCallback = std::function<void(TxResult, size_t)>;
+
+    // Traffic shaper - non-trivial methods defined in Scheduler.cpp
     class Shaper {
         ZeroAllocRingBuffer<8192> normal_queue;
         TokenBucket               bucket;
@@ -117,27 +120,31 @@ namespace HPGTP::Traffic {
         }
         void unlock_spin() { spin_.clear(std::memory_order_release); }
 
-        using ResultHandler = void (*)(Shaper*, size_t);
-        static constexpr std::array<ResultHandler, 3> result_handlers = {
-            [](Shaper* s, size_t) {
-                s->normal_queue.pop();
-                Telemetry::instance().shaper_normal_tx_complete.fetch_add(
-                    1, std::memory_order_relaxed);
-            },
-            [](Shaper* s, size_t bytes) {
-                s->bucket.refund(bytes);
-            },
-            [](Shaper* s, size_t bytes) {
-                s->bucket.refund(bytes);
-                s->normal_queue.pop();
-            }
-        };
+        std::array<std::function<void(size_t)>, 3> result_handlers_;
 
     public:
-        explicit Shaper(Mbps limit) : bucket(limit) {}
+        explicit Shaper(Mbps limit) : bucket(limit) {
+            result_handlers_[0] = [this](size_t) {
+                normal_queue.pop();
+                Telemetry::instance().shaper_normal_tx_complete.fetch_add(
+                    1, std::memory_order_relaxed);
+            };
+            result_handlers_[1] = [this](size_t bytes) {
+                bucket.refund(bytes);
+            };
+            result_handlers_[2] = [this](size_t bytes) {
+                bucket.refund(bytes);
+                normal_queue.pop();
+            };
+        }
 
         void set_rate_limit(Mbps limit);
+        // Register a subscriber for every drain attempt (startup only).
+        void set_tx_result_callback(TxResultCallback cb);
         void enqueue_normal(std::span<const uint8_t> pkt);
         void process_queue(int tx_fd);
+
+    private:
+        TxResultCallback tx_callback_{};
     };
 }
