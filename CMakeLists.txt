@@ -73,7 +73,6 @@ endforeach()
 add_executable(GamingTrafficPrioritizer
     src/main.cpp
     src/App.cpp
-    src/Telemetry.cpp
     src/WatchdogServices.cpp
     src/GUI/Dashboard.cpp
     include/GUI/Dashboard.hpp
