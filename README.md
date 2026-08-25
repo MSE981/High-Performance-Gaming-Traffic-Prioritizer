@@ -1,38 +1,31 @@
 # GamingTrafficPrioritizer
 
-A lightweight IPv4 gateway-style software router for a Raspberry Pi, written in C++23. It prioritizes gaming/traffic-sensitive packets over bulk downloads using two-tier QoS, and includes user-space forwarding, NAT and a DHCP server.
+A small software router for a Raspberry Pi. It runs in userspace, reads packets with AF_PACKET, and prioritises gaming traffic over bulk downloads. Written in C++23.
 
-## Purpose
+The Pi sits between the upstream router and the local network. One Ethernet port faces the internet (WAN), the other faces your devices (LAN).
 
-Large downloads and video streaming cause latency spikes for online games on a normal router. This project sits between the upstream router and the LAN, inspects each packet in user space and forwards it with a fixed pipeline: DHCP intercept, NAT rewrite, Ethernet rewrite and QoS routing. Gaming and small control packets are sent on an unthrottled High lane; bulk large-packet traffic is rate-limited on the Normal lane.
+## What it does
 
-## System operation
+The router puts every IPv4 packet into one of two lanes.
 
-The Pi exposes two Ethernet interfaces:
+- High lane: gaming and control traffic. Small packets, DNS, ICMP and TCP handshakes use this lane. It is not rate limited.
+- Normal lane: bulk traffic. Large packets use this lane. A token bucket caps the total rate.
 
-```text
-Internet -- Router -- [eth0 WAN | HPGTP | eth1 LAN] -- Switch / devices (Core 2 = WAN->LAN, Core 3 = LAN->WAN)
-```
+The global download and upload caps are set in the GUI, in Mb (megabits per second).
 
-Execution is split across the four cores:
+## What is in it
 
-- Cores 2 & 3: the two forwarding directions (RX + processing threads).
-- Cores 0 & 1: GUI, watchdog/control loop, DHCP background tasks, self-test and shutdown-save helpers.
-
-## Core features
-
-- Raw `AF_PACKET` RX ring + bounded frame queue; allocation-free hot path.
-- Fixed-size hash tables and lock-free per-core telemetry (no locks on the packet path).
-- Two-tier QoS: packets below `LARGE_PACKET_THRESHOLD` and DNS go to High; larger packets to Normal (rate-limited).
-- User-space NAT (SNAT / DNAT / ICMP mapping with session expiry).
-- DHCP server with a GUI-editable pool and lease duration (applied via an eventfd callback).
-- Qt6 dashboard with live High/Normal Mb charts, QoS and service controls.
+- Userspace forwarding over a raw AF_PACKET RX ring and a bounded frame queue.
+- Two-tier QoS with a configurable packet-size threshold.
+- User-space NAT with SNAT, DNAT, ICMP mapping and session expiry.
+- A DHCP server with a GUI-editable address pool and lease time.
+- A Qt6 dashboard on the DSI display. It updates at 60 Hz and shows the High/Normal Mb rates, the QoS controls, and a read-only device list.
 - CPU frequency locked to the performance governor.
 
 ## Hardware and software
 
-- Raspberry Pi (Cortex-A72, 4 cores), with a second Ethernet adapter for the LAN side.
-- GCC 14, CMake, Qt 6 Widgets and `ethtool`.
+- Raspberry Pi with a Cortex-A72 CPU (4 cores) and a second Ethernet adapter.
+- C++23, GCC 14, CMake, Qt 6 Widgets, and ethtool.
 
 ## Build and run
 
@@ -41,11 +34,13 @@ chmod +x ./start_release.sh
 sudo ./start_release.sh
 ```
 
-The script installs missing packages, builds the release binary (demo targets are not built) and launches the GUI on the DSI display. The executable is `build/GamingTrafficPrioritizer`; keep the repo root as the working directory so `config/config.txt` resolves.
+The script checks the dependencies, compiles the release binary and starts the GUI on the DSI display. The binary is `build/GamingTrafficPrioritizer`. Run it from the repo root so it finds `config/config.txt`.
+
+The data plane needs raw sockets and the ability to change interface flags, so run as root. NetworkManager owns the WAN address.
 
 ## Configuration
 
-All keys in `config/config.txt` are optional. The GUI rewrites the file on a clean exit.
+`config/config.txt` holds the defaults. Every key is optional. The GUI rewrites this file when you close the app.
 
 ```ini
 IFACE_WAN=eth0
@@ -63,11 +58,29 @@ DHCP_POOL_START=192.168.12.50
 DHCP_POOL_END=192.168.12.255
 ```
 
-`ROUTER_IP` is the gateway handed to DHCP clients and must share the LAN subnet with the DHCP pool. The WAN IP used for NAT is always taken from the kernel (NetworkManager) address on `IFACE_WAN`.
+A few notes:
 
-## Termination
+- `ROUTER_IP` is the gateway handed to DHCP clients. It must be in the same subnet as the DHCP pool.
+- `APPLY_ROUTER_IP_TO_LAN` sets the kernel address on the LAN interface at startup. Turn it off if you use netplan or systemd-networkd.
+- `LARGE_PACKET_THRESHOLD` is the packet size in bytes. Smaller packets go to the High lane.
+- `ENABLE_ACCELERATION=true` turns on QoS. Set it to false for a plain bridge.
+- NAT uses the WAN address that NetworkManager assigns. There is no static WAN IP setting.
 
-Use the GUI **Shutdown** button. It stops the data plane and control loop gracefully, and saves configuration.
+## Architecture
+
+The four CPU cores take separate jobs.
+
+- Cores 2 and 3 run the two forwarding directions (WAN to LAN, LAN to WAN). Each direction has a receive thread and a processing thread pinned to that core.
+- Cores 0 and 1 run the GUI, the watchdog service threads, the DHCP controller and the shutdown helper.
+
+The packet path is event driven. Threads wait with blocking `poll()` on sockets and eventfds. The Shaper reports each send result through a `std::function` callback, and packet events go to a small callback registry. The engines, shapers and forwarding state live in `App`. Workers borrow them through raw pointers. `ForwardingPlane` owns the L2/ARP snapshot and the WAN IP lookup.
+
+## What this is not
+
+- Not a firewall or a DNS cache. Those services were removed.
+- Not a multi-WAN router and it does not bridge several LAN ports. One WAN, one LAN.
+- Not headless. The GUI is the only start path.
+- It is a userspace router. The kernel forwards only where the start script sets the rules.
 
 ## License
 
