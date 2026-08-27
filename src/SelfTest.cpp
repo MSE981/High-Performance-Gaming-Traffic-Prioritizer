@@ -41,8 +41,7 @@ uint16_t fold_icmp_checksum(const Net::IcmpEchoHeader* icmp, size_t icmp_len) no
 
 } // namespace
 
-// Wire-format DHCP header - mirrors the internal layout used by DhcpEngine.
-// Defined locally here so DhcpEngine's private type stays confined to its TU.
+// DHCP header 
 #pragma pack(push, 1)
 struct DhcpWireHeader {
     uint8_t  op;
@@ -63,7 +62,7 @@ struct DhcpWireHeader {
 };
 #pragma pack(pop)
 
-// Worker
+// SelfTest entry point
 
 void SelfTest::run() {
     Report r;
@@ -74,7 +73,7 @@ void SelfTest::run() {
 }
 
 // Packet builders
-// All use std::array - zero heap allocation
+// UDP: 14-byte Ethernet + 20-byte IPv4 + 8-byte UDP
 
 std::array<uint8_t, 42> SelfTest::make_udp_pkt(Net::IPv4Net sip, Net::IPv4Net dip,
                                                  uint16_t sport, uint16_t dport) {
@@ -94,6 +93,8 @@ std::array<uint8_t, 42> SelfTest::make_udp_pkt(Net::IPv4Net sip, Net::IPv4Net di
     udp->len         = htons(8);
     return buf;
 }
+
+// TCP: 14-byte Ethernet + 20-byte IPv4 + 20-byte TCP
 
 std::array<uint8_t, 54> SelfTest::make_tcp_pkt(Net::IPv4Net sip, Net::IPv4Net dip,
                                                  uint16_t sport, uint16_t dport,
@@ -115,7 +116,6 @@ std::array<uint8_t, 54> SelfTest::make_tcp_pkt(Net::IPv4Net sip, Net::IPv4Net di
     return buf;
 }
 
-// DNS query: 42-byte UDP header + 12-byte DnsHeader + QNAME wire + QTYPE + QCLASS
 // DHCP DISCOVER: 42-byte UDP (src=68, dst=67) + DhcpWireHeader + options
 std::array<uint8_t, 512> SelfTest::make_dhcp_discover(size_t& out_len) {
     std::array<uint8_t, 512> buf{};
@@ -126,8 +126,8 @@ std::array<uint8_t, 512> SelfTest::make_dhcp_discover(size_t& out_len) {
     eth->proto     = htons(0x0800);
     ipv4->ver_ihl  = 0x45;
     ipv4->protocol = 17;
-    ipv4->saddr    = Net::IPv4Net{};             // 0.0.0.0 (DISCOVER)
-    ipv4->daddr    = Net::IPv4Net{0xFFFFFFFF};   // broadcast
+    ipv4->saddr    = Net::IPv4Net{};
+    ipv4->daddr    = Net::IPv4Net{0xFFFFFFFF};
 
     udp->source = htons(68);
     udp->dest   = htons(67);
@@ -138,13 +138,12 @@ std::array<uint8_t, 512> SelfTest::make_dhcp_discover(size_t& out_len) {
     dhcp->hlen         = 6;
     dhcp->xid          = htonl(0xDEADBEEF);
     dhcp->magic_cookie = htonl(0x63825363);
-    // Synthetic client MAC
     dhcp->chaddr[0] = 0xAA; dhcp->chaddr[1] = 0xBB; dhcp->chaddr[2] = 0xCC;
     dhcp->chaddr[3] = 0xDD; dhcp->chaddr[4] = 0xEE; dhcp->chaddr[5] = 0xFF;
 
     size_t opt = 42 + sizeof(DhcpWireHeader);
-    buf[opt++] = 53; buf[opt++] = 1; buf[opt++] = 1; // DHCP Message Type = DISCOVER
-    buf[opt++] = 255; // End option
+    buf[opt++] = 53; buf[opt++] = 1; buf[opt++] = 1;
+    buf[opt++] = 255;
 
     out_len = opt;
     uint16_t udp_len = static_cast<uint16_t>(opt - 34);
@@ -154,10 +153,9 @@ std::array<uint8_t, 512> SelfTest::make_dhcp_discover(size_t& out_len) {
     return buf;
 }
 
-// Sub-tests
+// NAT tests
 
 void SelfTest::test_nat(Report& r) {
-    // make_unique: NatEngine has ~1.3 MB internal arrays - too large for stack
     auto nat = std::make_unique<Logic::NatEngine>();
     Net::IPv4Net wan_ip = Config::parse_ip_str("10.0.0.1").value();
     nat->set_wan_ip(wan_ip);
@@ -239,6 +237,7 @@ void SelfTest::test_nat(Report& r) {
           icmp_pass ? "echo SNAT/DNAT id map and checksums" : "ICMP NAT path failed");
 }
 
+// DHCP tests
 void SelfTest::test_dhcp(Report& r) {
     Logic::DhcpEngine dhcp(
         "192.168.1.1",
@@ -252,16 +251,12 @@ void SelfTest::test_dhcp(Report& r) {
     auto pkt = Net::ParsedPacket::parse(
         std::span<uint8_t>{dhcp_buf.data(), pkt_len});
 
-    dhcp.intercept_request(pkt); // enqueue into request_queue
-
-    // socketpair(AF_UNIX, SOCK_DGRAM): DhcpEngine replies via TxFrameOutput::send_best_effort.
-    // recv on the peer socket confirms bytes were written.
+    dhcp.intercept_request(pkt); 
     int sv[2] = {-1, -1};
     bool dhcp_pass = false;
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) == 0) {
         dhcp.process_background_tasks(sv[1]);
         uint8_t probe[1];
-        // Non-blocking recv: no sleep, MSG_DONTWAIT only.
         ssize_t n = recv(sv[0], probe, 1, MSG_DONTWAIT);
         dhcp_pass = (n > 0);
         ::close(sv[0]);
@@ -271,9 +266,8 @@ void SelfTest::test_dhcp(Report& r) {
           dhcp_pass ? "DISCOVER processed, OFFER sent" : "no OFFER response received");
 }
 
-// Hardware checks: open /sys and /proc nodes with raw fds (no ifstream, no path heap).
+// Hardware check
 void SelfTest::test_system(Report& r) {
-    // SYS_Temp: /sys/class/thermal/thermal_zone0/temp
     {
         char buf[16]{};
         int fd = ::open("/sys/class/thermal/thermal_zone0/temp", O_RDONLY);
@@ -287,7 +281,6 @@ void SelfTest::test_system(Report& r) {
               pass ? "CPU thermal sensor readable" : "cannot read /sys/class/thermal");
     }
 
-    // SYS_Memory: /proc/meminfo, scan for MemTotal
     {
         char mbuf[512]{};
         bool pass = false;
@@ -308,7 +301,6 @@ void SelfTest::test_system(Report& r) {
               pass ? "MemTotal parsed from /proc/meminfo" : "cannot read memory info");
     }
 
-    // SYS_Ifaces: /sys/class/net - count non-lo interfaces
     {
         uint8_t iface_count = 0;
         DIR* d = opendir("/sys/class/net");

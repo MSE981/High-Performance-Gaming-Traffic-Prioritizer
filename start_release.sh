@@ -1,14 +1,4 @@
 #!/usr/bin/env bash
-# =============================================================================
-# start_release.sh: high-performance gaming traffic prioritizer (release / production GUI)
-# One-shot setup and launch for Raspberry Pi (Cortex-A72) + DSI display
-#
-# Usage:  chmod +x start_release.sh && sudo ./start_release.sh
-#         Optional: user-owned build tree (e.g. after root-owned build/):
-#           sudo env HPGTP_BUILD_DIR=build-user ./start_release.sh
-#         Skip kernel prep (ip_forward, iptables MASQUERADE on WAN, NM/dnsmasq):
-#           sudo env HPGTP_SKIP_KERNEL_NET_PREP=1 ./start_release.sh
-# =============================================================================
 set -euo pipefail
 
 # -- Sanity -------------------------------------------------------------------
@@ -18,7 +8,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"   # binary loads config/config.txt relative to CWD
+cd "$SCRIPT_DIR"   
 
 BUILD_DIR="${HPGTP_BUILD_DIR:-build}"
 
@@ -27,7 +17,7 @@ NOTIFY_LOG="/tmp/hpgtp_startup.log"
 notify() { echo "${1}|${2}" >> "$NOTIFY_LOG"; }
 
 echo "=========================================================="
-echo "  High-performance gaming traffic prioritizer v3.0 (release)"
+echo "  High-performance gaming traffic prioritizer v3.2 (release)"
 echo "=========================================================="
 echo "    Root: $SCRIPT_DIR"
 echo ""
@@ -81,7 +71,7 @@ echo "    eglfs plugin : $EGLFS_SO"
 echo "    Dependencies : OK"
 notify "[1/4] Dependencies" "eglfs: $(basename "$EGLFS_SO") | All packages OK"
 
-# -- 2. Build (release main binary; demo/ changes do not force rebuild) -------
+# -- 2. Build -------
 echo ""
 echo "[2/4] Build check..."
 
@@ -146,8 +136,7 @@ for iface in "$WAN_IFACE" "$LAN_IFACE"; do
 done
 notify "[3/4] Network" "WAN=$WAN_IFACE LAN=$LAN_IFACE | ${NET_STATUS% }"
 
-# -- 3b. Kernel hygiene for userspace NAT/forwarding -----------------------------
-# ip_forward off; drop only POSTROUTING MASQUERADE -o WAN (does not remove ts-postrouting jumps).
+# ip_forward off; drop only POSTROUTING MASQUERADE -o WAN
 echo ""
 if [[ "${HPGTP_SKIP_KERNEL_NET_PREP:-}" == "1" ]]; then
     echo "    [3b] Skipped (HPGTP_SKIP_KERNEL_NET_PREP=1)"
@@ -156,9 +145,7 @@ else
     echo "    [3b] ip_forward=0, MASQUERADE -o $WAN_IFACE removed, dnsmasq stop, NM LAN unmanaged"
     sysctl -w net.ipv4.ip_forward=0 >/dev/null
 
-    # Userspace data plane forwards packets with raw sockets; the kernel must
-    # not see inbound TCP on the WAN, or it answers with RST and kills the
-    # forwarded connections. SSH on the WAN interface stays allowed.
+    # Userspace data plane forwards packets with raw sockets
     NFT_BIN="$(command -v nft 2>/dev/null || true)"
     [[ -z "$NFT_BIN" && -x /usr/sbin/nft ]] && NFT_BIN=/usr/sbin/nft
     if [[ -n "$NFT_BIN" ]]; then

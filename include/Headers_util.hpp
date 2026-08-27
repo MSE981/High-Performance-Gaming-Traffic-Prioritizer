@@ -4,7 +4,7 @@
 #include <atomic>
 #include <array>
 #include <span>
-#include "NetworkTypes.hpp"
+#include "Types_util.hpp"
 
 namespace HPGTP::Net {
 
@@ -13,8 +13,8 @@ namespace HPGTP::Net {
     }
 
     enum class Priority : uint8_t {
-        High   = 0, // 小包、DNS、TCP 握手、游戏
-        Normal = 1  // 大包、下载、视频
+        High   = 0,
+        Normal = 1
     };
 
 #pragma pack(push, 1)
@@ -33,8 +33,8 @@ namespace HPGTP::Net {
         uint8_t  ttl;
         uint8_t  protocol;
         uint16_t check;
-        IPv4Net  saddr;   // always NBO - from wire
-        IPv4Net  daddr;   // always NBO - from wire
+        IPv4Net  saddr;
+        IPv4Net  daddr;
     };
 
     struct UDPHeader {
@@ -55,7 +55,7 @@ namespace HPGTP::Net {
         uint16_t urg_ptr;
     };
 
-    // Echo request/reply (type 8 / 0): fixed 8-byte header after IPv4.
+    // fixed 8-byte header after IPv4.
     struct IcmpEchoHeader {
         uint8_t  type;
         uint8_t  code;
@@ -65,7 +65,7 @@ namespace HPGTP::Net {
     };
 #pragma pack(pop)
 
-    // Zero-copy SPSC lock-free ring buffer (cross-core data from data plane to control plane, no mutex)
+    // Zero-copy SPSC lock-free ring buffer 
     template<typename T, size_t Capacity = 1024>
     class SpscRingBuffer {
         std::array<T, Capacity> buffer{};
@@ -92,8 +92,7 @@ namespace HPGTP::Net {
         }
     };
 
-    // Unified zero-copy packet context parser (single parse path for NAT, DNS, QoS, HeuristicProcessor).
-    // Eliminates redundant scalar offset calculations in downstream modules.
+    // Unified zero-copy packet context parser 
     struct ParsedPacket {
         std::span<uint8_t> raw_span;
         Net::EthernetHeader* eth = nullptr;

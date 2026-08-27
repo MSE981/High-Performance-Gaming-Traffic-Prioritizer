@@ -8,15 +8,15 @@
 #include <format>
 #include <cstring>
 #include <arpa/inet.h>
-#include "NetworkTypes.hpp"
-#include "Units.hpp"
+#include "Types_util.hpp"
+#include "Units_util.hpp"
 
 namespace HPGTP::Config {
-    // Kernel interface names (WAN / LAN). Storage is private to Config.cpp.
+    // Kernel interface names ，private
     const std::string& iface_wan();
     const std::string& iface_lan();
 
-    // Set to false by GUI shutdown dialog to skip the post-exit config save
+    // Set to false by GUI shutdown dialog ，skip save
     inline std::atomic<bool> SAVE_ON_EXIT{true};
 
     // Dynamic runtime switch states
@@ -26,9 +26,8 @@ namespace HPGTP::Config {
     };
     inline DynamicState global_state;
 
-    // Interface configuration (ROUTER_IP and below remain inline; IFACE_* live in Config.cpp)
+    // Interface configuration
     inline std::string ROUTER_IP = "192.168.12.1";
-    // When true, App::init sets IFACE_LAN's kernel IPv4 to ROUTER_IP (userspace DHCP does not do this).
     inline bool APPLY_ROUTER_IP_TO_LAN = true;
     inline int  LAN_PREFIX_LEN         = 24;
 
@@ -39,7 +38,7 @@ namespace HPGTP::Config {
 
     inline std::atomic<bool> ENABLE_ACCELERATION{true};
 
-    // Traffic classification: packet size cutoff between High and Normal lanes.
+    // Traffic classification， High and Normal lanes.
     inline uint32_t LARGE_PACKET_THRESHOLD_BYTES = 1000;
 
     // Dotted-decimal IPv4 only; rejects invalid octets and non-canonical forms per inet_pton(3).
@@ -56,14 +55,14 @@ namespace HPGTP::Config {
         return Net::IPv4Net{a.s_addr};
     }
 
-    // Helper: convert NBO IPv4Net to dotted-decimal string
+    // convert NBO IPv4Net to dotted-decimal string
     inline std::string ip_to_str(Net::IPv4Net ip) {
         uint32_t v = ip.raw();
         return std::format("{}.{}.{}.{}",
             v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF);
     }
 
-    // Load / save - implementations in Config.cpp (hide POSIX fd I/O from clients)
+    // Load / save - implementations in Config.cpp
     std::expected<void, std::string> load_config(const std::string& path = "config/config.txt");
     std::expected<void, std::string> save_config(const std::string& path = "config/config.txt");
 }

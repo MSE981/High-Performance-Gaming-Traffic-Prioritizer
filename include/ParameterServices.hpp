@@ -7,12 +7,11 @@
 #include "Telemetry.hpp"
 #include "NatEngine.hpp"
 #include "DhcpEngine.hpp"
-#include "Scheduler.hpp"
+#include "Scheduler_util.hpp"
 
-namespace HPGTP::Core {
+namespace HPGTP::ParameterServices {
 
-// 1 s: CPU temperature and per-core load. 5 s: hostname/kernel/uptime/memory
-// and the ARP device table. Everything goes into Telemetry for the GUI.
+// 1 s: CPU temperature and per-core load. 5 s: hostname/kernel/uptime/memory and the ARP device table. Everything goes into Telemetry for the GUI.
 class TelemetryCollector {
 public:
     explicit TelemetryCollector(Telemetry& tel) : tel_(tel) {}
@@ -65,8 +64,7 @@ private:
     std::function<void()> refresh_router_;
 };
 
-// Applies GUI mode (Acceleration/Bridge) and global DL/UL bandwidth caps.
-// Throttle percentage was removed; caps are applied as-is.
+// Applies GUI mode (Acceleration/Bridge) and global DL/UL bandwidth caps. Throttle percentage was removed; caps are applied as-is.
 class QosController {
 public:
     QosController(Telemetry& tel, Traffic::Shaper* dl, Traffic::Shaper* ul,
@@ -93,4 +91,4 @@ private:
     Logic::NatEngine& nat_;
 };
 
-} // namespace HPGTP::Core
+} // namespace HPGTP::ParameterServices

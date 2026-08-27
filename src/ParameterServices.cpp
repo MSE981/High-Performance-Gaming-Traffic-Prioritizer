@@ -1,6 +1,6 @@
-#include "WatchdogServices.hpp"
+#include "ParameterServices.hpp"
 #include "Config.hpp"
-#include "NetworkTypes.hpp"
+#include "Types_util.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -11,7 +11,7 @@
 #include <arpa/inet.h>
 #include <dirent.h>
 
-namespace HPGTP::Core {
+namespace HPGTP::ParameterServices {
 
 void TelemetryCollector::readSysfd(const char* path, std::span<char> out) {
     const int fd = ::open(path, O_RDONLY);
@@ -161,4 +161,4 @@ void QosController::tick1Hz() {
     }
 }
 
-} // namespace HPGTP::Core
+} // namespace HPGTP::ParameterServices

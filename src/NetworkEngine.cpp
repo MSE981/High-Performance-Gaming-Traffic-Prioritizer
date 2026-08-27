@@ -107,7 +107,7 @@ bool RawSocketManager::peek_frame(std::span<uint8_t>& out) {
             return true;
         }
 
-        // PACKET_OUTGOING: release silently and check next frame
+        //release silently and check next frame
         hdr->tp_status = TP_STATUS_KERNEL;
         rx_idx = (rx_idx + 1) % FRAME_NR;
     }

@@ -13,14 +13,12 @@
 #include <thread>
 #include <cstdint>
 
-#include "Headers.hpp"
-#include "SystemOptimizer.hpp"
+#include "Headers_util.hpp"
+#include "SystemOptimizer_util.hpp"
 
 namespace HPGTP::SelfTest {
 
-//
 // Test case row: name, pass flag, and short human-readable detail.
-//
 struct TestCase {
     std::array<char, 64>  name{};
     bool                  pass{false};
@@ -42,12 +40,10 @@ struct Report {
     }
 };
 
-//
 // SelfTest - worker thread plus optional result callback.
 // start() -> launches std::thread running run()
 // join() -> blocks until the worker finishes
 // registerCallback -> stores std::function<void(const Report&)>
-//
 class SelfTest {
 public:
     using ResultCallback = std::function<void(const Report&)>;
@@ -59,7 +55,7 @@ public:
     void start() {
         if (uthread_.joinable()) return;
         uthread_ = std::thread([this] {
-            HPGTP::System::Optimizer::set_current_thread_affinity_control(); // self-test: control cores 0-1
+            HPGTP::System::Optimizer_util::set_current_thread_affinity_control(); // self-test: control cores 0-1
             struct Active {
                 std::atomic<bool>& a;
                 explicit Active(std::atomic<bool>& x) : a(x) {

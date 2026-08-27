@@ -1,7 +1,7 @@
 #include "DhcpEngine.hpp"
 #include "Config.hpp"
-#include "DataPlane.hpp"
-#include "NetworkUtils.hpp"
+#include "TxFrameOutput_util.hpp"
+#include "Network_util.hpp"
 #include <expected>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -12,7 +12,6 @@
 
 namespace HPGTP::Logic {
 
-// DhcpHeader is an internal wire-format struct for this translation unit.
 #pragma pack(push, 1)
 struct DhcpHeader {
     uint8_t  op;
@@ -33,7 +32,7 @@ struct DhcpHeader {
 };
 #pragma pack(pop)
 
-// private helpers
+// private
 
 std::expected<void, std::string> DhcpEngine::init_pool(Net::IPv4Net start_ip, Net::IPv4Net end_ip) {
     uint32_t start_h = start_ip.to_host().raw();
@@ -181,7 +180,7 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
         resp_udp->len   = htons(udp_len);
         resp_udp->check = 0;
 
-        DataPlane::TxFrameOutput::send_best_effort(
+        TxFrame_util::TxFrameOutput_util::send_best_effort(
             lan_fd,
             std::span<const uint8_t>(response.data(), total_len),
             2,
@@ -217,7 +216,7 @@ DhcpEngine::DhcpEngine(const std::string& lan_ip, DhcpPoolConfig cfg) {
     lease_duration = cfg.lease;
     if (auto r = init_pool(cfg.pool_start, cfg.pool_end); !r)
         std::println(stderr, "[DHCP] init_pool: {}", r.error());
-    if (!Utils::Network::get_iface_hwaddr(Config::iface_lan(), lan_if_mac_.data()))
+    if (!Utils_util::Network_util::get_iface_hwaddr(Config::iface_lan(), lan_if_mac_.data()))
         std::println(stderr, "[DHCP] Warning: could not read Ethernet MAC for {}",
             Config::iface_lan());
 }

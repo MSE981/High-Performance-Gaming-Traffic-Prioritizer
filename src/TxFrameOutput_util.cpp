@@ -1,12 +1,12 @@
-#include "DataPlane.hpp"
+#include "TxFrameOutput_util.hpp"
 #include "Telemetry.hpp"
 #include <sys/socket.h>
 #include <cerrno>
 #include <cstdint>
 
-namespace HPGTP::DataPlane {
+namespace HPGTP::TxFrame_util {
 
-TxFrameOutput::PacketTxTry TxFrameOutput::try_send_packet_nonblocking(
+TxFrameOutput_util::PacketTxTry TxFrameOutput_util::try_send_packet_nonblocking(
     int tx_fd, std::span<const uint8_t> pkt) noexcept {
     for (;;) {
         ssize_t n = ::send(tx_fd, pkt.data(), pkt.size(), MSG_DONTWAIT);
@@ -20,14 +20,14 @@ TxFrameOutput::PacketTxTry TxFrameOutput::try_send_packet_nonblocking(
     }
 }
 
-void TxFrameOutput::send_best_effort(int tx_fd, std::span<const uint8_t> pkt,
+void TxFrameOutput_util::send_best_effort(int tx_fd, std::span<const uint8_t> pkt,
                                      int core_id, size_t prio_idx) {
     if (try_send_packet_nonblocking(tx_fd, pkt) != PacketTxTry::Complete)
         Telemetry::instance().core_metrics[core_id].dropped[prio_idx]
             .fetch_add(1, std::memory_order_relaxed);
 }
 
-void TxFrameOutput::send_stream_blocking(int fd, std::span<const uint8_t> data) {
+void TxFrameOutput_util::send_stream_blocking(int fd, std::span<const uint8_t> data) {
     const uint8_t* p   = data.data();
     size_t         left = data.size();
     while (left > 0) {
@@ -41,4 +41,4 @@ void TxFrameOutput::send_stream_blocking(int fd, std::span<const uint8_t> data) 
     }
 }
 
-} // namespace HPGTP::DataPlane
+} // namespace HPGTP::TxFrame_util

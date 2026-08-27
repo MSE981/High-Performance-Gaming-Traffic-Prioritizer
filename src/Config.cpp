@@ -11,14 +11,14 @@
 
 namespace HPGTP::Config {
 
-// interface names (single source of truth; not exposed as inline globals)
+// interface names
 static std::string g_iface_wan{"eth0"};
 static std::string g_iface_lan{"eth1"};
 
 const std::string& iface_wan() { return g_iface_wan; }
 const std::string& iface_lan() { return g_iface_lan; }
 
-// private helpers
+// private
 
 static uint32_t parse_u32(const char* s) {
     uint32_t v = 0;
@@ -40,7 +40,7 @@ static bool parse_kv(const char* line, size_t len,
     return true;
 }
 
-// public API
+// public
 
 std::expected<void, std::string> load_config(const std::string& path) {
     int fd = ::open(path.c_str(), O_RDONLY);

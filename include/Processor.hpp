@@ -2,17 +2,16 @@
 #include <cstdint>
 #include <cstddef>
 #include <array>
-#include "Headers.hpp"
+#include "Headers_util.hpp"
 #include "Config.hpp"
 
 namespace HPGTP::Logic {
 
-    // Big-endian wire uint16 to host. Avoids exposing <netinet/in.h> in this header.
     constexpr inline uint16_t net16_to_host(uint16_t be) noexcept {
         return static_cast<uint16_t>((be << 8) | (be >> 8));
     }
 
-    // 5-tuple flow identifier (shared with the NAT engine).
+    // 5-tuple flow identifier.
     struct FlowKey {
         Net::IPv4Net saddr, daddr;   // NBO - matched directly against IPv4Header fields
         uint16_t     sport = 0;
@@ -26,7 +25,7 @@ namespace HPGTP::Logic {
     };
 
     // Heuristic traffic identification engine: two-tier classification.
-    // ICMP, DNS and small packets (below LARGE_PACKET_THRESHOLD) go to High; large packets are Normal.
+    // ICMP, DNS and small packets go to High; large packets are Normal.
     class HeuristicProcessor {
         using ProtocolHandler =
             Net::Priority (*)(HeuristicProcessor*, const Net::ParsedPacket&);
@@ -37,7 +36,7 @@ namespace HPGTP::Logic {
             if (!udp) return Net::Priority::Normal;
             const uint16_t dport = net16_to_host(udp->dest);
             const uint16_t sport = net16_to_host(udp->source);
-            // DNS stays in the unthrottled lane.
+            // DNS --> High priority
             if (dport == 53 || sport == 53) return Net::Priority::High;
             return parsed.raw_span.size() < Config::LARGE_PACKET_THRESHOLD_BYTES
                 ? Net::Priority::High : Net::Priority::Normal;
@@ -48,7 +47,7 @@ namespace HPGTP::Logic {
                 ? Net::Priority::High : Net::Priority::Normal;
         }
 
-        // ICMP is small control traffic (ping / echo); keep it on the unthrottled lane.
+        // ICMP --> High priority
         static Net::Priority handle_icmp(HeuristicProcessor*, const Net::ParsedPacket&) {
             return Net::Priority::High;
         }

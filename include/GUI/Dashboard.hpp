@@ -229,13 +229,11 @@ protected:
 private:
     void setup_ui();
     void setup_tabbar(QBoxLayout* root_layout);
-    // Refresh matrix: startup uses load_config; after that, each page entry pulls
-    // from process state (Config / Telemetry). User edits on the active page stay
-    // until the user leaves and re-enters the page.
+    // Refresh matrix: startup uses load_config; after that, each page entry pulls from process state
     void run_page_enter_refresh(int page_index);
 
     QStackedWidget* page_stack       = nullptr;
-    QFrame*         header_          = nullptr;  // header frame
+    QFrame*         header_          = nullptr;
 
     // Feature pages
     OverviewPage*    page_overview   = nullptr;
@@ -244,14 +242,14 @@ private:
     DevicePage*      page_devices    = nullptr;
 
 
-    // Header info (speed + cpu temp)
+    // Header info 
     QLabel* hdr_info_  = nullptr;
 
 
-    // Bottom tab bar (4 tabs)
+    // Bottom tab bar 
     std::array<QAbstractButton*, 4> tab_btns_{};
 
-    // 60Hz data refresh timer (plots, header rates, page refreshes)
+    // 60Hz data refresh timer 
     int plot_timer_id_ = -1;
 
     std::array<uint64_t, 4> last_bytes = {};

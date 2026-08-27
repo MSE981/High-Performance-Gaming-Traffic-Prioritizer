@@ -1,4 +1,4 @@
-#include "NetworkTypes.hpp"
+#include "Types_util.hpp"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 

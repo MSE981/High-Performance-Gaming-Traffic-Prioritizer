@@ -3,14 +3,13 @@
 #include <functional>
 #include <cstddef>
 #include <span>
-#include "Headers.hpp"
+#include "Headers_util.hpp"
 #include "Telemetry.hpp"
-#include "Scheduler.hpp"
+#include "Scheduler_util.hpp"
 
-namespace HPGTP::Events {
+namespace HPGTP::Events_util {
 
-// Interface subscriber for data-plane events (see realtime_embedded_co.pdf 2.2.2).
-// Implementations are registered before the worker threads start.
+// Interface subscriber for data-plane events
 class PacketObserver {
 public:
     virtual ~PacketObserver() = default;
@@ -20,13 +19,12 @@ public:
     virtual void on_tx_result(Traffic::TxResult result, size_t bytes) = 0;
 };
 
-// std::function subscriber slots (see realtime_embedded_co.pdf 2.2.1).
+// std::function subscriber slots 
 using FrameCallback  = std::function<void(std::span<const uint8_t>)>;
 using PacketCallback = std::function<void(const Net::ParsedPacket&, Net::Priority)>;
 using BatchCallback  = std::function<void(const Telemetry::BatchStats&, int)>;
 
-// Fixed-size callback registry. Registration happens at startup only; the
-// data-plane threads only read it, so no locking is needed on the hot path.
+// Fixed-size callback registry.
 class CallbackRegistry {
 public:
     static constexpr size_t MAX_OBSERVERS = 8;
@@ -71,4 +69,4 @@ private:
     BatchCallback  batch_cb_;
 };
 
-} // namespace HPGTP::Events
+} // namespace HPGTP::Events_util

@@ -54,7 +54,7 @@ LARGE_PACKET_THRESHOLD=1000
 
 enable_nat=true
 enable_dhcp=true
-DHCP_POOL_START=192.168.12.50
+DHCP_POOL_START=192.168.12.10
 DHCP_POOL_END=192.168.12.255
 ```
 
@@ -73,7 +73,16 @@ The four CPU cores take separate jobs.
 - Cores 2 and 3 run the two forwarding directions (WAN to LAN, LAN to WAN). Each direction has a receive thread and a processing thread pinned to that core.
 - Cores 0 and 1 run the GUI, the watchdog service threads, the DHCP controller and the shutdown helper.
 
-The packet path is event driven. Threads wait with blocking `poll()` on sockets and eventfds. The Shaper reports each send result through a `std::function` callback, and packet events go to a small callback registry. The engines, shapers and forwarding state live in `App`. Workers borrow them through raw pointers. `ForwardingPlane` owns the L2/ARP snapshot and the WAN IP lookup.
+The packet path is event driven. Threads wait with blocking `poll()` on sockets and eventfds. The Shaper reports each send result through a `std::function` callback, and packet events go to a small callback registry.
+
+The code splits into a few layers:
+
+- `App` is the composition root. It owns the engines, shapers, control plane, forwarding engine and network config, and it sequences start and stop.
+- `Forward_Engine` runs the two data-plane workers with their RX and processing threads.
+- `ControlPlane` runs the periodic service threads and the control-event thread, and drives the `ParameterServices` tick objects.
+- `NetworkConfig` aligns the LAN interface with the DHCP pool subnet.
+- `Lifecycle` owns shutdown signalling.
+- The `_util` modules hold the low-level helpers: `TxFrameOutput_util`, `ForwardingState_util`, `Network_util`, `Types_util`, `Headers_util`, `Units_util`, `Scheduler_util`, `SystemOptimizer_util` and `EventCallbacks_util`.
 
 ## What this is not
 

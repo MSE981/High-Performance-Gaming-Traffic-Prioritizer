@@ -6,7 +6,7 @@
 #include <mutex>
 #include <span>
 #include <string>
-#include "Headers.hpp"
+#include "Headers_util.hpp"
 
 namespace HPGTP::Logic {
 
@@ -41,8 +41,7 @@ namespace HPGTP::Logic {
         std::chrono::seconds lease_duration{86400};
         std::array<uint8_t, 6> lan_if_mac_{};
 
-        // Serialises DHCP pool/lease/router state between the background-task
-        // thread and the control event thread that applies GUI config.
+        // Serialises DHCP pool/lease/router state between the background-task thread and the control event thread that applies GUI config.
         mutable std::mutex mutex_{};
 
         std::expected<void, std::string> init_pool(Net::IPv4Net start_ip, Net::IPv4Net end_ip);

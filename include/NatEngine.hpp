@@ -3,11 +3,10 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
-#include "Headers.hpp"
+#include "Headers_util.hpp"
 #include "Processor.hpp"
 
 namespace HPGTP::Logic {
-    // True zero-copy user-space NAT engine
     class NatEngine {
         struct alignas(64) NatSession {
             std::atomic<uint32_t> seq{0};

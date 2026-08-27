@@ -5,14 +5,13 @@
 #include <cstdint>
 #include <expected>
 #include <string>
-#include "NetworkTypes.hpp"
+#include "Types_util.hpp"
 
-namespace HPGTP::DataPlane {
+namespace HPGTP::ForwardState_util {
 
 // Owns the double-buffered L2/ARP snapshot used for Ethernet rewrite and the
-// kernel WAN address lookup. There is no file/global state: one instance lives
-// in App and is shared read-only by the data-plane workers.
-class ForwardingPlane {
+// kernel WAN address lookup. 
+class ForwardingState_util {
 public:
     struct ArpEntry {
         uint32_t ip_nbo = 0;
@@ -34,7 +33,7 @@ public:
         bool ready = false;
     };
 
-    ForwardingPlane() = default;
+    ForwardingState_util() = default;
 
     std::expected<Net::IPv4Net, std::string> resolve_nat_wan_ip() const;
     void refresh_l2();
@@ -48,4 +47,4 @@ private:
     std::atomic<unsigned> active_{0};
 };
 
-} // namespace HPGTP::DataPlane
+} // namespace HPGTP::ForwardState_util

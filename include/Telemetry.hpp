@@ -6,11 +6,11 @@
 #include <expected>
 #include <string>
 #include <mutex>
-#include "NetworkTypes.hpp"
+#include "Types_util.hpp"
 
 namespace HPGTP {
 
-    // Core metrics slot (L1 cache line aligned)
+    // Core metrics slot
     // Forced alignment to 64 bytes keeps each CPU core's stats updates from triggering cache line bouncing
     struct alignas(64) CoreMetrics {
         std::atomic<uint64_t> pkts{ 0 };
@@ -18,17 +18,17 @@ namespace HPGTP {
         std::atomic<uint64_t> prio_pkts[2]{ 0, 0 };
         std::atomic<uint64_t> prio_bytes[2]{ 0, 0 };
         std::atomic<uint64_t> dropped[2]{ 0, 0 };
-        std::atomic<int>      cpu_load_pct{ 0 };  // 0-100, updated by telemetry service 1Hz via /proc/stat
+        std::atomic<int>      cpu_load_pct{ 0 };
     };
 
     struct Telemetry {
         // Allocate independent 64-byte cache blocks for each CPU core
         std::array<CoreMetrics, 4> core_metrics{};
 
-        // Diagnostics and control data (low-frequency read/write, no need for separation)
+        // Diagnostics and control data
         std::atomic<bool> effective_bridge_mode{ false };
         std::atomic<bool> effective_acceleration{ true };
-        std::atomic<double> cpu_temp_celsius{ 0.0 };  // updated by telemetry service, read by Qt UI
+        std::atomic<double> cpu_temp_celsius{ 0.0 };
         // Global WAN shaper caps (Mb): GUI writes pending + dirty; QoS service applies to base_dl/ul + shapers.
         std::atomic<bool> qos_global_bw_dirty{ false };
         std::atomic<double> qos_global_dl_mbps_pending{ 500.0 };
@@ -47,20 +47,16 @@ namespace HPGTP {
         std::atomic<uint8_t> raw_socket_poll_errors{0};
 
         // Device table: scanned from /proc/net/arp by the telemetry service every 5s.
-        // Plain char arrays - torn reads acceptable for display-only data.
         static constexpr uint8_t MAX_TRACKED_DEVICES = 64;
         struct DeviceEntry {
             Net::IPv4Net ip{};
             std::array<char, 18> mac{};  // "xx:xx:xx:xx:xx:xx\0"
         };
         std::array<DeviceEntry, MAX_TRACKED_DEVICES> device_table{};
-        std::atomic<uint8_t> device_count{0}; // release-stored last after all entries are written
-        // Bumped only when (ip, mac) contents differ from the prior snapshot;
-        // the UI gate uses this to rebuild cards on IP changes at constant count.
+        std::atomic<uint8_t> device_count{0}; 
         std::atomic<uint64_t> device_table_revision{0};
 
         // System info: updated by the telemetry service every 5 seconds, read by UI thread on-demand.
-        // char arrays are plain (not atomic) - display-only data, torn reads are acceptable.
         struct SystemInfo {
             std::array<char, 64>  hostname{};
             std::array<char, 128> kernel_short{};

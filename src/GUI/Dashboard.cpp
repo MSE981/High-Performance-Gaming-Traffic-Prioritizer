@@ -1,11 +1,11 @@
 #include "GUI/Dashboard.hpp"
 #include "GUI/StyleSheet.hpp"
-#include "SystemOptimizer.hpp"
+#include "SystemOptimizer_util.hpp"
 #include "App.hpp"
 #include "Config.hpp"
 #include "SelfTest.hpp"
 #include <cstring>
-#include "SystemOptimizer.hpp"
+#include "SystemOptimizer_util.hpp"
 #include <QApplication>
 #include <QPointer>
 #include <QScreen>
@@ -15,6 +15,7 @@
 #include <QBoxLayout>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPolygonF>
 #include <QLinearGradient>
 #include <QTimerEvent>
 #include <QResizeEvent>
@@ -37,6 +38,7 @@
 #include <utility>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <string_view>
 #include <vector>
 #include <optional>
@@ -117,7 +119,9 @@ void RealTimePlot::setLineColor(const QColor& color) {
 
 void RealTimePlot::paintEvent(QPaintEvent*) {
     QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing);
+    // No antialiasing: one sample per display pixel, cheaper on software rendering.
+    p.setRenderHint(QPainter::Antialiasing, false);
+    p.setRenderHint(QPainter::TextAntialiasing, false);
 
     // Dark background, one polyline, dashed grid with Y-axis labels.
     p.fillRect(rect(), QColor(18, 18, 32));
@@ -144,17 +148,23 @@ void RealTimePlot::paintEvent(QPaintEvent*) {
         p.drawText(QRect(0, iy - 8, ml - 4, 16), Qt::AlignRight | Qt::AlignVCenter, lbl);
     }
 
-    QPainterPath path;
-    const double x_step = static_cast<double>(pw) / (SHIFT_BUFFER_SIZE - 1);
-    for (int i = 0; i < SHIFT_BUFFER_SIZE; ++i) {
-        const double sample = shift_buffer[(shift_head + i) % SHIFT_BUFFER_SIZE];
-        const double norm = std::min(sample / y_max, 1.0);
-        const double x = ml + i * x_step;
-        const double y = mt + ph - norm * ph;
-        if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
+    if (pw <= 0 || ph <= 0) return;
+
+    // One sample per display pixel column, resampled from the circular window.
+    const int cols = pw;
+    QPolygonF pts;
+    pts.reserve(cols);
+    for (int col = 0; col < cols; ++col) {
+        const double t = (cols > 1) ? static_cast<double>(col) / (cols - 1) : 1.0;
+        const int idx = static_cast<int>(
+            std::llround(t * (SHIFT_BUFFER_SIZE - 1))) % SHIFT_BUFFER_SIZE;
+        const double sample = shift_buffer[(shift_head + idx) % SHIFT_BUFFER_SIZE];
+        const double norm = sample < 0.0 ? 0.0 : (sample > y_max ? 1.0 : sample / y_max);
+        pts.push_back(QPointF(static_cast<double>(ml) + col,
+                              mt + ph - norm * ph));
     }
-    p.setPen(QPen(line_color_, 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    p.drawPath(path);
+    p.setPen(QPen(line_color_, 1, Qt::SolidLine, Qt::SquareCap, Qt::BevelJoin));
+    p.drawPolyline(pts);
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -1196,7 +1206,7 @@ void Dashboard::on_shutdown_clicked() {
             QPointer<QDialog> dlg_guard(&dlg);
             auto*             qapp = QApplication::instance();
             std::thread([dlg_guard, qapp, shutdown_cb]() {
-                HPGTP::System::Optimizer::set_current_thread_affinity_control(); // control: cores 0-1
+                HPGTP::System::Optimizer_util::set_current_thread_affinity_control(); // control: cores 0-1
                 if (auto sr = Config::save_config("config/config.txt"); !sr)
                     std::println(stderr, "[GUI] {}", sr.error());
                 Config::SAVE_ON_EXIT.store(false, std::memory_order_relaxed);

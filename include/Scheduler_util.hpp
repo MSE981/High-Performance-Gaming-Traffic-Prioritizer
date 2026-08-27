@@ -7,9 +7,9 @@
 #include <algorithm>
 #include <functional>
 #include <thread>
-#include "Headers.hpp"
+#include "Headers_util.hpp"
 #include "Telemetry.hpp"
-#include "Units.hpp"
+#include "Units_util.hpp"
 
 namespace HPGTP::Traffic {
 
@@ -20,7 +20,7 @@ namespace HPGTP::Traffic {
         double rate_bytes_per_sec;
         std::chrono::time_point<std::chrono::steady_clock> last_refill;
 
-        // Internal pending-rate slot; -1.0 is the sentinel "no pending change".
+        // Internal pending-rate slot
         alignas(64) std::atomic<double> requested_limit{-1.0};
 
     public:
@@ -64,7 +64,7 @@ namespace HPGTP::Traffic {
         }
     };
 
-    // Zero dynamic allocation ring buffer - kept inline (template + hot path)
+    // Zero dynamic allocation ring buffer - need for speed~！~！
     template<size_t Capacity = 8192>
     class ZeroAllocRingBuffer {
         struct alignas(64) PacketSlot {
@@ -109,7 +109,7 @@ namespace HPGTP::Traffic {
 
     using TxResultCallback = std::function<void(TxResult, size_t)>;
 
-    // Traffic shaper - non-trivial methods defined in Scheduler.cpp
+    // Traffic shaper
     class Shaper {
         ZeroAllocRingBuffer<8192> normal_queue;
         TokenBucket               bucket;

@@ -1,20 +1,20 @@
-#include "ForwardingPlane.hpp"
+#include "ForwardingState_util.hpp"
 #include "Config.hpp"
-#include "NetworkUtils.hpp"
+#include "Network_util.hpp"
 #include <arpa/inet.h>
 #include <algorithm>
 #include <cstring>
 
-namespace HPGTP::DataPlane {
+namespace HPGTP::ForwardState_util {
 
-bool ForwardingPlane::is_invalid_nat_wan(Net::IPv4Net a) noexcept {
+bool ForwardingState_util::is_invalid_nat_wan(Net::IPv4Net a) noexcept {
     if (a.raw() == 0) return true;
     const uint32_t h = ntohl(a.raw());
     return (h >> 24) == 127;
 }
 
-std::expected<Net::IPv4Net, std::string> ForwardingPlane::resolve_nat_wan_ip() const {
-    std::string s = Utils::Network::get_local_ip(Config::iface_wan());
+std::expected<Net::IPv4Net, std::string> ForwardingState_util::resolve_nat_wan_ip() const {
+    std::string s = Utils_util::Network_util::get_local_ip(Config::iface_wan());
     if (s.empty())
         return std::unexpected(
             std::string("No IPv4 on WAN interface ") + Config::iface_wan()
@@ -26,11 +26,11 @@ std::expected<Net::IPv4Net, std::string> ForwardingPlane::resolve_nat_wan_ip() c
     return *e;
 }
 
-const ForwardingPlane::L2Snapshot& ForwardingPlane::snapshot() const {
+const ForwardingState_util::L2Snapshot& ForwardingState_util::snapshot() const {
     return snap_[active_.load(std::memory_order_acquire)];
 }
 
-bool ForwardingPlane::resolve_mac_onlink(const L2Snapshot& snap,
+bool ForwardingState_util::resolve_mac_onlink(const L2Snapshot& snap,
                                          uint32_t dst_ip_nbo,
                                          uint8_t out_mac[6]) const {
     for (uint32_t i = 0; i < snap.arp_count; ++i) {
@@ -42,15 +42,15 @@ bool ForwardingPlane::resolve_mac_onlink(const L2Snapshot& snap,
     return false;
 }
 
-void ForwardingPlane::refresh_l2() {
+void ForwardingState_util::refresh_l2() {
     const unsigned w = 1u - active_.load(std::memory_order_relaxed);
     L2Snapshot& snap = snap_[w];
 
-    const bool lan_ok = Utils::Network::get_iface_hwaddr(Config::iface_lan(), snap.lan_hw.data());
-    const bool wan_ok = Utils::Network::get_iface_hwaddr(Config::iface_wan(), snap.wan_hw.data());
+    const bool lan_ok = Utils_util::Network_util::get_iface_hwaddr(Config::iface_lan(), snap.lan_hw.data());
+    const bool wan_ok = Utils_util::Network_util::get_iface_hwaddr(Config::iface_wan(), snap.wan_hw.data());
 
     snap.wan_prefix_len = static_cast<int32_t>(
-        Utils::Network::get_iface_ipv4_prefix_len(Config::iface_wan()));
+        Utils_util::Network_util::get_iface_ipv4_prefix_len(Config::iface_wan()));
     if (auto wan = resolve_nat_wan_ip()) {
         snap.wan_ip_nbo = wan->raw();
     } else {
@@ -59,15 +59,15 @@ void ForwardingPlane::refresh_l2() {
     snap.wan_cfg_valid = snap.wan_ip_nbo != 0 && !is_invalid_nat_wan(Net::IPv4Net{snap.wan_ip_nbo})
         && snap.wan_prefix_len >= 0 && snap.wan_prefix_len <= 32;
 
-    std::string gw_ip = Utils::Network::get_default_gateway_for_iface(Config::iface_wan());
+    std::string gw_ip = Utils_util::Network_util::get_default_gateway_for_iface(Config::iface_wan());
     if (gw_ip.empty())
-        gw_ip = Utils::Network::get_gateway_ip();
+        gw_ip = Utils_util::Network_util::get_gateway_ip();
     snap.default_gw_ip_configured = !gw_ip.empty();
     if (!gw_ip.empty())
-        Utils::Network::force_arp_resolution(gw_ip);
+        Utils_util::Network_util::force_arp_resolution(gw_ip);
 
-    Utils::ArpTableRow rows[ForwardingPlane::L2Snapshot::MAX_ARP];
-    const size_t n = Utils::Network::read_arp_table(rows, ForwardingPlane::L2Snapshot::MAX_ARP);
+    Utils_util::ArpTableRow rows[ForwardingState_util::L2Snapshot::MAX_ARP];
+    const size_t n = Utils_util::Network_util::read_arp_table(rows, ForwardingState_util::L2Snapshot::MAX_ARP);
 
     snap.gw_hw_valid = false;
     if (!gw_ip.empty()) {
@@ -85,7 +85,7 @@ void ForwardingPlane::refresh_l2() {
     }
 
     const uint32_t ac = static_cast<uint32_t>(
-        std::min(n, static_cast<size_t>(ForwardingPlane::L2Snapshot::MAX_ARP)));
+        std::min(n, static_cast<size_t>(ForwardingState_util::L2Snapshot::MAX_ARP)));
     snap.arp_count = ac;
     for (uint32_t i = 0; i < ac; ++i) {
         snap.arp[i].ip_nbo = rows[i].ip_nbo;
@@ -96,4 +96,4 @@ void ForwardingPlane::refresh_l2() {
     active_.store(w, std::memory_order_release);
 }
 
-} // namespace HPGTP::DataPlane
+} // namespace HPGTP::ForwardState_util

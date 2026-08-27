@@ -4,7 +4,7 @@
 
 namespace HPGTP::Logic {
 
-// Incremental checksum update (RFC 1624): HC' = ~(~HC + ~m + m')
+// Incremental checksum update (RFC 1624)
 static void update_checksum_16(uint16_t& check, uint16_t old_val, uint16_t new_val) {
     uint32_t sum = (~ntohs(check) & 0xFFFF) + (~ntohs(old_val) & 0xFFFF) + ntohs(new_val);
     sum = (sum & 0xFFFF) + (sum >> 16);

@@ -36,16 +36,16 @@ elseif(MSVC)
 endif()
 
 # ----- Infrastructure utilities -----
-add_library(utils_network    src/NetworkUtils.cpp src/NetworkTypes.cpp)
-add_library(dataplane        src/DataPlane.cpp)
-add_library(utils_system     src/SystemOptimizer.cpp)
+add_library(utils_network    src/Network_util.cpp src/Types_util.cpp)
+add_library(dataplane        src/TxFrameOutput_util.cpp)
+add_library(utils_system     src/SystemOptimizer_util.cpp)
 add_library(config           src/Config.cpp)
 
 # ----- Data-plane engines -----
 add_library(engine_nat       src/NatEngine.cpp)
 add_library(engine_dhcp      src/DhcpEngine.cpp)
-add_library(engine_scheduler src/Scheduler.cpp)
-add_library(forwarding       src/ForwardingPlane.cpp)
+add_library(engine_scheduler src/Scheduler_util.cpp)
+add_library(forwarding       src/ForwardingState_util.cpp)
 
 target_link_libraries(engine_dhcp      PRIVATE dataplane utils_network)
 target_link_libraries(engine_scheduler PRIVATE dataplane)
@@ -73,7 +73,10 @@ endforeach()
 add_executable(GamingTrafficPrioritizer
     src/main.cpp
     src/App.cpp
-    src/WatchdogServices.cpp
+    src/Forward_Engine.cpp
+    src/ControlPlane.cpp
+    src/NetworkConfig.cpp
+    src/ParameterServices.cpp
     src/GUI/Dashboard.cpp
     include/GUI/Dashboard.hpp
 )
