@@ -49,7 +49,7 @@ namespace HPGTP {
         // Device table: scanned from /proc/net/arp by the telemetry service every 5s.
         static constexpr uint8_t MAX_TRACKED_DEVICES = 64;
         struct DeviceEntry {
-            Net::IPv4Net ip{};
+            Utils::Net::IPv4Net ip{};
             std::array<char, 18> mac{};  // "xx:xx:xx:xx:xx:xx\0"
         };
         std::array<DeviceEntry, MAX_TRACKED_DEVICES> device_table{};

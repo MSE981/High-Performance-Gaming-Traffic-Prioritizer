@@ -3,7 +3,7 @@
 // POSIX declarations used for conversions live in Types_util.cpp only.
 #include <cstdint>
 
-namespace HPGTP::Net {
+namespace HPGTP::Utils::Net {
 
 struct IPv4Host; // forward declaration
 
@@ -47,4 +47,4 @@ inline IPv4Net pool_advance(IPv4Net base_net, uint32_t offset) noexcept {
     return IPv4Host{base_net.to_host().raw() + offset}.to_net();
 }
 
-} // namespace HPGTP::Net
+} // namespace HPGTP::Utils::Net

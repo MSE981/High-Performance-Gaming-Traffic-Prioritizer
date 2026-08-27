@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace HPGTP::TxFrame_util {
+namespace HPGTP::Utils::TxFrame {
 
 // Single egress path for raw Ethernet frames
 struct TxFrameOutput_util {
@@ -17,4 +17,4 @@ struct TxFrameOutput_util {
     static void send_stream_blocking(int fd, std::span<const uint8_t> data);
 };
 
-} // namespace HPGTP::TxFrame_util
+} // namespace HPGTP::Utils::TxFrame

@@ -8,7 +8,7 @@
 #include <cstdint>
 #include "Headers_util.hpp"
 
-namespace HPGTP::Engine {
+namespace HPGTP::Utils::RawSocket {
     class RawSocketManager {
         RawSocketManager(const RawSocketManager&) = delete;
         RawSocketManager& operator=(const RawSocketManager&) = delete;
@@ -44,4 +44,4 @@ namespace HPGTP::Engine {
         bool peek_rx_frame(std::span<uint8_t>& out) { return peek_frame(out); }
         void finish_rx_frame() { advance_frame(); }
     };
-}
+} // namespace HPGTP::Utils::RawSocket

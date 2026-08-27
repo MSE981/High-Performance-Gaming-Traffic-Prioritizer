@@ -22,7 +22,6 @@ namespace HPGTP::Config {
     // Dynamic runtime switch states
     struct DynamicState {
         std::atomic<bool> enable_nat{true};
-        std::atomic<bool> enable_dhcp{true};
     };
     inline DynamicState global_state;
 
@@ -42,7 +41,7 @@ namespace HPGTP::Config {
     inline uint32_t LARGE_PACKET_THRESHOLD_BYTES = 1000;
 
     // Dotted-decimal IPv4 only; rejects invalid octets and non-canonical forms per inet_pton(3).
-    inline std::expected<Net::IPv4Net, std::string> parse_ip_str(std::string_view ip_sv) {
+    inline std::expected<Utils::Net::IPv4Net, std::string> parse_ip_str(std::string_view ip_sv) {
         if (ip_sv.empty()) return std::unexpected(std::string("empty IPv4 string"));
         if (ip_sv.size() > 15u)
             return std::unexpected(std::string("IPv4 string too long"));
@@ -52,11 +51,11 @@ namespace HPGTP::Config {
         struct ::in_addr a {};
         if (::inet_pton(AF_INET, buf, &a) != 1)
             return std::unexpected(std::string("invalid IPv4 address"));
-        return Net::IPv4Net{a.s_addr};
+        return Utils::Net::IPv4Net{a.s_addr};
     }
 
     // convert NBO IPv4Net to dotted-decimal string
-    inline std::string ip_to_str(Net::IPv4Net ip) {
+    inline std::string ip_to_str(Utils::Net::IPv4Net ip) {
         uint32_t v = ip.raw();
         return std::format("{}.{}.{}.{}",
             v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF);

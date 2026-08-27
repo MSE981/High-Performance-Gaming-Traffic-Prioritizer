@@ -73,8 +73,8 @@ void TelemetryCollector::refreshDevices() {
     while (line < end && dcnt < Telemetry::MAX_TRACKED_DEVICES) {
         char ip_str[20]{}, hw[8]{}, flags[8]{}, mac[20]{};
         if (std::sscanf(line, "%19s %7s %7s %19s", ip_str, hw, flags, mac) == 4) {
-            Net::IPv4Net ip{};
-            if (Net::try_parse_ipv4(ip_str, ip) && std::strcmp(flags, "0x0") != 0) {
+            Utils::Net::IPv4Net ip{};
+            if (Utils::Net::try_parse_ipv4(ip_str, ip) && std::strcmp(flags, "0x0") != 0) {
                 auto& slot = tel_.device_table[dcnt];
                 if (slot.ip != ip) { slot.ip = ip; changed = true; }
                 std::array<char, 18> mac_buf{};
@@ -155,9 +155,9 @@ void QosController::tick1Hz() {
         tel_.effective_qos_global_dl_mbps.store(base_dl_, std::memory_order_release);
         tel_.effective_qos_global_ul_mbps.store(base_ul_, std::memory_order_release);
         if (shaper_dl_ != nullptr)
-            shaper_dl_->set_rate_limit(Traffic::Mbps{base_dl_});
+            shaper_dl_->set_rate_limit(Utils::Units::Mbps{base_dl_});
         if (shaper_ul_ != nullptr)
-            shaper_ul_->set_rate_limit(Traffic::Mbps{base_ul_});
+            shaper_ul_->set_rate_limit(Utils::Units::Mbps{base_ul_});
     }
 }
 

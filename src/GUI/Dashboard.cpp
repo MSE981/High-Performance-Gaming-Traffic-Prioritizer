@@ -773,8 +773,8 @@ void DhcpConfigDialog::on_apply() {
         edit_pool_end->setStyleSheet("border: 1px solid #cc3333;");
         return;
     }
-    Net::IPv4Net start_ip = *start_e;
-    Net::IPv4Net end_ip   = *end_e;
+    Utils::Net::IPv4Net start_ip = *start_e;
+    Utils::Net::IPv4Net end_ip   = *end_e;
     if (ntohl(start_ip.raw()) >= ntohl(end_ip.raw())) {
         edit_pool_start->setStyleSheet("border: 1px solid #cc3333;");
         edit_pool_end->setStyleSheet("border: 1px solid #cc3333;");
@@ -805,97 +805,46 @@ ServicePage::ServicePage(std::function<void()> dhcp_apply_callback, QWidget* par
     title->setObjectName("section_title");
     layout->addWidget(title);
 
-    auto* desc = new QLabel("Enable or disable core network services. Changes take effect immediately, no restart required.");
+    auto* desc = new QLabel("DHCP is always active and assigns IP addresses to LAN clients.");
     desc->setStyleSheet("color: #707080; font-size: 13px; margin-bottom: 8px;");
     layout->addWidget(desc);
 
-    struct ServiceDef {
-        const char* name;
-        const char* description;
-        std::atomic<bool>* state;
-        const char* settings_label;  // nullptr = no settings button
-    };
+    auto* row_frame = new QFrame();
+    row_frame->setStyleSheet("QFrame { background-color: #22223a; border: 1px solid #2a2a4a; border-radius: 6px; padding: 8px; margin: 2px 0px; }");
+    auto* row_lay = new QHBoxLayout(row_frame);
 
-    ServiceDef defs[1] = {
-        {"DHCP (Dynamic Host Config)", "Automatically assigns IP addresses to LAN clients", &Config::global_state.enable_dhcp, "Set DHCP"},
-    };
+    auto* name_lbl = new QLabel("DHCP (Dynamic Host Config)");
+    name_lbl->setStyleSheet("font-size: 15px; font-weight: bold; color: #e0e0e0;");
 
-    for (int i = 0; i < 1; ++i) {
-        auto* row_frame = new QFrame();
-        row_frame->setStyleSheet("QFrame { background-color: #22223a; border: 1px solid #2a2a4a; border-radius: 6px; padding: 8px; margin: 2px 0px; }");
-        auto* row_lay = new QHBoxLayout(row_frame);
+    auto* desc_lbl = new QLabel("Automatically assigns IP addresses to LAN clients");
+    desc_lbl->setStyleSheet("color: #808090; font-size: 12px;");
 
-        auto* name_lbl = new QLabel(defs[i].name);
-        name_lbl->setStyleSheet("font-size: 15px; font-weight: bold; color: #e0e0e0;");
+    rows[0].status_label = new QLabel("● Running");
+    rows[0].status_label->setStyleSheet("color: #00cc66; font-weight: bold;");
 
-        rows[i].sw = new SwitchToggle();
-        rows[i].sw->setChecked(defs[i].state->load(std::memory_order_relaxed));
+    auto* text_col = new QVBoxLayout();
+    text_col->addWidget(name_lbl);
+    text_col->addWidget(desc_lbl);
+    row_lay->addLayout(text_col, 1);
 
-        auto* desc_lbl = new QLabel(defs[i].description);
-        desc_lbl->setStyleSheet("color: #808090; font-size: 12px;");
+    auto* btn = new QPushButton("Set DHCP");
+    rows[0].btn_settings = btn;
+    row_lay->addWidget(btn);
+    connect(btn, &QPushButton::clicked, this, [this]() {
+        DhcpConfigDialog dlg(dhcp_apply_callback_, this);
+        dlg.exec();
+    });
 
-        rows[i].status_label = new QLabel("● Running");
-        rows[i].status_label->setStyleSheet("color: #00cc66; font-weight: bold;");
-
-        auto* text_col = new QVBoxLayout();
-        text_col->addWidget(name_lbl);
-        text_col->addWidget(desc_lbl);
-        row_lay->addLayout(text_col, 1);
-        row_lay->addWidget(rows[i].sw, 0, Qt::AlignVCenter);
-
-        // Settings button (DHCP / DNS only)
-        if (defs[i].settings_label) {
-            auto* btn = new QPushButton(defs[i].settings_label);
-            btn->setEnabled(defs[i].state->load(std::memory_order_relaxed));
-            rows[i].btn_settings = btn;
-            row_lay->addWidget(btn);
-
-            if (i == 0) {
-                connect(btn, &QPushButton::clicked, this, [this]() {
-                    DhcpConfigDialog dlg(dhcp_apply_callback_, this);
-                    dlg.exec();
-                });
-            }
-        }
-
-        row_lay->addWidget(rows[i].status_label);
-
-        // Service on/off is stored in Config::global_state.enable_* atomics alone.
-        // Control/data paths read them with atomic loads (relaxed in App.cpp); no
-        // *_dirty hand-off - unlike staged QoS/DHCP/DNS, there is no pending snapshot.
-        // Connect toggle: update state + status label + settings button enabled
-        auto* state_ptr  = defs[i].state;
-        auto* status_lbl = rows[i].status_label;
-        auto* btn_cfg    = rows[i].btn_settings;
-        connect(rows[i].sw, &SwitchToggle::toggled, [state_ptr, status_lbl, btn_cfg](bool checked) {
-            state_ptr->store(checked, std::memory_order_relaxed);
-            status_lbl->setText(checked ? "● Running" : "○ Stopped");
-            status_lbl->setStyleSheet(checked ? "color: #00cc66; font-weight: bold;" : "color: #cc3333; font-weight: bold;");
-            if (btn_cfg) btn_cfg->setEnabled(checked);
-            std::println("[GUI] Service state updated");
-        });
-
-        layout->addWidget(row_frame);
-    }
+    row_lay->addWidget(rows[0].status_label);
+    layout->addWidget(row_frame);
 
     layout->addStretch();
 }
 
 void ServicePage::refresh_status() {
-    std::atomic<bool>* states[1] = {
-        &Config::global_state.enable_dhcp,
-    };
-    for (int i = 0; i < 1; ++i) {
-        bool on = states[i]->load(std::memory_order_relaxed);
-        {
-            QSignalBlocker b(rows[i].sw);
-            rows[i].sw->setChecked(on);
-        }
-        rows[i].status_label->setText(on ? "● Running" : "○ Stopped");
-        rows[i].status_label->setStyleSheet(on ? "color: #00cc66; font-weight: bold;" : "color: #cc3333; font-weight: bold;");
-        if (rows[i].btn_settings)
-            rows[i].btn_settings->setEnabled(on);
-    }
+    // DHCP is always on; report a running state only.
+    rows[0].status_label->setText("● Running");
+    rows[0].status_label->setStyleSheet("color: #00cc66; font-weight: bold;");
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -965,7 +914,7 @@ void DevicePage::refresh() {
     }
 
     for (uint8_t i = 0; i < cnt; ++i) {
-        const Net::IPv4Net ip = tel.device_table[i].ip;
+        const Utils::Net::IPv4Net ip = tel.device_table[i].ip;
         const char* mac_str = tel.device_table[i].mac.data();
         auto* card = new QFrame();
         card->setStyleSheet(
@@ -1206,7 +1155,7 @@ void Dashboard::on_shutdown_clicked() {
             QPointer<QDialog> dlg_guard(&dlg);
             auto*             qapp = QApplication::instance();
             std::thread([dlg_guard, qapp, shutdown_cb]() {
-                HPGTP::System::Optimizer_util::set_current_thread_affinity_control(); // control: cores 0-1
+                HPGTP::Utils::System::set_current_thread_affinity_control(); // control: cores 0-1
                 if (auto sr = Config::save_config("config/config.txt"); !sr)
                     std::println(stderr, "[GUI] {}", sr.error());
                 Config::SAVE_ON_EXIT.store(false, std::memory_order_relaxed);

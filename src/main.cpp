@@ -52,7 +52,7 @@ int main(int argc, char* argv[]) {
     int ret = 0;
     try {
         // Core 0+1: UI/graphics thread; must be set before QApplication construction
-        HPGTP::System::Optimizer_util::set_current_thread_affinity_control(); 
+        HPGTP::Utils::System::set_current_thread_affinity_control(); 
 
         QApplication qapp(argc, argv);
 
@@ -77,7 +77,7 @@ int main(int argc, char* argv[]) {
 
         // Watches App shutdown completion and exits the GUI event loop 
         std::thread watchdog_notify([&app, &qapp]() {
-            HPGTP::System::Optimizer_util::set_current_thread_affinity_control();
+            HPGTP::Utils::System::set_current_thread_affinity_control();
             app.wait_for_shutdown();
             QMetaObject::invokeMethod(&qapp, "quit", Qt::QueuedConnection);
         });

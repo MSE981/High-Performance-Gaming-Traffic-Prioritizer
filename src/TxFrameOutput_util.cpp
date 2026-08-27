@@ -4,7 +4,7 @@
 #include <cerrno>
 #include <cstdint>
 
-namespace HPGTP::TxFrame_util {
+namespace HPGTP::Utils::TxFrame {
 
 TxFrameOutput_util::PacketTxTry TxFrameOutput_util::try_send_packet_nonblocking(
     int tx_fd, std::span<const uint8_t> pkt) noexcept {
@@ -41,4 +41,4 @@ void TxFrameOutput_util::send_stream_blocking(int fd, std::span<const uint8_t> d
     }
 }
 
-} // namespace HPGTP::TxFrame_util
+} // namespace HPGTP::Utils::TxFrame

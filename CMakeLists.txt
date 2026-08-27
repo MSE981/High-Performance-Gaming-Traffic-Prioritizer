@@ -52,7 +52,7 @@ target_link_libraries(engine_scheduler PRIVATE dataplane)
 target_link_libraries(forwarding        PRIVATE utils_network config)
 
 # ----- I/O engines -----
-add_library(engine_net       src/NetworkEngine.cpp)
+add_library(rawsocket_util  src/RawSocket_util.cpp)
 
 # ----- Self-test component -----
 add_library(selftest         src/SelfTest.cpp)
@@ -61,7 +61,7 @@ add_library(selftest         src/SelfTest.cpp)
 set(PROJECT_ROUTER_STATIC_LIBS
     utils_network utils_system config dataplane
     engine_nat engine_dhcp engine_scheduler forwarding
-    engine_net
+    rawsocket_util
     selftest
 )
 foreach(lib IN LISTS PROJECT_ROUTER_STATIC_LIBS)
@@ -73,7 +73,6 @@ endforeach()
 add_executable(GamingTrafficPrioritizer
     src/main.cpp
     src/App.cpp
-    src/Forward_Engine.cpp
     src/ControlPlane.cpp
     src/NetworkConfig.cpp
     src/ParameterServices.cpp

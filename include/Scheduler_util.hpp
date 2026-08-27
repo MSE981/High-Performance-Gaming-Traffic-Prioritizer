@@ -11,7 +11,7 @@
 #include "Telemetry.hpp"
 #include "Units_util.hpp"
 
-namespace HPGTP::Traffic {
+namespace HPGTP::Engine::Scheduler {
 
     // Token bucket rate limiter - kept inline (hot path, called every packet)
     class TokenBucket {
@@ -24,10 +24,10 @@ namespace HPGTP::Traffic {
         alignas(64) std::atomic<double> requested_limit{-1.0};
 
     public:
-        explicit TokenBucket(Mbps limit) { apply_new_rate(limit); }
+        explicit TokenBucket(Utils::Units::Mbps limit) { apply_new_rate(limit); }
 
     private:
-        void apply_new_rate(Mbps limit) {
+        void apply_new_rate(Utils::Units::Mbps limit) {
             rate_bytes_per_sec = (limit.value * 1e6) / 8.0;
             capacity = std::max<double>(15000.0, rate_bytes_per_sec * 0.1);
             tokens = capacity;
@@ -35,7 +35,7 @@ namespace HPGTP::Traffic {
         }
 
     public:
-        void set_rate(Mbps limit) {
+        void set_rate(Utils::Units::Mbps limit) {
             requested_limit.store(limit.value, std::memory_order_release);
         }
 
@@ -43,7 +43,7 @@ namespace HPGTP::Traffic {
             double req_limit =
                 requested_limit.exchange(-1.0, std::memory_order_acq_rel);
             if (req_limit >= 0.0)
-                apply_new_rate(Mbps{req_limit});
+                apply_new_rate(Utils::Units::Mbps{req_limit});
             auto now = std::chrono::steady_clock::now();
             std::chrono::duration<double> dt = now - last_refill;
             double new_tokens = dt.count() * rate_bytes_per_sec;
@@ -123,7 +123,7 @@ namespace HPGTP::Traffic {
         std::array<std::function<void(size_t)>, 3> result_handlers_;
 
     public:
-        explicit Shaper(Mbps limit) : bucket(limit) {
+        explicit Shaper(Utils::Units::Mbps limit) : bucket(limit) {
             result_handlers_[0] = [this](size_t) {
                 normal_queue.pop();
                 Telemetry::instance().shaper_normal_tx_complete.fetch_add(
@@ -138,7 +138,7 @@ namespace HPGTP::Traffic {
             };
         }
 
-        void set_rate_limit(Mbps limit);
+        void set_rate_limit(Utils::Units::Mbps limit);
         // Register a subscriber for every drain attempt (startup only).
         void set_tx_result_callback(TxResultCallback cb);
         void enqueue_normal(std::span<const uint8_t> pkt);
@@ -147,4 +147,4 @@ namespace HPGTP::Traffic {
     private:
         TxResultCallback tx_callback_{};
     };
-}
+} // namespace HPGTP::Engine::Scheduler

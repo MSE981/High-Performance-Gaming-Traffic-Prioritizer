@@ -6,11 +6,11 @@
 #include "Headers_util.hpp"
 #include "Processor.hpp"
 
-namespace HPGTP::Logic {
+namespace HPGTP::Engine::Nat {
     class NatEngine {
         struct alignas(64) NatSession {
             std::atomic<uint32_t> seq{0};
-            FlowKey internal_key;
+            Logic::FlowKey internal_key;
             uint16_t external_port = 0;
             std::atomic<uint32_t> last_active_tick{0};
             std::atomic<bool> active{false};
@@ -21,8 +21,8 @@ namespace HPGTP::Logic {
 
         struct alignas(64) IcmpEchoSession {
             std::atomic<uint32_t> seq{0};
-            Net::IPv4Net int_saddr{};
-            Net::IPv4Net remote_daddr{};
+            Utils::Net::IPv4Net int_saddr{};
+            Utils::Net::IPv4Net remote_daddr{};
             uint16_t     int_id_nbo  = 0;
             uint16_t     ext_id_nbo  = 0;
             std::atomic<uint32_t> last_active_tick{0};
@@ -41,20 +41,20 @@ namespace HPGTP::Logic {
         alignas(64) std::atomic<uint32_t> wan_ip_nbo{0};
         std::atomic<uint32_t> current_tick{0};
 
-        uint32_t hash_flow(const FlowKey& k) const;
-        uint32_t hash_icmp_flow(Net::IPv4Net sa, Net::IPv4Net da, uint16_t id_nbo) const;
+        uint32_t hash_flow(const Logic::FlowKey& k) const;
+        uint32_t hash_icmp_flow(Utils::Net::IPv4Net sa, Utils::Net::IPv4Net da, uint16_t id_nbo) const;
         uint16_t alloc_external_icmp_id() noexcept;
-        bool     process_outbound_icmp(Net::ParsedPacket& pkt);
-        bool     process_inbound_icmp(Net::ParsedPacket& pkt);
+        bool     process_outbound_icmp(Utils::Net::ParsedPacket& pkt);
+        bool     process_inbound_icmp(Utils::Net::ParsedPacket& pkt);
 
     public:
         explicit NatEngine();
-        void set_wan_ip(Net::IPv4Net ip);
-        [[nodiscard]] Net::IPv4Net wan_ip_snapshot() const noexcept {
-            return Net::IPv4Net{wan_ip_nbo.load(std::memory_order_acquire)};
+        void set_wan_ip(Utils::Net::IPv4Net ip);
+        [[nodiscard]] Utils::Net::IPv4Net wan_ip_snapshot() const noexcept {
+            return Utils::Net::IPv4Net{wan_ip_nbo.load(std::memory_order_acquire)};
         }
         void tick();
-        bool process_outbound(Net::ParsedPacket& pkt);
-        bool process_inbound(Net::ParsedPacket& pkt);
+        bool process_outbound(Utils::Net::ParsedPacket& pkt);
+        bool process_inbound(Utils::Net::ParsedPacket& pkt);
     };
-}
+} // namespace HPGTP::Engine::Nat

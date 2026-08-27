@@ -6,7 +6,7 @@
 #include <sched.h>
 #include <fcntl.h>
 
-namespace HPGTP::System::Optimizer_util {
+namespace HPGTP::Utils::System {
 
 void lock_cpu_frequency() {
     long n = ::sysconf(_SC_NPROCESSORS_ONLN);
@@ -49,4 +49,4 @@ void set_realtime_priority() {
         std::println(stderr, "[System] Warning: Failed to set SCHED_FIFO. Run with sudo/setcap?");
 }
 
-} // namespace HPGTP::System::Optimizer_util
+} // namespace HPGTP::Utils::System

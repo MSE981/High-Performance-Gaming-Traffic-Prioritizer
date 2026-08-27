@@ -82,7 +82,6 @@ std::expected<void, std::string> load_config(const std::string& path) {
                         std::memory_order_relaxed);
                 else if (!strcmp(key, "LARGE_PACKET_THRESHOLD")) LARGE_PACKET_THRESHOLD_BYTES = parse_u32(val);
                 else if (!strcmp(key, "enable_nat"))        global_state.enable_nat.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
-                else if (!strcmp(key, "enable_dhcp"))       global_state.enable_dhcp.store(!strcmp(val, "true") || !strcmp(val, "1"), std::memory_order_relaxed);
                 else if (!strcmp(key, "DHCP_POOL_START"))   DHCP_POOL_START = val;
                 else if (!strcmp(key, "DHCP_POOL_END"))     DHCP_POOL_END   = val;
                 else if (!strcmp(key, "DHCP_LEASE_SECONDS")) DHCP_LEASE_DURATION = std::chrono::seconds{parse_u32(val)};
@@ -115,7 +114,6 @@ std::expected<void, std::string> save_config(const std::string& path) {
     dprintf(fd, "ENABLE_ACCELERATION=%s\n",  b(ENABLE_ACCELERATION.load(std::memory_order_relaxed)));
     dprintf(fd, "LARGE_PACKET_THRESHOLD=%u\n", LARGE_PACKET_THRESHOLD_BYTES);
     dprintf(fd, "enable_nat=%s\n",        b(global_state.enable_nat.load(std::memory_order_relaxed)));
-    dprintf(fd, "enable_dhcp=%s\n",       b(global_state.enable_dhcp.load(std::memory_order_relaxed)));
     dprintf(fd, "DHCP_POOL_START=%s\n",   DHCP_POOL_START.c_str());
     dprintf(fd, "DHCP_POOL_END=%s\n",     DHCP_POOL_END.c_str());
     dprintf(fd, "DHCP_LEASE_SECONDS=%u\n", static_cast<uint32_t>(DHCP_LEASE_DURATION.count()));

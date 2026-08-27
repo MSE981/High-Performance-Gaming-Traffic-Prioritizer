@@ -41,25 +41,25 @@ private:
 // 5 s: follow the kernel-assigned WAN address (NetworkManager owns it).
 class NatWanTracker {
 public:
-    NatWanTracker(Logic::NatEngine& nat, std::function<std::string()> source)
+    NatWanTracker(Engine::Nat::NatEngine& nat, std::function<std::string()> source)
         : nat_(nat), source_(std::move(source)) {}
     void tick5s();
 
 private:
-    Logic::NatEngine& nat_;
+    Engine::Nat::NatEngine& nat_;
     std::function<std::string()> source_;
 };
 
 // DHCP background work (response queue / lease upkeep) plus router IP sync.
 class DhcpWorker {
 public:
-    DhcpWorker(Logic::DhcpEngine& dhcp, int& lan_fd, std::function<void()> refresh_router)
+    DhcpWorker(Engine::Dhcp::DhcpEngine& dhcp, int& lan_fd, std::function<void()> refresh_router)
         : dhcp_(dhcp), lan_fd_(lan_fd), refresh_router_(std::move(refresh_router)) {}
     void tick1Hz() { dhcp_.process_background_tasks(lan_fd_); }
     void tick5s() { if (refresh_router_) refresh_router_(); }
 
 private:
-    Logic::DhcpEngine& dhcp_;
+    Engine::Dhcp::DhcpEngine& dhcp_;
     int& lan_fd_;
     std::function<void()> refresh_router_;
 };
@@ -67,7 +67,7 @@ private:
 // Applies GUI mode (Acceleration/Bridge) and global DL/UL bandwidth caps. Throttle percentage was removed; caps are applied as-is.
 class QosController {
 public:
-    QosController(Telemetry& tel, Traffic::Shaper* dl, Traffic::Shaper* ul,
+    QosController(Telemetry& tel, Engine::Scheduler::Shaper* dl, Engine::Scheduler::Shaper* ul,
                   double& base_dl, double& base_ul)
         : tel_(tel), shaper_dl_(dl), shaper_ul_(ul),
           base_dl_(base_dl), base_ul_(base_ul) {}
@@ -75,8 +75,8 @@ public:
 
 private:
     Telemetry& tel_;
-    Traffic::Shaper* shaper_dl_;
-    Traffic::Shaper* shaper_ul_;
+    Engine::Scheduler::Shaper* shaper_dl_;
+    Engine::Scheduler::Shaper* shaper_ul_;
     double& base_dl_;
     double& base_ul_;
 };
@@ -84,11 +84,11 @@ private:
 // 1 Hz: NAT session expiry cleanup.
 class EngineTicker {
 public:
-    explicit EngineTicker(Logic::NatEngine& nat) : nat_(nat) {}
+    explicit EngineTicker(Engine::Nat::NatEngine& nat) : nat_(nat) {}
     void tick1Hz() { nat_.tick(); }
 
 private:
-    Logic::NatEngine& nat_;
+    Engine::Nat::NatEngine& nat_;
 };
 
 } // namespace HPGTP::ParameterServices

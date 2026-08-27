@@ -2,11 +2,11 @@
 #include "TxFrameOutput_util.hpp"
 #include <array>
 
-namespace HPGTP::Traffic {
+namespace HPGTP::Engine::Scheduler {
 
 // Attempt to send a packet to the hardware, returning a TxResult indicating success, congestion, or fatal error.
 static TxResult try_hardware_send(int fd, std::span<const uint8_t> pkt) {
-    using TxFrame_util::TxFrameOutput_util;
+    using Utils::TxFrame::TxFrameOutput_util;
     switch (TxFrameOutput_util::try_send_packet_nonblocking(fd, pkt)) {
     case TxFrameOutput_util::PacketTxTry::Complete: return TxResult::Success;
     case TxFrameOutput_util::PacketTxTry::Busy: return TxResult::Congested;
@@ -16,7 +16,7 @@ static TxResult try_hardware_send(int fd, std::span<const uint8_t> pkt) {
 }
 
 // Shaper implementation
-void Shaper::set_rate_limit(Mbps limit) {
+void Shaper::set_rate_limit(Utils::Units::Mbps limit) {
     bucket.set_rate(limit);
 }
 // Set the callback to be invoked after each packet is sent .
@@ -65,4 +65,4 @@ void Shaper::process_queue(int tx_fd) {
     }
 }
 
-} // namespace HPGTP::Traffic
+} // namespace HPGTP::Engine::Scheduler

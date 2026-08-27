@@ -10,7 +10,7 @@
 #include <cstring>
 #include <string>
 
-namespace HPGTP::Logic {
+namespace HPGTP::Engine::Dhcp {
 
 #pragma pack(push, 1)
 struct DhcpHeader {
@@ -34,7 +34,7 @@ struct DhcpHeader {
 
 // private
 
-std::expected<void, std::string> DhcpEngine::init_pool(Net::IPv4Net start_ip, Net::IPv4Net end_ip) {
+std::expected<void, std::string> DhcpEngine::init_pool(Utils::Net::IPv4Net start_ip, Utils::Net::IPv4Net end_ip) {
     uint32_t start_h = start_ip.to_host().raw();
     uint32_t end_h   = end_ip.to_host().raw();
     if (end_h < start_h)
@@ -47,13 +47,13 @@ std::expected<void, std::string> DhcpEngine::init_pool(Net::IPv4Net start_ip, Ne
     if (pool_count == 0)
         return std::unexpected(std::string("DHCP pool is empty"));
     for (size_t i = 0; i < pool_count; ++i) {
-        leases[i].ip     = Net::pool_advance(start_ip, static_cast<uint32_t>(i));
+        leases[i].ip     = Utils::Net::pool_advance(start_ip, static_cast<uint32_t>(i));
         leases[i].active = false;
     }
     return {};
 }
 
-Net::IPv4Net DhcpEngine::find_or_assign_lease(std::span<const uint8_t, 6> mac) {
+Utils::Net::IPv4Net DhcpEngine::find_or_assign_lease(std::span<const uint8_t, 6> mac) {
     auto now      = std::chrono::steady_clock::now();
     auto duration = lease_duration;
 
@@ -68,10 +68,10 @@ Net::IPv4Net DhcpEngine::find_or_assign_lease(std::span<const uint8_t, 6> mac) {
             return leases[i].ip;
         }
     }
-    return Net::IPv4Net{};
+    return Utils::Net::IPv4Net{};
 }
 
-void DhcpEngine::commit_lease(Net::IPv4Net ip) {
+void DhcpEngine::commit_lease(Utils::Net::IPv4Net ip) {
     auto duration = lease_duration;
     for (size_t i = 0; i < pool_count; ++i) {
         if (leases[i].ip == ip) {
@@ -83,14 +83,14 @@ void DhcpEngine::commit_lease(Net::IPv4Net ip) {
 }
 
 void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
-    auto parsed = Net::ParsedPacket::parse(std::span<uint8_t>(msg.data.data(), msg.len));
+    auto parsed = Utils::Net::ParsedPacket::parse(std::span<uint8_t>(msg.data.data(), msg.len));
     if (!parsed.is_valid_ipv4()) return;
     if (parsed.l4_protocol != 17) return;
 
     auto udp = parsed.udp();
     if (!udp || ntohs(udp->dest) != 67) return;
 
-    size_t dhcp_offset = parsed.l4_offset + sizeof(Net::UDPHeader);
+    size_t dhcp_offset = parsed.l4_offset + sizeof(Utils::Net::UDPHeader);
     if (msg.len < dhcp_offset + sizeof(DhcpHeader)) return;
 
     auto dhcp = reinterpret_cast<const DhcpHeader*>(msg.data.data() + dhcp_offset);
@@ -110,18 +110,18 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
         if (opt[0] == 50 && len == 4) std::memcpy(&raw_requested_ip, &opt[2], 4);
         opt += 2 + len;
     }
-    Net::IPv4Net requested_ip{raw_requested_ip};
+    Utils::Net::IPv4Net requested_ip{raw_requested_ip};
 
     // Build and send response - all wire construction happens below
-    auto send_response = [&](uint8_t type, Net::IPv4Net yiaddr) {
+    auto send_response = [&](uint8_t type, Utils::Net::IPv4Net yiaddr) {
         alignas(64) std::array<uint8_t, 512> response{};
 
-        auto eth = reinterpret_cast<Net::EthernetHeader*>(response.data());
+        auto eth = reinterpret_cast<Utils::Net::EthernetHeader*>(response.data());
         std::memcpy(eth->dest, dhcp->chaddr, 6);
         std::memcpy(eth->src, lan_if_mac_.data(), 6);
         eth->proto = htons(0x0800);
 
-        auto ip = reinterpret_cast<Net::IPv4Header*>(response.data() + sizeof(Net::EthernetHeader));
+        auto ip = reinterpret_cast<Utils::Net::IPv4Header*>(response.data() + sizeof(Utils::Net::EthernetHeader));
         ip->ver_ihl  = 0x45;
         ip->tos      = 0;
         ip->id       = 0;
@@ -129,15 +129,15 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
         ip->ttl      = 64;
         ip->protocol = 17;
         ip->saddr    = router_ip;
-        ip->daddr    = Net::IPv4Net{0xFFFFFFFF};
+        ip->daddr    = Utils::Net::IPv4Net{0xFFFFFFFF};
 
-        auto resp_udp = reinterpret_cast<Net::UDPHeader*>(
-            response.data() + sizeof(Net::EthernetHeader) + sizeof(Net::IPv4Header));
+        auto resp_udp = reinterpret_cast<Utils::Net::UDPHeader*>(
+            response.data() + sizeof(Utils::Net::EthernetHeader) + sizeof(Utils::Net::IPv4Header));
         resp_udp->source = htons(67);
         resp_udp->dest   = htons(68);
 
         auto resp_dhcp = reinterpret_cast<DhcpHeader*>(
-            response.data() + sizeof(Net::EthernetHeader) + sizeof(Net::IPv4Header) + sizeof(Net::UDPHeader));
+            response.data() + sizeof(Utils::Net::EthernetHeader) + sizeof(Utils::Net::IPv4Header) + sizeof(Utils::Net::UDPHeader));
         resp_dhcp->op           = 2;
         resp_dhcp->htype        = 1;
         resp_dhcp->hlen         = 6;
@@ -152,8 +152,8 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
         std::memcpy(resp_dhcp->chaddr, dhcp->chaddr, 16);
         resp_dhcp->magic_cookie = htonl(0x63825363);
 
-        uint8_t* o = response.data() + sizeof(Net::EthernetHeader) + sizeof(Net::IPv4Header)
-                     + sizeof(Net::UDPHeader) + sizeof(DhcpHeader);
+        uint8_t* o = response.data() + sizeof(Utils::Net::EthernetHeader) + sizeof(Utils::Net::IPv4Header)
+                     + sizeof(Utils::Net::UDPHeader) + sizeof(DhcpHeader);
         *o++ = 53; *o++ = 1; *o++ = type;
         *o++ = 1;  *o++ = 4; *o++ = 255; *o++ = 255; *o++ = 255; *o++ = 0;
         { uint32_t r = router_ip.raw(); *o++ = 3; *o++ = 4; std::memcpy(o, &r, 4); o += 4; }
@@ -164,15 +164,15 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
         *o++ = 255;
 
         size_t dhcp_len  = static_cast<size_t>(o - reinterpret_cast<uint8_t*>(resp_dhcp));
-        size_t udp_len   = sizeof(Net::UDPHeader) + dhcp_len;
-        size_t ip_len    = sizeof(Net::IPv4Header) + udp_len;
-        size_t total_len = sizeof(Net::EthernetHeader) + ip_len;
+        size_t udp_len   = sizeof(Utils::Net::UDPHeader) + dhcp_len;
+        size_t ip_len    = sizeof(Utils::Net::IPv4Header) + udp_len;
+        size_t total_len = sizeof(Utils::Net::EthernetHeader) + ip_len;
 
         ip->tot_len = htons(ip_len);
         ip->check   = 0;
         uint32_t ip_sum = 0;
         const uint16_t* ip_words = reinterpret_cast<const uint16_t*>(ip);
-        for (size_t i = 0; i < sizeof(Net::IPv4Header)/2; ++i) ip_sum += ntohs(ip_words[i]);
+        for (size_t i = 0; i < sizeof(Utils::Net::IPv4Header)/2; ++i) ip_sum += ntohs(ip_words[i]);
         ip_sum = (ip_sum >> 16) + (ip_sum & 0xFFFF);
         ip_sum += (ip_sum >> 16);
         ip->check = htons(~ip_sum);
@@ -180,7 +180,7 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
         resp_udp->len   = htons(udp_len);
         resp_udp->check = 0;
 
-        TxFrame_util::TxFrameOutput_util::send_best_effort(
+        Utils::TxFrame::TxFrameOutput_util::send_best_effort(
             lan_fd,
             std::span<const uint8_t>(response.data(), total_len),
             2,
@@ -190,11 +190,11 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
     std::span<const uint8_t, 6> mac_span{dhcp->chaddr, 6};
 
     if (msg_type == 1) { // DHCP Discover
-        Net::IPv4Net offered_ip = find_or_assign_lease(mac_span);
+        Utils::Net::IPv4Net offered_ip = find_or_assign_lease(mac_span);
         if (offered_ip.raw() != 0) send_response(2, offered_ip);
     } else if (msg_type == 3) { // DHCP Request
-        if (requested_ip.raw() == 0) requested_ip = Net::IPv4Net{dhcp->ciaddr};
-        Net::IPv4Net leased_ip = find_or_assign_lease(mac_span);
+        if (requested_ip.raw() == 0) requested_ip = Utils::Net::IPv4Net{dhcp->ciaddr};
+        Utils::Net::IPv4Net leased_ip = find_or_assign_lease(mac_span);
 
         if (leased_ip == requested_ip) {
             commit_lease(leased_ip);
@@ -212,11 +212,11 @@ void DhcpEngine::handle_dhcp_request(DhcpMessage& msg, int lan_fd) {
 // public API
 
 DhcpEngine::DhcpEngine(const std::string& lan_ip, DhcpPoolConfig cfg) {
-    router_ip      = Net::parse_ipv4(lan_ip.c_str());
+    router_ip      = Utils::Net::parse_ipv4(lan_ip.c_str());
     lease_duration = cfg.lease;
     if (auto r = init_pool(cfg.pool_start, cfg.pool_end); !r)
         std::println(stderr, "[DHCP] init_pool: {}", r.error());
-    if (!Utils_util::Network_util::get_iface_hwaddr(Config::iface_lan(), lan_if_mac_.data()))
+    if (!Utils::Network::Network_util::get_iface_hwaddr(Config::iface_lan(), lan_if_mac_.data()))
         std::println(stderr, "[DHCP] Warning: could not read Ethernet MAC for {}",
             Config::iface_lan());
 }
@@ -227,7 +227,7 @@ std::expected<void, std::string> DhcpEngine::reconfigure(DhcpPoolConfig cfg) {
     return init_pool(cfg.pool_start, cfg.pool_end);
 }
 
-void DhcpEngine::intercept_request(const Net::ParsedPacket& pkt) {
+void DhcpEngine::intercept_request(const Utils::Net::ParsedPacket& pkt) {
     DhcpMessage msg;
     msg.len = std::min(pkt.raw_span.size(), size_t(512));
     std::memcpy(msg.data.data(), pkt.raw_span.data(), msg.len);
@@ -243,4 +243,4 @@ void DhcpEngine::process_background_tasks(int lan_fd) {
         handle_dhcp_request(msg, lan_fd);
 }
 
-} // namespace HPGTP::Logic
+} // namespace HPGTP::Engine::Dhcp

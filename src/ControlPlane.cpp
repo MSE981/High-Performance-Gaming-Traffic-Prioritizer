@@ -29,15 +29,15 @@ int wait_watchdog_period(int stop_efd, int period_ms) {
 }
 } // anonymous
 
-ControlPlane::ControlPlane(Telemetry& tel, Logic::NatEngine& nat, Logic::DhcpEngine& dhcp,
-                         int lan_fd, Traffic::Shaper* dl, Traffic::Shaper* ul,
+ControlPlane::ControlPlane(Telemetry& tel, Engine::Nat::NatEngine& nat, Engine::Dhcp::DhcpEngine& dhcp,
+                         int lan_fd, Engine::Scheduler::Shaper* dl, Engine::Scheduler::Shaper* ul,
                          double base_dl, double base_ul,
                          std::function<void()> dhcp_applied)
     : tel_(tel), nat_(nat), dhcp_(dhcp), lan_fd_(lan_fd),
       dl_(dl), ul_(ul), base_dl_(base_dl), base_ul_(base_ul),
       dhcp_applied_(std::move(dhcp_applied)) {}
 
-void ControlPlane::start(ForwardState_util::ForwardingState_util& plane) {
+void ControlPlane::start(Utils::ForwardState::ForwardingState_util& plane) {
     plane_ = &plane;
     if (watchdog_stop_efd_ < 0) {
         watchdog_stop_efd_ = ::eventfd(0, EFD_CLOEXEC | EFD_SEMAPHORE);
@@ -116,7 +116,7 @@ void ControlPlane::applyDhcpConfig() {
 }
 
 void ControlPlane::watchdog_telemetry_loop() {
-    HPGTP::System::Optimizer_util::set_current_thread_affinity_control();
+    HPGTP::Utils::System::set_current_thread_affinity_control();
     auto& tel = Telemetry::instance();
     ParameterServices::TelemetryCollector telemetry(tel);
     uint64_t tick5 = 0;
@@ -136,7 +136,7 @@ void ControlPlane::watchdog_telemetry_loop() {
 }
 
 void ControlPlane::watchdog_l2_refresh_loop() {
-    HPGTP::System::Optimizer_util::set_current_thread_affinity_control();
+    HPGTP::Utils::System::set_current_thread_affinity_control();
     ParameterServices::L2ForwardRefresher l2_refresher([this]() { plane_->refresh_l2(); });
     while (running_.load(std::memory_order_acquire)) {
         const int r = wait_watchdog_period(watchdog_stop_efd_, 5000);
@@ -147,9 +147,9 @@ void ControlPlane::watchdog_l2_refresh_loop() {
 }
 
 void ControlPlane::watchdog_wan_tracker_loop() {
-    HPGTP::System::Optimizer_util::set_current_thread_affinity_control();
+    HPGTP::Utils::System::set_current_thread_affinity_control();
     ParameterServices::NatWanTracker wan_tracker(nat_,
-        [this]() { return Utils_util::Network_util::get_local_ip(Config::iface_wan()); });
+        [this]() { return Utils::Network::Network_util::get_local_ip(Config::iface_wan()); });
     while (running_.load(std::memory_order_acquire)) {
         const int r = wait_watchdog_period(watchdog_stop_efd_, 5000);
         if (r != 0) break;
@@ -159,10 +159,10 @@ void ControlPlane::watchdog_wan_tracker_loop() {
 }
 
 void ControlPlane::watchdog_dhcp_worker_loop() {
-    HPGTP::System::Optimizer_util::set_current_thread_affinity_control();
+    HPGTP::Utils::System::set_current_thread_affinity_control();
     ParameterServices::DhcpWorker dhcp_worker(dhcp_, lan_fd_,
         [this]() {
-            const std::string s = Utils_util::Network_util::get_local_ip(Config::iface_lan());
+            const std::string s = Utils::Network::Network_util::get_local_ip(Config::iface_lan());
             if (s.empty()) return;
             auto e = Config::parse_ip_str(s);
             if (e && *e != dhcp_.router_ip_snapshot()) dhcp_.set_router_ip(*e);
@@ -178,7 +178,7 @@ void ControlPlane::watchdog_dhcp_worker_loop() {
 }
 
 void ControlPlane::watchdog_qos_loop() {
-    HPGTP::System::Optimizer_util::set_current_thread_affinity_control();
+    HPGTP::Utils::System::set_current_thread_affinity_control();
     auto& tel = Telemetry::instance();
     ParameterServices::QosController qos(tel, dl_, ul_,
                             base_dl_, base_ul_);
@@ -191,7 +191,7 @@ void ControlPlane::watchdog_qos_loop() {
 }
 
 void ControlPlane::watchdog_nat_ticker_loop() {
-    HPGTP::System::Optimizer_util::set_current_thread_affinity_control();
+    HPGTP::Utils::System::set_current_thread_affinity_control();
     ParameterServices::EngineTicker ticker(nat_);
     while (running_.load(std::memory_order_acquire)) {
         const int r = wait_watchdog_period(watchdog_stop_efd_, 1000);
@@ -204,7 +204,7 @@ void ControlPlane::watchdog_nat_ticker_loop() {
 // Event-driven control thread: GUI writes dhcp_cfg_efd_; this thread applies
 // the DHCP config. Also handles the shared shutdown token.
 void ControlPlane::control_event_loop() {
-    HPGTP::System::Optimizer_util::set_current_thread_affinity_control();
+    HPGTP::Utils::System::set_current_thread_affinity_control();
     while (running_.load(std::memory_order_acquire)) {
         struct pollfd pfds[2]{};
         pfds[0] = { dhcp_cfg_efd_, POLLIN, 0 };

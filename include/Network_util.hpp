@@ -4,7 +4,7 @@
 #include <string_view>
 #include "Types_util.hpp"
 
-namespace HPGTP::Utils_util {
+namespace HPGTP::Utils::Network {
 
     // One row from /proc/net/arp . Filled by read_arp_table.
     struct ArpTableRow {
@@ -33,8 +33,8 @@ namespace HPGTP::Utils_util {
         // Assign primary IPv4 + netmask to iface.
         static bool set_iface_ipv4_and_prefix(const std::string& iface,
             const std::string& ipv4_dotted, int prefix_len);
-        static int infer_prefix_covering_pool(Net::IPv4Net pool_start, Net::IPv4Net pool_end) noexcept;
+        static int infer_prefix_covering_pool(Utils::Net::IPv4Net pool_start, Utils::Net::IPv4Net pool_end) noexcept;
         // True if ip is in the subnet defined by anchor and prefix_len
-        static bool ipv4_in_subnet(Net::IPv4Net ip, int prefix_len, Net::IPv4Net anchor) noexcept;
+        static bool ipv4_in_subnet(Utils::Net::IPv4Net ip, int prefix_len, Utils::Net::IPv4Net anchor) noexcept;
     };
 }

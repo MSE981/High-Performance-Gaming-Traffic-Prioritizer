@@ -190,7 +190,6 @@ public:
     void refresh_status();
 private:
     struct ServiceRow {
-        SwitchToggle* sw;
         QLabel*       status_label;
         QPushButton*  btn_settings = nullptr;  // non-null only for DHCP and DNS rows
     };

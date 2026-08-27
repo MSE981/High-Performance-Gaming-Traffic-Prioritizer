@@ -20,7 +20,7 @@ namespace HPGTP::SelfTest {
 
 namespace {
 
-uint16_t fold_ip_header_checksum(const Net::IPv4Header* ip) noexcept {
+uint16_t fold_ip_header_checksum(const Utils::Net::IPv4Header* ip) noexcept {
     const auto* w = reinterpret_cast<const uint8_t*>(ip);
     uint32_t        sum = 0;
     for (int i = 0; i < 20; i += 2)
@@ -29,7 +29,7 @@ uint16_t fold_ip_header_checksum(const Net::IPv4Header* ip) noexcept {
     return static_cast<uint16_t>(~sum & 0xFFFF);
 }
 
-uint16_t fold_icmp_checksum(const Net::IcmpEchoHeader* icmp, size_t icmp_len) noexcept {
+uint16_t fold_icmp_checksum(const Utils::Net::IcmpEchoHeader* icmp, size_t icmp_len) noexcept {
     const auto* p = reinterpret_cast<const uint8_t*>(icmp);
     uint32_t    sum = 0;
     for (size_t i = 0; i + 1 < icmp_len; i += 2)
@@ -75,12 +75,12 @@ void SelfTest::run() {
 // Packet builders
 // UDP: 14-byte Ethernet + 20-byte IPv4 + 8-byte UDP
 
-std::array<uint8_t, 42> SelfTest::make_udp_pkt(Net::IPv4Net sip, Net::IPv4Net dip,
+std::array<uint8_t, 42> SelfTest::make_udp_pkt(Utils::Net::IPv4Net sip, Utils::Net::IPv4Net dip,
                                                  uint16_t sport, uint16_t dport) {
     std::array<uint8_t, 42> buf{};
-    auto* eth  = reinterpret_cast<Net::EthernetHeader*>(buf.data());
-    auto* ipv4 = reinterpret_cast<Net::IPv4Header*>(buf.data() + 14);
-    auto* udp  = reinterpret_cast<Net::UDPHeader*>(buf.data() + 34);
+    auto* eth  = reinterpret_cast<Utils::Net::EthernetHeader*>(buf.data());
+    auto* ipv4 = reinterpret_cast<Utils::Net::IPv4Header*>(buf.data() + 14);
+    auto* udp  = reinterpret_cast<Utils::Net::UDPHeader*>(buf.data() + 34);
 
     eth->proto       = htons(0x0800);
     ipv4->ver_ihl    = 0x45;
@@ -96,13 +96,13 @@ std::array<uint8_t, 42> SelfTest::make_udp_pkt(Net::IPv4Net sip, Net::IPv4Net di
 
 // TCP: 14-byte Ethernet + 20-byte IPv4 + 20-byte TCP
 
-std::array<uint8_t, 54> SelfTest::make_tcp_pkt(Net::IPv4Net sip, Net::IPv4Net dip,
+std::array<uint8_t, 54> SelfTest::make_tcp_pkt(Utils::Net::IPv4Net sip, Utils::Net::IPv4Net dip,
                                                  uint16_t sport, uint16_t dport,
                                                  uint16_t flags) {
     std::array<uint8_t, 54> buf{};
-    auto* eth  = reinterpret_cast<Net::EthernetHeader*>(buf.data());
-    auto* ipv4 = reinterpret_cast<Net::IPv4Header*>(buf.data() + 14);
-    auto* tcp  = reinterpret_cast<Net::TCPHeader*>(buf.data() + 34);
+    auto* eth  = reinterpret_cast<Utils::Net::EthernetHeader*>(buf.data());
+    auto* ipv4 = reinterpret_cast<Utils::Net::IPv4Header*>(buf.data() + 14);
+    auto* tcp  = reinterpret_cast<Utils::Net::TCPHeader*>(buf.data() + 34);
 
     eth->proto           = htons(0x0800);
     ipv4->ver_ihl        = 0x45;
@@ -119,15 +119,15 @@ std::array<uint8_t, 54> SelfTest::make_tcp_pkt(Net::IPv4Net sip, Net::IPv4Net di
 // DHCP DISCOVER: 42-byte UDP (src=68, dst=67) + DhcpWireHeader + options
 std::array<uint8_t, 512> SelfTest::make_dhcp_discover(size_t& out_len) {
     std::array<uint8_t, 512> buf{};
-    auto* eth  = reinterpret_cast<Net::EthernetHeader*>(buf.data());
-    auto* ipv4 = reinterpret_cast<Net::IPv4Header*>(buf.data() + 14);
-    auto* udp  = reinterpret_cast<Net::UDPHeader*>(buf.data() + 34);
+    auto* eth  = reinterpret_cast<Utils::Net::EthernetHeader*>(buf.data());
+    auto* ipv4 = reinterpret_cast<Utils::Net::IPv4Header*>(buf.data() + 14);
+    auto* udp  = reinterpret_cast<Utils::Net::UDPHeader*>(buf.data() + 34);
 
     eth->proto     = htons(0x0800);
     ipv4->ver_ihl  = 0x45;
     ipv4->protocol = 17;
-    ipv4->saddr    = Net::IPv4Net{};
-    ipv4->daddr    = Net::IPv4Net{0xFFFFFFFF};
+    ipv4->saddr    = Utils::Net::IPv4Net{};
+    ipv4->daddr    = Utils::Net::IPv4Net{0xFFFFFFFF};
 
     udp->source = htons(68);
     udp->dest   = htons(67);
@@ -156,14 +156,14 @@ std::array<uint8_t, 512> SelfTest::make_dhcp_discover(size_t& out_len) {
 // NAT tests
 
 void SelfTest::test_nat(Report& r) {
-    auto nat = std::make_unique<Logic::NatEngine>();
-    Net::IPv4Net wan_ip = Config::parse_ip_str("10.0.0.1").value();
+    auto nat = std::make_unique<Engine::Nat::NatEngine>();
+    Utils::Net::IPv4Net wan_ip = Config::parse_ip_str("10.0.0.1").value();
     nat->set_wan_ip(wan_ip);
 
-    Net::IPv4Net lan_ip = Config::parse_ip_str("192.168.1.100").value();
-    Net::IPv4Net ext_ip = Config::parse_ip_str("8.8.8.8").value();
+    Utils::Net::IPv4Net lan_ip = Config::parse_ip_str("192.168.1.100").value();
+    Utils::Net::IPv4Net ext_ip = Config::parse_ip_str("8.8.8.8").value();
     auto buf = make_udp_pkt(lan_ip, ext_ip, 54321, 12345);
-    auto pkt = Net::ParsedPacket::parse(std::span<uint8_t>{buf.data(), 42});
+    auto pkt = Utils::Net::ParsedPacket::parse(std::span<uint8_t>{buf.data(), 42});
 
     bool ok = nat->process_outbound(pkt);
 
@@ -179,9 +179,9 @@ void SelfTest::test_nat(Report& r) {
 
     std::array<uint8_t, 42> icmp_req{};
     {
-        auto* eth  = reinterpret_cast<Net::EthernetHeader*>(icmp_req.data());
-        auto* ipv4 = reinterpret_cast<Net::IPv4Header*>(icmp_req.data() + 14);
-        auto* icmp = reinterpret_cast<Net::IcmpEchoHeader*>(icmp_req.data() + 34);
+        auto* eth  = reinterpret_cast<Utils::Net::EthernetHeader*>(icmp_req.data());
+        auto* ipv4 = reinterpret_cast<Utils::Net::IPv4Header*>(icmp_req.data() + 14);
+        auto* icmp = reinterpret_cast<Utils::Net::IcmpEchoHeader*>(icmp_req.data() + 34);
         eth->proto        = htons(0x0800);
         ipv4->ver_ihl     = 0x45;
         ipv4->protocol    = 1;
@@ -199,7 +199,7 @@ void SelfTest::test_nat(Report& r) {
         icmp->sequence    = htons(1);
         icmp->check       = htons(fold_icmp_checksum(icmp, 8));
     }
-    auto pkt_icmp = Net::ParsedPacket::parse(std::span<uint8_t>{icmp_req.data(), icmp_req.size()});
+    auto pkt_icmp = Utils::Net::ParsedPacket::parse(std::span<uint8_t>{icmp_req.data(), icmp_req.size()});
     bool icmp_out = nat->process_outbound(pkt_icmp);
     auto* ie = pkt_icmp.icmp_echo();
     const bool icmp_snat = icmp_out && pkt_icmp.ipv4->saddr == wan_ip && ie
@@ -207,9 +207,9 @@ void SelfTest::test_nat(Report& r) {
 
     std::array<uint8_t, 42> icmp_rep{};
     {
-        auto* eth  = reinterpret_cast<Net::EthernetHeader*>(icmp_rep.data());
-        auto* ipv4 = reinterpret_cast<Net::IPv4Header*>(icmp_rep.data() + 14);
-        auto* icmp = reinterpret_cast<Net::IcmpEchoHeader*>(icmp_rep.data() + 34);
+        auto* eth  = reinterpret_cast<Utils::Net::EthernetHeader*>(icmp_rep.data());
+        auto* ipv4 = reinterpret_cast<Utils::Net::IPv4Header*>(icmp_rep.data() + 14);
+        auto* icmp = reinterpret_cast<Utils::Net::IcmpEchoHeader*>(icmp_rep.data() + 34);
         eth->proto        = htons(0x0800);
         ipv4->ver_ihl     = 0x45;
         ipv4->protocol    = 1;
@@ -227,7 +227,7 @@ void SelfTest::test_nat(Report& r) {
         icmp->sequence    = htons(1);
         icmp->check       = htons(fold_icmp_checksum(icmp, 8));
     }
-    auto pkt_rep = Net::ParsedPacket::parse(std::span<uint8_t>{icmp_rep.data(), icmp_rep.size()});
+    auto pkt_rep = Utils::Net::ParsedPacket::parse(std::span<uint8_t>{icmp_rep.data(), icmp_rep.size()});
     bool icmp_in  = nat->process_inbound(pkt_rep);
     auto* ir      = pkt_rep.icmp_echo();
     const bool icmp_dnat = icmp_in && pkt_rep.ipv4->daddr == lan_ip && ir && ir->id == htons(4242);
@@ -239,16 +239,16 @@ void SelfTest::test_nat(Report& r) {
 
 // DHCP tests
 void SelfTest::test_dhcp(Report& r) {
-    Logic::DhcpEngine dhcp(
+    Engine::Dhcp::DhcpEngine dhcp(
         "192.168.1.1",
-        Logic::DhcpPoolConfig{
-            Net::parse_ipv4("192.168.1.100"),
-            Net::parse_ipv4("192.168.1.200"),
+        Engine::Dhcp::DhcpPoolConfig{
+            Utils::Net::parse_ipv4("192.168.1.100"),
+            Utils::Net::parse_ipv4("192.168.1.200"),
             std::chrono::seconds{86400}});
 
     size_t pkt_len = 0;
     auto dhcp_buf = make_dhcp_discover(pkt_len);
-    auto pkt = Net::ParsedPacket::parse(
+    auto pkt = Utils::Net::ParsedPacket::parse(
         std::span<uint8_t>{dhcp_buf.data(), pkt_len});
 
     dhcp.intercept_request(pkt); 

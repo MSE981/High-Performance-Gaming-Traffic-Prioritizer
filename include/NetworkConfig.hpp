@@ -10,11 +10,11 @@ namespace HPGTP::NetConfig {
 // LAN IP in sync with the DHCP gateway.
 class NetworkConfig {
 public:
-    std::expected<void, std::string> sync(Logic::DhcpEngine& dhcp);
-    void refresh_dhcp_router(Logic::DhcpEngine& dhcp) noexcept;
+    std::expected<void, std::string> sync(Engine::Dhcp::DhcpEngine& dhcp);
+    void refresh_dhcp_router(Engine::Dhcp::DhcpEngine& dhcp) noexcept;
 
 private:
-    Net::IPv4Net effective_lan_gateway_{};
+    Utils::Net::IPv4Net effective_lan_gateway_{};
 };
 
 } // namespace HPGTP::NetConfig

@@ -1,4 +1,4 @@
-#include "NetworkEngine.hpp"
+#include "RawSocket_util.hpp"
 #include "Telemetry.hpp"
 #include <print>
 #include <cerrno>
@@ -13,7 +13,7 @@
 #include <poll.h>
 #include <linux/if_packet.h>
 
-namespace HPGTP::Engine {
+namespace HPGTP::Utils::RawSocket {
 
 RawSocketManager::RawSocketManager(std::string_view iface_name) {
     iface_name.copy(iface.data(), IFACE_NAME_MAX - 1);
@@ -119,4 +119,4 @@ void RawSocketManager::advance_frame() {
     rx_idx = (rx_idx + 1) % FRAME_NR;
 }
 
-} // namespace HPGTP::Engine
+} // namespace HPGTP::Utils::RawSocket

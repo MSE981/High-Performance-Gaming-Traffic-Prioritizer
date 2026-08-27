@@ -2,7 +2,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 
-namespace HPGTP::Net {
+namespace HPGTP::Utils::Net {
 
 IPv4Host IPv4Net::to_host() const noexcept {
     return IPv4Host{::ntohl(v_)};
@@ -26,4 +26,4 @@ IPv4Net parse_ipv4(const char* s) noexcept {
     return out;
 }
 
-} // namespace HPGTP::Net
+} // namespace HPGTP::Utils::Net

@@ -2,7 +2,7 @@
 #include <cstring>
 #include <netinet/in.h>
 
-namespace HPGTP::Logic {
+namespace HPGTP::Engine::Nat {
 
 // Incremental checksum update (RFC 1624)
 static void update_checksum_16(uint16_t& check, uint16_t old_val, uint16_t new_val) {
@@ -11,12 +11,12 @@ static void update_checksum_16(uint16_t& check, uint16_t old_val, uint16_t new_v
     check = htons(~(sum + (sum >> 16)));
 }
 
-static void update_checksum_32(uint16_t& check, Net::IPv4Net old_val, Net::IPv4Net new_val) {
+static void update_checksum_32(uint16_t& check, Utils::Net::IPv4Net old_val, Utils::Net::IPv4Net new_val) {
     update_checksum_16(check, old_val.raw() & 0xFFFF, new_val.raw() & 0xFFFF);
     update_checksum_16(check, old_val.raw() >> 16,    new_val.raw() >> 16);
 }
 
-uint32_t NatEngine::hash_flow(const FlowKey& k) const {
+uint32_t NatEngine::hash_flow(const Logic::FlowKey& k) const {
     uint32_t h = 2166136261U;
     auto proc = [&](const auto& val) {
         const uint8_t* p = reinterpret_cast<const uint8_t*>(&val);
@@ -26,7 +26,7 @@ uint32_t NatEngine::hash_flow(const FlowKey& k) const {
     return h;
 }
 
-uint32_t NatEngine::hash_icmp_flow(Net::IPv4Net sa, Net::IPv4Net da, uint16_t id_nbo) const {
+uint32_t NatEngine::hash_icmp_flow(Utils::Net::IPv4Net sa, Utils::Net::IPv4Net da, uint16_t id_nbo) const {
     uint32_t h = 2166136261U;
     auto proc = [&](const auto& val) {
         const uint8_t* p = reinterpret_cast<const uint8_t*>(&val);
@@ -55,9 +55,9 @@ uint16_t NatEngine::alloc_external_icmp_id() noexcept {
     return 0;
 }
 
-bool NatEngine::process_outbound_icmp(Net::ParsedPacket& pkt) {
+bool NatEngine::process_outbound_icmp(Utils::Net::ParsedPacket& pkt) {
     auto ip = pkt.ipv4;
-    const Net::IPv4Net wan_ip{wan_ip_nbo.load(std::memory_order_acquire)};
+    const Utils::Net::IPv4Net wan_ip{wan_ip_nbo.load(std::memory_order_acquire)};
     if (wan_ip.raw() == 0) return false;
 
     auto icmp = pkt.icmp_echo();
@@ -124,9 +124,9 @@ bool NatEngine::process_outbound_icmp(Net::ParsedPacket& pkt) {
     return true;
 }
 
-bool NatEngine::process_inbound_icmp(Net::ParsedPacket& pkt) {
+bool NatEngine::process_inbound_icmp(Utils::Net::ParsedPacket& pkt) {
     auto ip = pkt.ipv4;
-    const Net::IPv4Net wan_ip{wan_ip_nbo.load(std::memory_order_acquire)};
+    const Utils::Net::IPv4Net wan_ip{wan_ip_nbo.load(std::memory_order_acquire)};
     if (ip->daddr != wan_ip) return false;
 
     auto icmp = pkt.icmp_echo();
@@ -138,7 +138,7 @@ bool NatEngine::process_inbound_icmp(Net::ParsedPacket& pkt) {
     const int32_t      idx      = icmp_id_to_index[ext_host].load(std::memory_order_acquire);
     if (idx < 0 || static_cast<size_t>(idx) >= MAX_ICMP_SESSIONS) return false;
 
-    Net::IPv4Net int_sa{};
+    Utils::Net::IPv4Net int_sa{};
     uint16_t     int_id = 0;
     bool         resolved = false;
     for (int attempt = 0; attempt < 8; ++attempt) {
@@ -146,8 +146,8 @@ bool NatEngine::process_inbound_icmp(Net::ParsedPacket& pkt) {
         uint32_t         s0   = sess.seq.load(std::memory_order_acquire);
         if (s0 & 1u) continue;
         const bool        act      = sess.active.load(std::memory_order_acquire);
-        const Net::IPv4Net rem     = sess.remote_daddr;
-        const Net::IPv4Net int_sa_c = sess.int_saddr;
+        const Utils::Net::IPv4Net rem     = sess.remote_daddr;
+        const Utils::Net::IPv4Net int_sa_c = sess.int_saddr;
         const uint16_t     int_id_c = sess.int_id_nbo;
         const uint16_t     ext_id_c = sess.ext_id_nbo;
         uint32_t           s1       = sess.seq.load(std::memory_order_acquire);
@@ -180,16 +180,16 @@ NatEngine::NatEngine() {
         p.store(-1, std::memory_order_relaxed);
 }
 
-void NatEngine::set_wan_ip(Net::IPv4Net ip) {
+void NatEngine::set_wan_ip(Utils::Net::IPv4Net ip) {
     wan_ip_nbo.store(ip.raw(), std::memory_order_release);
 }
 
 
 void NatEngine::tick() { current_tick.fetch_add(1, std::memory_order_relaxed); }
 
-bool NatEngine::process_outbound(Net::ParsedPacket& pkt) {
+bool NatEngine::process_outbound(Utils::Net::ParsedPacket& pkt) {
     if (!pkt.is_valid_ipv4()) return false;
-    const Net::IPv4Net wan_ip{wan_ip_nbo.load(std::memory_order_acquire)};
+    const Utils::Net::IPv4Net wan_ip{wan_ip_nbo.load(std::memory_order_acquire)};
     if (wan_ip.raw() == 0) return false;
 
     auto ip = pkt.ipv4;
@@ -210,7 +210,7 @@ bool NatEngine::process_outbound(Net::ParsedPacket& pkt) {
         sport_ptr = &tcp->source; dport = tcp->dest; check_ptr = &tcp->check;
     }
 
-    FlowKey key{ip->saddr, ip->daddr, *sport_ptr, dport};
+    Logic::FlowKey key{ip->saddr, ip->daddr, *sport_ptr, dport};
     uint32_t h    = hash_flow(key) % MAX_SESSIONS;
     uint32_t tick = current_tick.load(std::memory_order_relaxed);
     uint16_t ext_port = 0;
@@ -259,10 +259,10 @@ bool NatEngine::process_outbound(Net::ParsedPacket& pkt) {
     return true;
 }
 
-bool NatEngine::process_inbound(Net::ParsedPacket& pkt) {
+bool NatEngine::process_inbound(Utils::Net::ParsedPacket& pkt) {
     if (!pkt.is_valid_ipv4()) return false;
     auto ip = pkt.ipv4;
-    const Net::IPv4Net wan_ip{wan_ip_nbo.load(std::memory_order_acquire)};
+    const Utils::Net::IPv4Net wan_ip{wan_ip_nbo.load(std::memory_order_acquire)};
 
     if (ip->protocol == 1) return process_inbound_icmp(pkt);
     if (ip->protocol != 6 && ip->protocol != 17) return false;
@@ -287,14 +287,14 @@ bool NatEngine::process_inbound(Net::ParsedPacket& pkt) {
     if (idx < 0 || static_cast<size_t>(idx) >= MAX_SESSIONS) return false;
 
     bool         resolved = false;
-    Net::IPv4Net internal_ip{};
+    Utils::Net::IPv4Net internal_ip{};
     uint16_t     internal_port = 0;
     for (int attempt = 0; attempt < 8; ++attempt) {
         NatSession& sess = sessions[static_cast<size_t>(idx)];
         uint32_t s0 = sess.seq.load(std::memory_order_acquire);
         if (s0 & 1u) continue;
         bool act = sess.active.load(std::memory_order_acquire);
-        FlowKey ik = sess.internal_key;
+        Logic::FlowKey ik = sess.internal_key;
         uint16_t ep = sess.external_port;
         uint32_t s1 = sess.seq.load(std::memory_order_acquire);
         if (s0 != s1 || (s1 & 1u)) continue;
@@ -320,4 +320,4 @@ bool NatEngine::process_inbound(Net::ParsedPacket& pkt) {
     return true;
 }
 
-} // namespace HPGTP::Logic
+} // namespace HPGTP::Engine::Nat

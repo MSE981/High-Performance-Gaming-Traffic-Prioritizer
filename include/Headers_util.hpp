@@ -1,12 +1,12 @@
 #pragma once
-// HPGTP = High-Performance Gaming Traffic Prioritizer. This header defines HPGTP::Net wire types.
+// HPGTP = High-Performance Gaming Traffic Prioritizer. This header defines HPGTP::Utils::Net wire types.
 #include <cstdint>
 #include <atomic>
 #include <array>
 #include <span>
 #include "Types_util.hpp"
 
-namespace HPGTP::Net {
+namespace HPGTP::Utils::Net {
 
     inline constexpr uint16_t eth_proto_wire_to_host(uint16_t be) noexcept {
         return static_cast<uint16_t>((be << 8) | (be >> 8));
@@ -95,18 +95,18 @@ namespace HPGTP::Net {
     // Unified zero-copy packet context parser 
     struct ParsedPacket {
         std::span<uint8_t> raw_span;
-        Net::EthernetHeader* eth = nullptr;
-        Net::IPv4Header* ipv4 = nullptr;
+        Utils::Net::EthernetHeader* eth = nullptr;
+        Utils::Net::IPv4Header* ipv4 = nullptr;
 
         uint8_t l4_protocol = 0;
         size_t ihl = 0;
         size_t l4_offset = 0;
         void* l4_header = nullptr;
 
-        Net::UDPHeader* udp() const { return (l4_protocol == 17) ? reinterpret_cast<Net::UDPHeader*>(l4_header) : nullptr; }
-        Net::TCPHeader* tcp() const { return (l4_protocol == 6) ? reinterpret_cast<Net::TCPHeader*>(l4_header) : nullptr; }
-        Net::IcmpEchoHeader* icmp_echo() const {
-            return (l4_protocol == 1) ? reinterpret_cast<Net::IcmpEchoHeader*>(l4_header) : nullptr;
+        Utils::Net::UDPHeader* udp() const { return (l4_protocol == 17) ? reinterpret_cast<Utils::Net::UDPHeader*>(l4_header) : nullptr; }
+        Utils::Net::TCPHeader* tcp() const { return (l4_protocol == 6) ? reinterpret_cast<Utils::Net::TCPHeader*>(l4_header) : nullptr; }
+        Utils::Net::IcmpEchoHeader* icmp_echo() const {
+            return (l4_protocol == 1) ? reinterpret_cast<Utils::Net::IcmpEchoHeader*>(l4_header) : nullptr;
         }
         
         bool is_valid_ipv4() const { return ipv4 != nullptr; }
@@ -115,23 +115,23 @@ namespace HPGTP::Net {
             ParsedPacket p;
             p.raw_span = span;
             
-            if (span.size() < sizeof(Net::EthernetHeader)) return p;
-            p.eth = reinterpret_cast<Net::EthernetHeader*>(span.data());
+            if (span.size() < sizeof(Utils::Net::EthernetHeader)) return p;
+            p.eth = reinterpret_cast<Utils::Net::EthernetHeader*>(span.data());
             if (eth_proto_wire_to_host(p.eth->proto) != 0x0800) return p; // IPv4 only
             
-            if (span.size() < sizeof(Net::EthernetHeader) + sizeof(Net::IPv4Header)) return p;
-            p.ipv4 = reinterpret_cast<Net::IPv4Header*>(span.data() + sizeof(Net::EthernetHeader));
+            if (span.size() < sizeof(Utils::Net::EthernetHeader) + sizeof(Utils::Net::IPv4Header)) return p;
+            p.ipv4 = reinterpret_cast<Utils::Net::IPv4Header*>(span.data() + sizeof(Utils::Net::EthernetHeader));
             
             p.ihl = (p.ipv4->ver_ihl & 0x0F) * 4;
-            p.l4_offset = sizeof(Net::EthernetHeader) + p.ihl;
+            p.l4_offset = sizeof(Utils::Net::EthernetHeader) + p.ihl;
             if (span.size() < p.l4_offset) return p; // Bad packet
             
             p.l4_protocol = p.ipv4->protocol;
-            if (p.l4_protocol == 17 && span.size() >= p.l4_offset + sizeof(Net::UDPHeader)) {
+            if (p.l4_protocol == 17 && span.size() >= p.l4_offset + sizeof(Utils::Net::UDPHeader)) {
                 p.l4_header = span.data() + p.l4_offset;
-            } else if (p.l4_protocol == 6 && span.size() >= p.l4_offset + sizeof(Net::TCPHeader)) {
+            } else if (p.l4_protocol == 6 && span.size() >= p.l4_offset + sizeof(Utils::Net::TCPHeader)) {
                 p.l4_header = span.data() + p.l4_offset;
-            } else if (p.l4_protocol == 1 && span.size() >= p.l4_offset + sizeof(Net::IcmpEchoHeader)) {
+            } else if (p.l4_protocol == 1 && span.size() >= p.l4_offset + sizeof(Utils::Net::IcmpEchoHeader)) {
                 p.l4_header = span.data() + p.l4_offset;
             }
 

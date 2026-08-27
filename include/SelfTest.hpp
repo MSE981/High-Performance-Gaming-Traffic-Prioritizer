@@ -55,7 +55,7 @@ public:
     void start() {
         if (uthread_.joinable()) return;
         uthread_ = std::thread([this] {
-            HPGTP::System::Optimizer_util::set_current_thread_affinity_control(); // self-test: control cores 0-1
+            HPGTP::Utils::System::set_current_thread_affinity_control(); // self-test: control cores 0-1
             struct Active {
                 std::atomic<bool>& a;
                 explicit Active(std::atomic<bool>& x) : a(x) {
@@ -78,9 +78,9 @@ private:
     void run();
 
     // Packet builders - implementations in SelfTest.cpp
-    static std::array<uint8_t, 42>  make_udp_pkt(Net::IPv4Net sip, Net::IPv4Net dip,
+    static std::array<uint8_t, 42>  make_udp_pkt(Utils::Net::IPv4Net sip, Utils::Net::IPv4Net dip,
                                                    uint16_t sport, uint16_t dport);
-    static std::array<uint8_t, 54>  make_tcp_pkt(Net::IPv4Net sip, Net::IPv4Net dip,
+    static std::array<uint8_t, 54>  make_tcp_pkt(Utils::Net::IPv4Net sip, Utils::Net::IPv4Net dip,
                                                    uint16_t sport, uint16_t dport,
                                                    uint16_t flags);
     static std::array<uint8_t, 512> make_dhcp_discover(size_t& out_len);

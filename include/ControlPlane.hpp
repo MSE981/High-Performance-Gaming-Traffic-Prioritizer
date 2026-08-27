@@ -17,13 +17,13 @@ namespace HPGTP::Control {
 // not implement their logic.
 class ControlPlane {
 public:
-    ControlPlane(Telemetry& tel, Logic::NatEngine& nat, Logic::DhcpEngine& dhcp,
-                 int lan_fd, Traffic::Shaper* dl, Traffic::Shaper* ul,
+    ControlPlane(Telemetry& tel, Engine::Nat::NatEngine& nat, Engine::Dhcp::DhcpEngine& dhcp,
+                 int lan_fd, Engine::Scheduler::Shaper* dl, Engine::Scheduler::Shaper* ul,
                  double base_dl, double base_ul,
                  std::function<void()> dhcp_applied);
     ~ControlPlane();
 
-    void start(ForwardState_util::ForwardingState_util& plane);
+    void start(Utils::ForwardState::ForwardingState_util& plane);
     void stop();
     void request_dhcp_config_apply();
 
@@ -36,14 +36,14 @@ private:
     int dhcp_cfg_efd_{-1};
 
     Telemetry& tel_;
-    Logic::NatEngine& nat_;
-    Logic::DhcpEngine& dhcp_;
+    Engine::Nat::NatEngine& nat_;
+    Engine::Dhcp::DhcpEngine& dhcp_;
     int lan_fd_;
-    Traffic::Shaper* dl_ = nullptr;
-    Traffic::Shaper* ul_ = nullptr;
+    Engine::Scheduler::Shaper* dl_ = nullptr;
+    Engine::Scheduler::Shaper* ul_ = nullptr;
     double base_dl_ = 0.0;
     double base_ul_ = 0.0;
-    ForwardState_util::ForwardingState_util* plane_ = nullptr;
+    Utils::ForwardState::ForwardingState_util* plane_ = nullptr;
     std::function<void()> dhcp_applied_;
 
     void wake_watchdog();

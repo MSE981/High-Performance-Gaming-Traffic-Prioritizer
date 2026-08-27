@@ -15,7 +15,7 @@
 #include <linux/if_arp.h>
 #include <linux/sockios.h>
 
-namespace HPGTP::Utils_util {
+namespace HPGTP::Utils::Network {
 
 int Network_util::get_iface_ipv4_prefix_len(const std::string& iface) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -286,7 +286,7 @@ bool Network_util::set_iface_ipv4_and_prefix(const std::string& iface, const std
     return true;
 }
 
-int Network_util::infer_prefix_covering_pool(Net::IPv4Net a, Net::IPv4Net b) noexcept {
+int Network_util::infer_prefix_covering_pool(Utils::Net::IPv4Net a, Utils::Net::IPv4Net b) noexcept {
     uint32_t ha = ntohl(a.raw());
     uint32_t hb = ntohl(b.raw());
     if (ha > hb) std::swap(ha, hb);
@@ -298,7 +298,7 @@ int Network_util::infer_prefix_covering_pool(Net::IPv4Net a, Net::IPv4Net b) noe
     return p;
 }
 
-bool Network_util::ipv4_in_subnet(Net::IPv4Net ip, int prefix_len, Net::IPv4Net anchor) noexcept {
+bool Network_util::ipv4_in_subnet(Utils::Net::IPv4Net ip, int prefix_len, Utils::Net::IPv4Net anchor) noexcept {
     if (prefix_len < 0 || prefix_len > 32) return false;
     const uint32_t hi = ntohl(ip.raw());
     const uint32_t ha = ntohl(anchor.raw());
@@ -307,4 +307,4 @@ bool Network_util::ipv4_in_subnet(Net::IPv4Net ip, int prefix_len, Net::IPv4Net 
     return (hi & mask) == (ha & mask);
 }
 
-} // namespace HPGTP::Utils_util
+} // namespace HPGTP::Utils::Network

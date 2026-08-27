@@ -7,7 +7,7 @@
 #include <string>
 #include "Types_util.hpp"
 
-namespace HPGTP::ForwardState_util {
+namespace HPGTP::Utils::ForwardState {
 
 // Owns the double-buffered L2/ARP snapshot used for Ethernet rewrite and the
 // kernel WAN address lookup. 
@@ -35,16 +35,16 @@ public:
 
     ForwardingState_util() = default;
 
-    std::expected<Net::IPv4Net, std::string> resolve_nat_wan_ip() const;
+    std::expected<Utils::Net::IPv4Net, std::string> resolve_nat_wan_ip() const;
     void refresh_l2();
     const L2Snapshot& snapshot() const;
     bool resolve_mac_onlink(const L2Snapshot& snap, uint32_t dst_ip_nbo,
                             uint8_t out_mac[6]) const;
 
 private:
-    static bool is_invalid_nat_wan(Net::IPv4Net a) noexcept;
+    static bool is_invalid_nat_wan(Utils::Net::IPv4Net a) noexcept;
     std::array<L2Snapshot, 2> snap_{};
     std::atomic<unsigned> active_{0};
 };
 
-} // namespace HPGTP::ForwardState_util
+} // namespace HPGTP::Utils::ForwardState
