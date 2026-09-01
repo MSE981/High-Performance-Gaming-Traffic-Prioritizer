@@ -47,11 +47,8 @@ public:
     void on_tx_result(Engine::Scheduler::TxResult, size_t) override {}
 };
 
-// RX thread uses poll(2) on the raw socket plus stop_efd. Egress uses Utils::TxFrame::TxFrameOutput_util.
-// L2/ARP snapshot and the kernel WAN address are owned by Utils::ForwardState::ForwardingState_util.
 
-
-} // anonymous namespace
+} // namespace
 
 // App method definitions
 
@@ -373,7 +370,7 @@ struct RxFrameCopy {
     uint16_t                len = 0;
 };
 
-} // anonymous
+} // namespace
 
 std::expected<void, std::string> Forward_Engine::open_poll_fds() {
     close_poll_fds();
@@ -407,7 +404,7 @@ void Forward_Engine::close_poll_fds() {
 void Forward_Engine::wake_workers() {
     for (auto& w : poll_sync_) {
         if (w.stop_efd >= 0)
-            // Two readers per worker (RX thread + proc thread); EFD_SEMAPHORE needs one increment per successful read.
+            // Two readers per worker (RX  + proc ); EFD_SEMAPHORE needs one increment per successful read.
             (void)::eventfd_write(w.stop_efd, 2);
     }
 }

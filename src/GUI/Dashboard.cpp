@@ -185,12 +185,12 @@ OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
     info_row->addStretch();
     layout->addLayout(info_row);
 
-    // Two charts: High (unthrottled) and Normal (throttled) traffic, capped at 200 Mb
+    // Two charts: High (unthrottled) and Normal (throttled) traffic.
     auto* plot_row = new QHBoxLayout();
     auto* high_group = new QGroupBox("High priority (Mb)");
     auto* high_lay = new QVBoxLayout(high_group);
     high_plot = new RealTimePlot();
-    high_plot->set_fixed_max(200.0);
+    high_plot->set_fixed_max(9.0);
     high_plot->setLineColor(QColor(0, 200, 255));
     high_lay->addWidget(high_plot);
     plot_row->addWidget(high_group);
@@ -198,7 +198,7 @@ OverviewPage::OverviewPage(QWidget* parent) : QWidget(parent) {
     auto* normal_group = new QGroupBox("Normal (Mb)");
     auto* normal_lay = new QVBoxLayout(normal_group);
     normal_plot = new RealTimePlot();
-    normal_plot->set_fixed_max(200.0);
+    normal_plot->set_fixed_max(900.0);
     normal_plot->setLineColor(QColor(80, 230, 120));
     normal_lay->addWidget(normal_plot);
     plot_row->addWidget(normal_group);

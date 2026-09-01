@@ -10,7 +10,6 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <string_view>
-
 #include "Config.hpp"
 #include <mutex>
 #include "NatEngine.hpp"

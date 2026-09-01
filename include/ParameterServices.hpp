@@ -50,7 +50,7 @@ private:
     std::function<std::string()> source_;
 };
 
-// DHCP background work (response queue / lease upkeep) plus router IP sync.
+// DHCP background work plus router IP sync.
 class DhcpWorker {
 public:
     DhcpWorker(Engine::Dhcp::DhcpEngine& dhcp, int& lan_fd, std::function<void()> refresh_router)
@@ -64,7 +64,7 @@ private:
     std::function<void()> refresh_router_;
 };
 
-// Applies GUI mode (Acceleration/Bridge) and global DL/UL bandwidth caps. Throttle percentage was removed; caps are applied as-is.
+// Applies GUI mode and global DL/UL bandwidth caps. Throttle percentage was removed; caps are applied as-is.
 class QosController {
 public:
     QosController(Telemetry& tel, Engine::Scheduler::Shaper* dl, Engine::Scheduler::Shaper* ul,

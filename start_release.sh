@@ -17,7 +17,7 @@ NOTIFY_LOG="/tmp/hpgtp_startup.log"
 notify() { echo "${1}|${2}" >> "$NOTIFY_LOG"; }
 
 echo "=========================================================="
-echo "  High-performance gaming traffic prioritizer v3.2 (release)"
+echo "  High-performance gaming traffic prioritizer "
 echo "=========================================================="
 echo "    Root: $SCRIPT_DIR"
 echo ""

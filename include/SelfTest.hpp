@@ -1,11 +1,6 @@
 #pragma once
 // Callback delivery uses std::function; structured types carry multi-field results.
 // The worker runs on a std::thread; the caller should join() after start().
-// Hardware checks use raw fds on /sys and /proc (implementations in SelfTest.cpp).
-//
-// POSIX headers (<netinet/in.h>, <sys/socket.h>, <fcntl.h>, <unistd.h>, <dirent.h>)
-// and engine headers are confined to SelfTest.cpp; this header exposes only the
-// public interface types Report, TestCase, and SelfTest.
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -51,7 +46,7 @@ public:
 
     ~SelfTest() { if (uthread_.joinable()) uthread_.join(); }
 
-    // Ignores duplicate start while a worker is still joinable (call join() first).
+    // Ignores duplicate start while a worker is still joinable.
     void start() {
         if (uthread_.joinable()) return;
         uthread_ = std::thread([this] {

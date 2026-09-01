@@ -1,6 +1,4 @@
 #pragma once
-// Network byte-order type system; no implicit uint32_t conversions.
-// POSIX declarations used for conversions live in Types_util.cpp only.
 #include <cstdint>
 
 namespace HPGTP::Utils::Net {

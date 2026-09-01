@@ -6,8 +6,7 @@
 
 namespace HPGTP::NetConfig {
 
-// Aligns the LAN interface inside the DHCP pool subnet and keeps the kernel
-// LAN IP in sync with the DHCP gateway.
+// Aligns the LAN interface inside the DHCP pool subnet and keeps the kernel LAN IP in sync with the DHCP gateway.
 class NetworkConfig {
 public:
     std::expected<void, std::string> sync(Engine::Dhcp::DhcpEngine& dhcp);

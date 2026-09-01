@@ -11,7 +11,6 @@
 namespace HPGTP {
 
     // Core metrics slot
-    // Forced alignment to 64 bytes keeps each CPU core's stats updates from triggering cache line bouncing
     struct alignas(64) CoreMetrics {
         std::atomic<uint64_t> pkts{ 0 };
         std::atomic<uint64_t> bytes{ 0 };

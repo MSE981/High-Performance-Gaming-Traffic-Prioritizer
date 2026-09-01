@@ -9,8 +9,7 @@
 
 namespace HPGTP::Utils::ForwardState {
 
-// Owns the double-buffered L2/ARP snapshot used for Ethernet rewrite and the
-// kernel WAN address lookup. 
+// Owns the double-buffered L2/ARP snapshot used for Ethernet rewrite and the kernel WAN address lookup. 
 class ForwardingState_util {
 public:
     struct ArpEntry {

@@ -13,7 +13,7 @@
 
 namespace HPGTP::Engine::Scheduler {
 
-    // Token bucket rate limiter - kept inline (hot path, called every packet)
+    // Token bucket rate limiter - kept inline
     class TokenBucket {
         double tokens;
         double capacity;
@@ -64,7 +64,7 @@ namespace HPGTP::Engine::Scheduler {
         }
     };
 
-    // Zero dynamic allocation ring buffer - need for speed~！~！
+    // Zero dynamic allocation ring buffer - need for speed！！！
     template<size_t Capacity = 8192>
     class ZeroAllocRingBuffer {
         struct alignas(64) PacketSlot {

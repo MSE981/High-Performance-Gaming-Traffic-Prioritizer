@@ -1,5 +1,4 @@
 #pragma once
-// HPGTP = High-Performance Gaming Traffic Prioritizer. This header defines HPGTP::Utils::Net wire types.
 #include <cstdint>
 #include <atomic>
 #include <array>

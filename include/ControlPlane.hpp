@@ -12,9 +12,7 @@
 
 namespace HPGTP::Control {
 
-// Owns the periodic service threads, the control-event thread and the two
-// control-plane eventfds. It drives the ParameterServices tick objects; it does
-// not implement their logic.
+// Owns the periodic service threads
 class ControlPlane {
 public:
     ControlPlane(Telemetry& tel, Engine::Nat::NatEngine& nat, Engine::Dhcp::DhcpEngine& dhcp,

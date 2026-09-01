@@ -23,7 +23,6 @@ namespace HPGTP::Utils::RawSocket {
         static constexpr uint32_t BLOCK_NR   = 1024;
         static constexpr uint32_t FRAME_NR   = (BLOCK_SIZE * BLOCK_NR) / FRAME_SIZE;
 
-        // Avoids exposing <net/if.h> to clients
         static constexpr size_t IFACE_NAME_MAX = 16;
         std::array<char, IFACE_NAME_MAX> iface{};
 

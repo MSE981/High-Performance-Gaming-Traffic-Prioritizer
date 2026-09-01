@@ -22,8 +22,7 @@
 #include "NetworkConfig.hpp"
 #include "Lifecycle.hpp"
 
-// HPGTP: High-Performance Gaming Traffic Prioritizer. Root namespace for all
-// product code (nested: Engine, Logic, Utils, GUI, ...).
+// HPGTP: High-Performance Gaming Traffic Prioritizer. Root namespace for all product code
 namespace HPGTP {
 
 namespace Engine::Forward {
@@ -38,9 +37,7 @@ struct PacketWorkerConfig {
     Utils::Events::CallbackRegistry* callbacks = nullptr;
 };
 
-// Owns the two data-plane workers (WAN->LAN on core 2, LAN->WAN on core 3)
-// and their per-worker eventfds. App remains the owner of the engines and
-// shapers; this class borrows them through raw pointers.
+// Owns the two data-plane workers and their per-worker eventfds. App remains the owner of the engines and shapers; this class borrows them through raw pointers.
 class Forward_Engine {
 public:
     Forward_Engine() = default;
@@ -90,13 +87,9 @@ private:
 
 } // namespace Engine::Forward
 
-// Internal data-plane types
-// These are referenced by App's private members and must be layout-complete
-// here. Their *implementations* live in App.cpp together with the POSIX APIs.
 
 // Application class
 // Public interface: init / start / stop / wait_for_shutdown.
-// All POSIX I/O, packet pipeline, and watchdog implementations are in App.cpp.
 class App {
     Utils::ForwardState::ForwardingState_util       forwarding_plane_;
     std::unique_ptr<Utils::RawSocket::RawSocketManager> iface_wan;
@@ -126,7 +119,6 @@ public:
     void start();
     void stop();
     void wait_for_shutdown();
-    // GUI writes this after changing DHCP fields: it signals the control thread.
     void request_dhcp_config_apply();
 
 private:
