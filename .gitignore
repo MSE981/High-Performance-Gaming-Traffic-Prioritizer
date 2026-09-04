@@ -372,3 +372,4 @@ nohup.out
 *.md
 !docs/FUTURE_PLAN.md
 *.pdf
+!doc/subject_report.pdf

@@ -91,6 +91,9 @@ The code splits into a few layers:
 - Not headless. The GUI is the only start path.
 - It is a userspace router. The kernel forwards only where the start script sets the rules.
 
+## Social media 
+http://xhslink.com/o/4Y6GghFouzZ
+
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
