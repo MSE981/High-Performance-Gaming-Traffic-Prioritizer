@@ -1,169 +1,115 @@
 #pragma once
-// C++ standard headers only -- no POSIX C headers.
-// All POSIX C APIs (socket, timerfd, poll, dirent, ...) are hidden in App.cpp.
 #include <thread>
 #include <mutex>
 #include <atomic>
 #include <memory>
 #include <string>
 #include <expected>
-#include <future>
+#include <condition_variable>
 #include <array>
 #include <span>
-#include "NetworkUtils.hpp"
-#include "NetworkEngine.hpp"
+#include "Network_util.hpp"
+#include "RawSocket_util.hpp"
 #include "Processor.hpp"
 #include "NatEngine.hpp"
-#include "DnsEngine.hpp"
 #include "DhcpEngine.hpp"
-#include "UpnpEngine.hpp"
-#include "SystemOptimizer.hpp"
+#include "SystemOptimizer_util.hpp"
 #include "Telemetry.hpp"
-#include "Scheduler.hpp"
-#include "FirewallEngine.hpp"
+#include "Scheduler_util.hpp"
+#include "EventCallbacks_util.hpp"
+#include "ForwardingState_util.hpp"
+#include "ControlPlane.hpp"
+#include "NetworkConfig.hpp"
+#include "Lifecycle.hpp"
 
-// HPGTP: High-Performance Gaming Traffic Prioritizer. Root namespace for all
-// product code (nested: Logic, Net, GUI, Traffic, Engine, ...).
+// HPGTP: High-Performance Gaming Traffic Prioritizer. Root namespace for all product code
 namespace HPGTP {
 
-// Internal data-plane types
-// These are referenced by App's private members and must be layout-complete
-// here.  Their *implementations* live in App.cpp together with the POSIX APIs.
-
-// Zero-heap static hash table (FNV-1a) for IP-to-Shaper mapping.
-// Template: must remain in the header.
-template<typename T, size_t Capacity = 256>
-class StaticIpMap {
-public:
-    struct Entry {
-        Net::IPv4Net key{};
-        T            value    = nullptr;
-        bool         occupied = false;
-    };
-
-private:
-    std::array<Entry, Capacity> table{};
-
-    static uint32_t fnv1a_hash(Net::IPv4Net addr) {
-        uint32_t val = addr.raw();
-        uint32_t h   = 2166136261U;
-        h ^= (val & 0xFF);         h *= 16777619U;
-        h ^= ((val >>  8) & 0xFF); h *= 16777619U;
-        h ^= ((val >> 16) & 0xFF); h *= 16777619U;
-        h ^= ((val >> 24) & 0xFF); h *= 16777619U;
-        return h;
-    }
-
-public:
-    template<typename Callback>
-    void for_each_occupied(Callback&& cb) {
-        for (auto& e : table)
-            if (e.occupied && e.value) cb(e.value);
-    }
-
-    void insert(Net::IPv4Net ip, T val) {
-        uint32_t h = fnv1a_hash(ip) % Capacity;
-        for (size_t i = 0; i < Capacity; ++i) {
-            size_t idx = (h + i) % Capacity;
-            if (!table[idx].occupied || table[idx].key == ip) {
-                table[idx] = { ip, val, true };
-                return;
-            }
-        }
-    }
-
-    T find(Net::IPv4Net ip) const {
-        uint32_t h = fnv1a_hash(ip) % Capacity;
-        for (size_t i = 0; i < Capacity; ++i) {
-            size_t idx = (h + i) % Capacity;
-            if (!table[idx].occupied) return nullptr;
-            if (table[idx].key == ip) return table[idx].value;
-        }
-        return nullptr;
-    }
-};
-
-// Lock-free double-buffer QoS config (RCU swap pattern).
-struct QoSConfig {
-    std::array<StaticIpMap<std::shared_ptr<Traffic::Shaper>, 256>, 2> buffers;
-    alignas(64) std::atomic<size_t> active_idx{0};
-
-    void update(const std::array<Config::IpLimitEntry, Config::MAX_IP_LIMITS>& table,
-                size_t count) {
-        size_t active   = active_idx.load(std::memory_order_relaxed);
-        size_t inactive = 1 - active;
-        buffers[inactive] = {};
-        for (size_t i = 0; i < count; ++i)
-            buffers[inactive].insert(
-                table[i].ip, std::make_shared<Traffic::Shaper>(table[i].rate));
-        active_idx.store(inactive, std::memory_order_release);
-    }
-};
+namespace Engine::Forward {
 
 // Per-thread routing and engine handles passed into each packet worker.
 struct PacketWorkerConfig {
     int tx_fd{};
-    // Upstream (LAN RX): egress back to LAN for same-subnet hairpin. Downstream: -1.
-    int tx_fd_lan{-1};
     int core_id{};
-    std::shared_ptr<Traffic::Shaper>       route_shaper;
-    std::shared_ptr<Logic::NatEngine>      nat_engine;
-    std::shared_ptr<Logic::DnsEngine>      dns_engine;
-    std::shared_ptr<QoSConfig>             qos_config;
-    std::shared_ptr<QoSConfig>             device_shaper;
-    std::shared_ptr<Logic::DhcpEngine>     dhcp_engine;
-    std::shared_ptr<Logic::FirewallEngine> firewall_engine;
-    Net::IPv4Net gateway_ip{};
+    Engine::Scheduler::Shaper*      route_shaper = nullptr;
+    Engine::Nat::NatEngine*         nat_engine = nullptr;
+    Engine::Dhcp::DhcpEngine*       dhcp_engine = nullptr;
+    Utils::Events::CallbackRegistry* callbacks = nullptr;
 };
 
-// Application class
-// Public interface: init / start / stop / wait_for_shutdown.
-// All POSIX I/O, packet pipeline, and watchdog implementations are in App.cpp.
-class App {
-    std::unique_ptr<Engine::RawSocketManager> iface_wan;
-    std::unique_ptr<Engine::RawSocketManager> iface_lan;
-    std::shared_ptr<Logic::NatEngine>         nat_engine;
-    std::shared_ptr<Logic::DnsEngine>         dns_engine;
-    std::shared_ptr<Logic::DhcpEngine>        dhcp_engine;
-    std::shared_ptr<Logic::FirewallEngine>    firewall_engine;
-    std::shared_ptr<Logic::UpnpEngine>        upnp_engine;
-    std::shared_ptr<QoSConfig>                qos_config;
-    int lan_fd_ = -1;
+// Owns the two data-plane workers and their per-worker eventfds. App remains the owner of the engines and shapers; this class borrows them through raw pointers.
+class Forward_Engine {
+public:
+    Forward_Engine() = default;
+    ~Forward_Engine();
 
-    std::shared_ptr<Traffic::Shaper> global_shaper_dl;
-    std::shared_ptr<Traffic::Shaper> global_shaper_ul;
-    double base_dl_mbps = 500.0;
-    double base_ul_mbps = 50.0;
-    std::shared_ptr<QoSConfig> device_shaper_dl;
-    std::shared_ptr<QoSConfig> device_shaper_ul;
+    std::expected<void, std::string> start(
+        std::unique_ptr<Utils::RawSocket::RawSocketManager> wan,
+        std::unique_ptr<Utils::RawSocket::RawSocketManager> lan,
+        int fd_wan, int fd_lan,
+        Engine::Scheduler::Shaper* shaper_dl, Engine::Scheduler::Shaper* shaper_ul,
+        Engine::Nat::NatEngine* nat_engine, Engine::Dhcp::DhcpEngine* dhcp_engine,
+        Utils::Events::CallbackRegistry* dl_events,
+        Utils::Events::CallbackRegistry* ul_events,
+        Utils::ForwardState::ForwardingState_util& plane);
+    void stop();
 
-    std::thread       worker_downstream;
-    std::thread       worker_upstream;
-    std::thread       watchdog;
-    std::atomic<bool> running_workers{false};
-    std::atomic<bool> running_watchdog{false};
-    std::promise<void> shutdown_promise;
-    std::future<void>  shutdown_future;
-    std::atomic<bool>   shutdown_sequence_started_{false};
-    std::once_flag      shutdown_notify_once_;
-
+private:
     struct WorkerPollSync {
         int frame_efd{-1};
         int stop_efd{-1};
     };
-    std::array<WorkerPollSync, 2> worker_poll_{};
-    int watchdog_stop_efd_{-1};
 
-    std::expected<void, std::string> open_worker_poll_fds_for_start();
-    void close_worker_poll_fds();
-    void wake_proc_threads_for_shutdown();
-    void wake_watchdog_for_shutdown();
-    void close_watchdog_stop_efd();
+    std::array<WorkerPollSync, 2> poll_sync_{};
+    std::thread worker_downstream_;
+    std::thread worker_upstream_;
+    std::atomic<bool> running_{false};
 
-    // DHCP pool subnet alignment + kernel LAN IP as DhcpEngine router_ip (Core 1 / init).
-    Net::IPv4Net                     effective_lan_gateway_{};
-    std::expected<void, std::string> sync_lan_subnet_and_dhcp_gateway();
-    void                             refresh_dhcp_router_from_kernel() noexcept;
+    std::unique_ptr<Utils::RawSocket::RawSocketManager> wan_;
+    std::unique_ptr<Utils::RawSocket::RawSocketManager> lan_;
+    int fd_wan_ = -1;
+    int fd_lan_ = -1;
+    Engine::Scheduler::Shaper* shaper_dl_ = nullptr;
+    Engine::Scheduler::Shaper* shaper_ul_ = nullptr;
+    Engine::Nat::NatEngine* nat_engine_ = nullptr;
+    Engine::Dhcp::DhcpEngine* dhcp_engine_ = nullptr;
+    Utils::Events::CallbackRegistry* dl_events_ = nullptr;
+    Utils::Events::CallbackRegistry* ul_events_ = nullptr;
+    Utils::ForwardState::ForwardingState_util* plane_ = nullptr;
+
+    std::expected<void, std::string> open_poll_fds();
+    void close_poll_fds();
+    void wake_workers();
+    void worker_event_loop(std::unique_ptr<Utils::RawSocket::RawSocketManager> rx_mgr,
+                           PacketWorkerConfig cfg,
+                           WorkerPollSync& poll_sync);
+};
+
+} // namespace Engine::Forward
+
+
+// Application class
+// Public interface: init / start / stop / wait_for_shutdown.
+class App {
+    Utils::ForwardState::ForwardingState_util       forwarding_plane_;
+    std::unique_ptr<Utils::RawSocket::RawSocketManager> iface_wan;
+    std::unique_ptr<Utils::RawSocket::RawSocketManager> iface_lan;
+    std::unique_ptr<Engine::Nat::NatEngine>         nat_engine_;
+    std::unique_ptr<Engine::Dhcp::DhcpEngine>        dhcp_engine_;
+    int lan_fd_ = -1;
+
+    Utils::Events::CallbackRegistry         dl_events_;
+    Utils::Events::CallbackRegistry         ul_events_;
+    std::unique_ptr<Engine::Scheduler::Shaper> shaper_dl_;
+    std::unique_ptr<Engine::Scheduler::Shaper> shaper_ul_;
+    double base_dl_mbps = 500.0;
+    double base_ul_mbps = 50.0;
+
+    Lifecycle::Lifecycle lifecycle_;
+    std::unique_ptr<Utils::Events::PacketObserver> telemetry_observer_;
+    std::unique_ptr<Engine::Forward::Forward_Engine> forward_engine_;
+    std::unique_ptr<Control::ControlPlane> control_plane_;
+    std::unique_ptr<NetConfig::NetworkConfig> netcfg_;
 
 public:
     App();
@@ -173,12 +119,9 @@ public:
     void start();
     void stop();
     void wait_for_shutdown();
+    void request_dhcp_config_apply();
 
 private:
-    void worker_event_loop(std::unique_ptr<Engine::RawSocketManager> rx_mgr,
-                           PacketWorkerConfig cfg,
-                           WorkerPollSync& poll_sync);
-    void watchdog_loop();
 };
 
 } // namespace HPGTP

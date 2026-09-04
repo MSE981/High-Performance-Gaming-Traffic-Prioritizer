@@ -3,11 +3,12 @@
 #include <chrono>
 #include <cstdint>
 #include <expected>
+#include <mutex>
 #include <span>
 #include <string>
-#include "Headers.hpp"
+#include "Headers_util.hpp"
 
-namespace HPGTP::Logic {
+namespace HPGTP::Engine::Dhcp {
 
     struct DhcpMessage {
         size_t len = 0;
@@ -16,19 +17,19 @@ namespace HPGTP::Logic {
 
     struct DhcpLease {
         std::array<uint8_t, 6> mac{};
-        Net::IPv4Net ip{};
+        Utils::Net::IPv4Net ip{};
         bool         active = false;
         std::chrono::steady_clock::time_point lease_expiry;
     };
 
     struct DhcpPoolConfig {
-        Net::IPv4Net         pool_start{};
-        Net::IPv4Net         pool_end{};
+        Utils::Net::IPv4Net         pool_start{};
+        Utils::Net::IPv4Net         pool_end{};
         std::chrono::seconds lease{86400};
     };
 
     class DhcpEngine {
-        Net::SpscRingBuffer<DhcpMessage, 512> request_queue{};
+        Utils::Net::SpscRingBuffer<DhcpMessage, 512> request_queue{};
 
         // Watchdog calls process_background_tasks; cap work per tick for fast return.
         static constexpr unsigned kBackgroundTaskBudget = 32;
@@ -36,21 +37,30 @@ namespace HPGTP::Logic {
         static constexpr size_t MAX_POOL_SIZE = 253;
         std::array<DhcpLease, MAX_POOL_SIZE> leases{};
         size_t       pool_count    = 0;
-        Net::IPv4Net        router_ip{};
+        Utils::Net::IPv4Net        router_ip{};
         std::chrono::seconds lease_duration{86400};
         std::array<uint8_t, 6> lan_if_mac_{};
 
-        std::expected<void, std::string> init_pool(Net::IPv4Net start_ip, Net::IPv4Net end_ip);
+        // Serialises DHCP pool/lease/router state between the background-task thread and the control event thread that applies GUI config.
+        mutable std::mutex mutex_{};
+
+        std::expected<void, std::string> init_pool(Utils::Net::IPv4Net start_ip, Utils::Net::IPv4Net end_ip);
         void handle_dhcp_request(DhcpMessage& msg, int lan_fd);
-        Net::IPv4Net find_or_assign_lease(std::span<const uint8_t, 6> mac);
-        void commit_lease(Net::IPv4Net ip);
+        Utils::Net::IPv4Net find_or_assign_lease(std::span<const uint8_t, 6> mac);
+        void commit_lease(Utils::Net::IPv4Net ip);
 
     public:
         explicit DhcpEngine(const std::string& lan_ip, DhcpPoolConfig cfg);
         std::expected<void, std::string> reconfigure(DhcpPoolConfig cfg);
-        void set_router_ip(Net::IPv4Net ip) noexcept { router_ip = ip; }
-        [[nodiscard]] Net::IPv4Net router_ip_snapshot() const noexcept { return router_ip; }
-        void intercept_request(const Net::ParsedPacket& pkt);
+        void set_router_ip(Utils::Net::IPv4Net ip) noexcept {
+            std::lock_guard<std::mutex> guard(mutex_);
+            router_ip = ip;
+        }
+        [[nodiscard]] Utils::Net::IPv4Net router_ip_snapshot() const noexcept {
+            std::lock_guard<std::mutex> guard(mutex_);
+            return router_ip;
+        }
+        void intercept_request(const Utils::Net::ParsedPacket& pkt);
         void process_background_tasks(int lan_fd);
     };
-}
+} // namespace HPGTP::Engine::Dhcp

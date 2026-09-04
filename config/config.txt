@@ -1,106 +1,39 @@
-# High-performance gaming traffic prioritizer — router configuration
+# High-performance gaming traffic prioritizer - router configuration
 # Place this file next to the GamingTrafficPrioritizer binary, or pass a path at startup.
 # All keys are optional. The program starts with built-in defaults if this file is absent.
 # The GUI writes changes back to this file on every clean exit.
 
-# ── Network interfaces ────────────────────────────────────────────────
+# ---- Network interfaces ----
 # IFACE_WAN  : Ethernet interface facing your router (internet side).
 # IFACE_LAN  : Ethernet interface facing your local devices.
-# ROUTER_IP  : The Pi's own IP on the LAN side (default gateway for DHCP clients, firewall, UPnP).
+# ROUTER_IP  : The Pi's own IP on the LAN side (default gateway for DHCP clients).
 #              Must be on a different subnet from the upstream router.
 # APPLY_ROUTER_IP_TO_LAN : If true, the program sets the kernel IPv4 on IFACE_LAN to ROUTER_IP at startup
 #              (userspace DHCP does not configure the interface). Requires root. Disable if you use netplan/systemd-networkd.
 # LAN_PREFIX_LEN : CIDR prefix for that LAN (typical home LAN: 24).
 APPLY_ROUTER_IP_TO_LAN=true
 LAN_PREFIX_LEN=24
-# WAN_IP     : Optional. Static IPv4 used for NAT (SNAT / inbound DNAT). Leave empty or omit to use
-#              the IPv4 address assigned to IFACE_WAN (e.g. DHCP from your ISP router).
 IFACE_WAN=eth0
 IFACE_LAN=eth1
 ROUTER_IP=192.168.12.1
-WAN_IP=
 
-# ── Interface role map ────────────────────────────────────────────────
-# These lines take priority over the simple IFACE_WAN / IFACE_LAN keys above.
-# Roles: gateway  — primary WAN / default route (exactly one required)
-#        wan      — additional WAN interface
-#        lan      — LAN-side interface; multiple LAN ports are bridged
-#        disabled — interface is ignored by the forwarding engine
-#
-# eth0 : Default WAN / gateway (built-in GbE typical) — upstream router / internet
-# eth1 : LAN side — local devices (often USB Ethernet adapter)
-IFACE_GATEWAY=eth0
-IFACE_ROLE=eth0:gateway
-IFACE_ROLE=eth1:lan
-
-# ── Display mode ──────────────────────────────────────────────────────
-# Set to false for headless / SSH operation (no Qt dependency at runtime).
-enable_gui=true
-
-# ── QoS and traffic classification ───────────────────────────────────
-# ENABLE_ACCELERATION    : true  = 3-tier QoS + gaming fast-lane
+# ---- QoS and traffic classification ----
+# ENABLE_ACCELERATION    : true  = two-tier QoS, high priority fast lane
 #                          false = transparent bridge, no classification
-# LARGE_PACKET_THRESHOLD : Packets above this byte count are treated as
-#                          "heavy" downloads and may be throttled.
-# PUNISH_TRIGGER_COUNT   : How many heavy packets a flow must send before
-#                          it gets demoted to the Normal (throttled) lane.
-# CLEANUP_INTERVAL       : How often the flow table is swept for idle
-#                          entries, measured in packets processed.
+# LARGE_PACKET_THRESHOLD : Packets below this byte count (and DNS) go to the
+#                          High (unthrottled) lane; larger packets go to Normal.
 ENABLE_ACCELERATION=true
 LARGE_PACKET_THRESHOLD=1000
-PUNISH_TRIGGER_COUNT=30
-CLEANUP_INTERVAL=10000
 
-# ── Built-in services ────────────────────────────────────────────────
+# ---- Built-in services ----
 # Each service can be toggled independently without restarting.
 # The GUI Service page writes these values on exit.
 enable_nat=true
 enable_dhcp=true
-enable_dns_cache=true
-enable_upnp=false
-# enable_firewall : Stateful inbound default-deny firewall.
-#   LAN-initiated connections and their return traffic are always allowed.
-#   Unsolicited inbound TCP/UDP packets from the WAN are silently dropped.
-#   ICMP (ping replies, unreachable, TTL-exceeded) is always allowed through.
-#   Set to false only if you need unsolicited inbound connections (e.g. self-hosted servers).
-enable_firewall=true
 
-# ── DHCP address pool (LAN clients) ──────────────────────────────────
+# ---- DHCP address pool (LAN clients) ----
 # Pool bounds imply the LAN subnet (prefix). ROUTER_IP must lie in that subnet; when enable_dhcp=true,
 # the program aligns IFACE_LAN into that subnet (see APPLY_ROUTER_IP_TO_LAN) and uses the kernel LAN IP
-# as the DHCP default gateway. End may be .255 on /24; use .254 if a client rejects it.
+# as the DHCP default gateway.
 DHCP_POOL_START=192.168.12.50
 DHCP_POOL_END=192.168.12.255
-
-# ── Game port whitelist ──────────────────────────────────────────────
-# Ports / ranges listed here receive priority queuing when QoS is active.
-# Format: GAME_PORT=<port>:<description>  or  GAME_PORT=<start>-<end>:<description>
-# The description is optional (colon and text may be omitted).
-GAME_PORT=3478-3480:PlayStation Network
-GAME_PORT=3074:Xbox Live
-GAME_PORT=27015-27050:Steam
-GAME_PORT=5000-5500:Riot Games (LoL, Valorant)
-GAME_PORT=26500-26510:Overwatch / Blizzard
-GAME_PORT=9000-9100:Fortnite / Epic
-GAME_PORT=1024-1124:Apex Legends / EA
-GAME_PORT=3216:EA
-GAME_PORT=9960-9969:EA
-GAME_PORT=18000-18060:EA
-GAME_PORT=3074-3080:Call of Duty
-GAME_PORT=25565:Minecraft Java
-GAME_PORT=19132-19133:Minecraft Bedrock
-GAME_PORT=7000-9000:Rocket League
-GAME_PORT=22101-22102:Genshin Impact / HoYoverse
-GAME_PORT=7086-7995:PUBG
-GAME_PORT=6015:Rainbow Six Siege
-GAME_PORT=17000-17100:Escape from Tarkov
-GAME_PORT=9987:TeamSpeak
-GAME_PORT=50000-50004:Discord voice
-
-# ── Per-device bandwidth caps (optional) ─────────────────────────────
-# Limit the download speed of individual LAN devices by IP address.
-# The token-bucket shaper is applied per-packet in the forwarding hot path.
-# Format: IP_LIMIT=<device-IP>:<limit-in-Mbps>
-# Example:
-# IP_LIMIT=192.168.12.50:20
-# IP_LIMIT=192.168.12.51:10

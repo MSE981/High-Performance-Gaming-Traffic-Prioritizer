@@ -1,13 +1,11 @@
 #pragma once
-// Network byte-order type system; no implicit uint32_t conversions.
-// POSIX declarations used for conversions live in NetworkTypes.cpp only.
 #include <cstdint>
 
-namespace HPGTP::Net {
+namespace HPGTP::Utils::Net {
 
 struct IPv4Host; // forward declaration
 
-// Network-byte-order IPv4 (wire representation).
+// Network-byte-order IPv4
 struct IPv4Net {
     explicit constexpr IPv4Net()              noexcept : v_(0) {}
     explicit constexpr IPv4Net(uint32_t nbo)  noexcept : v_(nbo) {}
@@ -22,7 +20,7 @@ private:
     uint32_t v_;
 };
 
-// Host-byte-order IPv4 (arithmetic and comparisons).
+// Host-byte-order IPv4
 struct IPv4Host {
     explicit constexpr IPv4Host()             noexcept : v_(0) {}
     explicit constexpr IPv4Host(uint32_t hbo) noexcept : v_(hbo) {}
@@ -42,9 +40,9 @@ private:
 
 IPv4Net parse_ipv4(const char* s) noexcept;
 
-// Nth address after base (DHCP pool construction).
+// Nth address after base
 inline IPv4Net pool_advance(IPv4Net base_net, uint32_t offset) noexcept {
     return IPv4Host{base_net.to_host().raw() + offset}.to_net();
 }
 
-} // namespace HPGTP::Net
+} // namespace HPGTP::Utils::Net

@@ -1,5 +1,5 @@
-#include "NetworkUtils.hpp"
-#include "NetworkTypes.hpp"
+#include "Network_util.hpp"
+#include "Types_util.hpp"
 #include <print>
 #include <algorithm>
 #include <cstring>
@@ -15,9 +15,9 @@
 #include <linux/if_arp.h>
 #include <linux/sockios.h>
 
-namespace HPGTP::Utils {
+namespace HPGTP::Utils::Network {
 
-int Network::get_iface_ipv4_prefix_len(const std::string& iface) {
+int Network_util::get_iface_ipv4_prefix_len(const std::string& iface) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return -1;
 
@@ -44,7 +44,7 @@ int Network::get_iface_ipv4_prefix_len(const std::string& iface) {
     return prefix;
 }
 
-std::string Network::get_local_ip(const std::string& iface) {
+std::string Network_util::get_local_ip(const std::string& iface) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return {};
 
@@ -63,7 +63,7 @@ std::string Network::get_local_ip(const std::string& iface) {
     return ip_buf;
 }
 
-std::string Network::get_gateway_ip() {
+std::string Network_util::get_gateway_ip() {
     char buf[2048]{};
     int fd = ::open("/proc/net/route", O_RDONLY);
     if (fd < 0) return "";
@@ -96,7 +96,7 @@ std::string Network::get_gateway_ip() {
     return "";
 }
 
-std::string Network::get_default_gateway_for_iface(const std::string& iface) {
+std::string Network_util::get_default_gateway_for_iface(const std::string& iface) {
     char buf[2048]{};
     int fd = ::open("/proc/net/route", O_RDONLY);
     if (fd < 0) return "";
@@ -130,7 +130,7 @@ std::string Network::get_default_gateway_for_iface(const std::string& iface) {
     return "";
 }
 
-bool Network::get_iface_hwaddr(const std::string& iface, uint8_t out[6]) {
+bool Network_util::get_iface_hwaddr(const std::string& iface, uint8_t out[6]) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return false;
 
@@ -148,7 +148,7 @@ bool Network::get_iface_hwaddr(const std::string& iface, uint8_t out[6]) {
     return true;
 }
 
-bool Network::parse_mac_colon(std::string_view s, uint8_t out[6]) {
+bool Network_util::parse_mac_colon(std::string_view s, uint8_t out[6]) {
     if (s.size() < 17) return false;
     char buf[24]{};
     std::memcpy(buf, s.data(), std::min(s.size(), sizeof(buf) - 1u));
@@ -164,7 +164,7 @@ bool Network::parse_mac_colon(std::string_view s, uint8_t out[6]) {
     return true;
 }
 
-size_t Network::read_arp_table(ArpTableRow* out, size_t max_out) {
+size_t Network_util::read_arp_table(ArpTableRow* out, size_t max_out) {
     if (!out || max_out == 0) return 0;
     char buf[65536]{};
     int fd = ::open("/proc/net/arp", O_RDONLY);
@@ -200,7 +200,7 @@ size_t Network::read_arp_table(ArpTableRow* out, size_t max_out) {
     return count;
 }
 
-void Network::force_arp_resolution(const std::string& target_ip) {
+void Network_util::force_arp_resolution(const std::string& target_ip) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return;
 
@@ -214,7 +214,7 @@ void Network::force_arp_resolution(const std::string& target_ip) {
     close(fd);
 }
 
-bool Network::disable_hardware_offloads(const std::string& iface) {
+bool Network_util::disable_hardware_offloads(const std::string& iface) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return false;
 
@@ -241,14 +241,13 @@ bool Network::disable_hardware_offloads(const std::string& iface) {
     return success;
 }
 
-bool Network::set_iface_ipv4_and_prefix(const std::string& iface, const std::string& ipv4, int prefix_len) {
+bool Network_util::set_iface_ipv4_and_prefix(const std::string& iface, const std::string& ipv4, int prefix_len) {
     if (prefix_len <= 0 || prefix_len > 32) return false;
     if (iface.size() >= IFNAMSIZ) return false;
 
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return false;
 
-    // Names must not be ifr_addr / ifr_netmask — linux/netdevice.h macros break `struct ifreq ifr_*`.
     struct ifreq req_addr {};
     iface.copy(req_addr.ifr_name, IFNAMSIZ - 1);
     req_addr.ifr_name[IFNAMSIZ - 1] = '\0';
@@ -287,7 +286,7 @@ bool Network::set_iface_ipv4_and_prefix(const std::string& iface, const std::str
     return true;
 }
 
-int Network::infer_prefix_covering_pool(Net::IPv4Net a, Net::IPv4Net b) noexcept {
+int Network_util::infer_prefix_covering_pool(Utils::Net::IPv4Net a, Utils::Net::IPv4Net b) noexcept {
     uint32_t ha = ntohl(a.raw());
     uint32_t hb = ntohl(b.raw());
     if (ha > hb) std::swap(ha, hb);
@@ -299,7 +298,7 @@ int Network::infer_prefix_covering_pool(Net::IPv4Net a, Net::IPv4Net b) noexcept
     return p;
 }
 
-bool Network::ipv4_in_subnet(Net::IPv4Net ip, int prefix_len, Net::IPv4Net anchor) noexcept {
+bool Network_util::ipv4_in_subnet(Utils::Net::IPv4Net ip, int prefix_len, Utils::Net::IPv4Net anchor) noexcept {
     if (prefix_len < 0 || prefix_len > 32) return false;
     const uint32_t hi = ntohl(ip.raw());
     const uint32_t ha = ntohl(anchor.raw());
@@ -308,4 +307,4 @@ bool Network::ipv4_in_subnet(Net::IPv4Net ip, int prefix_len, Net::IPv4Net ancho
     return (hi & mask) == (ha & mask);
 }
 
-} // namespace HPGTP::Utils
+} // namespace HPGTP::Utils::Network

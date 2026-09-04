@@ -5,11 +5,10 @@
 #include <cstring>
 #include <expected>
 #include <string>
-#include <functional>
 #include <cstdint>
-#include "Headers.hpp"
+#include "Headers_util.hpp"
 
-namespace HPGTP::Engine {
+namespace HPGTP::Utils::RawSocket {
     class RawSocketManager {
         RawSocketManager(const RawSocketManager&) = delete;
         RawSocketManager& operator=(const RawSocketManager&) = delete;
@@ -24,13 +23,10 @@ namespace HPGTP::Engine {
         static constexpr uint32_t BLOCK_NR   = 1024;
         static constexpr uint32_t FRAME_NR   = (BLOCK_SIZE * BLOCK_NR) / FRAME_SIZE;
 
-        // Avoids exposing <net/if.h> (IFNAMSIZ) to clients
         static constexpr size_t IFACE_NAME_MAX = 16;
         std::array<char, IFACE_NAME_MAX> iface{};
-        std::function<void(int err)> poll_error_callback_;
 
-        // Kernel ring-buffer helpers — implementation in NetworkEngine.cpp.
-        // Hides <poll.h> and <linux/if_packet.h> from all clients.
+        // Kernel ring-buffer helpers
         void do_poll(int timeout_ms);
         bool peek_frame(std::span<uint8_t>& out);
         void advance_frame();
@@ -41,27 +37,10 @@ namespace HPGTP::Engine {
         std::expected<void, std::string> init();
         int get_fd() const { return fd; }
 
-        void set_poll_error_callback(std::function<void(int err)> cb) {
-            poll_error_callback_ = std::move(cb);
-        }
-
-        // telemetry_flag: bit0 = do_poll path; bit1 = worker RX thread (Telemetry::raw_socket_poll_errors).
+        // telemetry_flag: bit0 = do_poll path; bit1 = worker RX thread
         void notify_rx_poll_fatal(int err, std::uint8_t telemetry_flag);
 
-        void poll_rx(int timeout_ms) { do_poll(timeout_ms); }
         bool peek_rx_frame(std::span<uint8_t>& out) { return peek_frame(out); }
         void finish_rx_frame() { advance_frame(); }
-
-        // poll_and_dispatch must remain in the header — template instantiation
-        // requires the full body to be visible at each call site.
-        template<typename Callback>
-        void poll_and_dispatch(Callback&& cb, int timeout_ms = 1) {
-            do_poll(timeout_ms);
-            std::span<uint8_t> pkt;
-            while (peek_frame(pkt)) {
-                cb(pkt);
-                advance_frame();
-            }
-        }
     };
-}
+} // namespace HPGTP::Utils::RawSocket

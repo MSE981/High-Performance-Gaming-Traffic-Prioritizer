@@ -1,4 +1,4 @@
-#include "NetworkEngine.hpp"
+#include "RawSocket_util.hpp"
 #include "Telemetry.hpp"
 #include <print>
 #include <cerrno>
@@ -13,7 +13,7 @@
 #include <poll.h>
 #include <linux/if_packet.h>
 
-namespace HPGTP::Engine {
+namespace HPGTP::Utils::RawSocket {
 
 RawSocketManager::RawSocketManager(std::string_view iface_name) {
     iface_name.copy(iface.data(), IFACE_NAME_MAX - 1);
@@ -71,9 +71,9 @@ std::expected<void, std::string> RawSocketManager::init() {
 }
 
 void RawSocketManager::notify_rx_poll_fatal(int err, std::uint8_t telemetry_flag) {
+    (void)err;
     Telemetry::instance().raw_socket_poll_errors.fetch_or(
         telemetry_flag, std::memory_order_relaxed);
-    if (poll_error_callback_) poll_error_callback_(err);
 }
 
 void RawSocketManager::do_poll(int timeout_ms) {
@@ -86,7 +86,7 @@ void RawSocketManager::do_poll(int timeout_ms) {
         const int e = errno;
         notify_rx_poll_fatal(e, 1);
         std::println(stderr,
-            "[Engine] poll failed on {}: {} — closing RX socket",
+            "[Engine] poll failed on {}: {}, closing RX socket",
             iface.data(), std::strerror(e));
         ::close(fd);
         fd = -1;
@@ -107,7 +107,7 @@ bool RawSocketManager::peek_frame(std::span<uint8_t>& out) {
             return true;
         }
 
-        // PACKET_OUTGOING: release silently and check next frame
+        //release silently and check next frame
         hdr->tp_status = TP_STATUS_KERNEL;
         rx_idx = (rx_idx + 1) % FRAME_NR;
     }
@@ -119,4 +119,4 @@ void RawSocketManager::advance_frame() {
     rx_idx = (rx_idx + 1) % FRAME_NR;
 }
 
-} // namespace HPGTP::Engine
+} // namespace HPGTP::Utils::RawSocket

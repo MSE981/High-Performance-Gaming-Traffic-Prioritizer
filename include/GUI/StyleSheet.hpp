@@ -4,7 +4,7 @@
 namespace HPGTP::GUI {
 
     // Global dark theme QSS stylesheet
-    // Optimized for 800x1280 DSI display
+    // Designed for the 800x1280 DSI display
     inline const QString DARK_STYLESHEET = R"QSS(
 
     /* ===== Global Basics ===== */
@@ -236,31 +236,6 @@ namespace HPGTP::GUI {
 
     QPushButton#btn_danger:pressed {
         background-color: #aa2222;
-    }
-
-    /* ===== Slider (touch: 14px groove, 36px handle) ===== */
-    QSlider::groove:horizontal {
-        background-color: #2a2a4a;
-        height: 14px;
-        border-radius: 7px;
-    }
-
-    QSlider::sub-page:horizontal {
-        background-color: #0077ff;
-        border-radius: 7px;
-    }
-
-    QSlider::handle:horizontal {
-        background-color: #ffffff;
-        border: 2px solid #0077ff;
-        width: 36px;
-        height: 36px;
-        margin: -11px 0;
-        border-radius: 18px;
-    }
-
-    QSlider::handle:horizontal:pressed {
-        background-color: #0077ff;
     }
 
     /* ===== Tables (touch: 52px rows) ===== */

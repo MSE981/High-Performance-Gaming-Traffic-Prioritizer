@@ -10,20 +10,16 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <string_view>
-
 #include "Config.hpp"
 #include <mutex>
 #include "NatEngine.hpp"
-#include "DnsEngine.hpp"
 #include "DhcpEngine.hpp"
-#include "FirewallEngine.hpp"
-#include "Processor.hpp"
 
 namespace HPGTP::SelfTest {
 
 namespace {
 
-uint16_t fold_ip_header_checksum(const Net::IPv4Header* ip) noexcept {
+uint16_t fold_ip_header_checksum(const Utils::Net::IPv4Header* ip) noexcept {
     const auto* w = reinterpret_cast<const uint8_t*>(ip);
     uint32_t        sum = 0;
     for (int i = 0; i < 20; i += 2)
@@ -32,7 +28,7 @@ uint16_t fold_ip_header_checksum(const Net::IPv4Header* ip) noexcept {
     return static_cast<uint16_t>(~sum & 0xFFFF);
 }
 
-uint16_t fold_icmp_checksum(const Net::IcmpEchoHeader* icmp, size_t icmp_len) noexcept {
+uint16_t fold_icmp_checksum(const Utils::Net::IcmpEchoHeader* icmp, size_t icmp_len) noexcept {
     const auto* p = reinterpret_cast<const uint8_t*>(icmp);
     uint32_t    sum = 0;
     for (size_t i = 0; i + 1 < icmp_len; i += 2)
@@ -44,8 +40,7 @@ uint16_t fold_icmp_checksum(const Net::IcmpEchoHeader* icmp, size_t icmp_len) no
 
 } // namespace
 
-// Wire-format DHCP header — mirrors the internal layout used by DhcpEngine.
-// Defined locally here so DhcpEngine's private type stays confined to its TU.
+// DHCP header 
 #pragma pack(push, 1)
 struct DhcpWireHeader {
     uint8_t  op;
@@ -66,28 +61,25 @@ struct DhcpWireHeader {
 };
 #pragma pack(pop)
 
-// ── Worker ───────────────────────────────────────────────────────────────────
+// SelfTest entry point
 
 void SelfTest::run() {
     Report r;
     test_nat(r);
-    test_dns(r);
     test_dhcp(r);
-    test_firewall(r);
-    test_classifier(r);
     test_system(r);
     if (callback_) callback_(r);  // After all cases; worker is about to exit.
 }
 
-// ── Packet builders ──────────────────────────────────────────────────────────
-// All use std::array — zero heap allocation
+// Packet builders
+// UDP: 14-byte Ethernet + 20-byte IPv4 + 8-byte UDP
 
-std::array<uint8_t, 42> SelfTest::make_udp_pkt(Net::IPv4Net sip, Net::IPv4Net dip,
+std::array<uint8_t, 42> SelfTest::make_udp_pkt(Utils::Net::IPv4Net sip, Utils::Net::IPv4Net dip,
                                                  uint16_t sport, uint16_t dport) {
     std::array<uint8_t, 42> buf{};
-    auto* eth  = reinterpret_cast<Net::EthernetHeader*>(buf.data());
-    auto* ipv4 = reinterpret_cast<Net::IPv4Header*>(buf.data() + 14);
-    auto* udp  = reinterpret_cast<Net::UDPHeader*>(buf.data() + 34);
+    auto* eth  = reinterpret_cast<Utils::Net::EthernetHeader*>(buf.data());
+    auto* ipv4 = reinterpret_cast<Utils::Net::IPv4Header*>(buf.data() + 14);
+    auto* udp  = reinterpret_cast<Utils::Net::UDPHeader*>(buf.data() + 34);
 
     eth->proto       = htons(0x0800);
     ipv4->ver_ihl    = 0x45;
@@ -101,13 +93,15 @@ std::array<uint8_t, 42> SelfTest::make_udp_pkt(Net::IPv4Net sip, Net::IPv4Net di
     return buf;
 }
 
-std::array<uint8_t, 54> SelfTest::make_tcp_pkt(Net::IPv4Net sip, Net::IPv4Net dip,
+// TCP: 14-byte Ethernet + 20-byte IPv4 + 20-byte TCP
+
+std::array<uint8_t, 54> SelfTest::make_tcp_pkt(Utils::Net::IPv4Net sip, Utils::Net::IPv4Net dip,
                                                  uint16_t sport, uint16_t dport,
                                                  uint16_t flags) {
     std::array<uint8_t, 54> buf{};
-    auto* eth  = reinterpret_cast<Net::EthernetHeader*>(buf.data());
-    auto* ipv4 = reinterpret_cast<Net::IPv4Header*>(buf.data() + 14);
-    auto* tcp  = reinterpret_cast<Net::TCPHeader*>(buf.data() + 34);
+    auto* eth  = reinterpret_cast<Utils::Net::EthernetHeader*>(buf.data());
+    auto* ipv4 = reinterpret_cast<Utils::Net::IPv4Header*>(buf.data() + 14);
+    auto* tcp  = reinterpret_cast<Utils::Net::TCPHeader*>(buf.data() + 34);
 
     eth->proto           = htons(0x0800);
     ipv4->ver_ihl        = 0x45;
@@ -121,66 +115,18 @@ std::array<uint8_t, 54> SelfTest::make_tcp_pkt(Net::IPv4Net sip, Net::IPv4Net di
     return buf;
 }
 
-// DNS query: 42-byte UDP header + 12-byte DnsHeader + QNAME wire + QTYPE + QCLASS
-std::array<uint8_t, 512> SelfTest::make_dns_query(Net::IPv4Net sip, Net::IPv4Net dip,
-                                                    const char* host_dotted,
-                                                    size_t& out_len) {
-    std::array<uint8_t, 512> buf{};
-
-    auto* eth  = reinterpret_cast<Net::EthernetHeader*>(buf.data());
-    auto* ipv4 = reinterpret_cast<Net::IPv4Header*>(buf.data() + 14);
-    auto* udp  = reinterpret_cast<Net::UDPHeader*>(buf.data() + 34);
-
-    eth->proto     = htons(0x0800);
-    ipv4->ver_ihl  = 0x45;
-    ipv4->protocol = 17;
-    ipv4->saddr    = sip;
-    ipv4->daddr    = dip;
-    udp->source    = htons(12345);
-    udp->dest      = htons(53);
-
-    size_t dns_off = 42;
-    buf[dns_off + 0] = 0x12; buf[dns_off + 1] = 0x34; // id
-    buf[dns_off + 2] = 0x01; buf[dns_off + 3] = 0x00; // flags: standard query RD=1
-    buf[dns_off + 4] = 0x00; buf[dns_off + 5] = 0x01; // qdcount = 1
-
-    size_t qname_off = dns_off + 12; // 12 = sizeof(DnsHeader)
-    size_t pos = qname_off;
-    const char* p = host_dotted;
-    while (*p && pos < 500) {
-        size_t lstart = pos++;
-        uint8_t llen = 0;
-        while (*p && *p != '.' && pos < 510) {
-            buf[pos++] = static_cast<uint8_t>(*p++);
-            ++llen;
-        }
-        buf[lstart] = llen;
-        if (*p == '.') ++p;
-    }
-    buf[pos++] = 0;           // root label
-    buf[pos++] = 0x00; buf[pos++] = 0x01; // QTYPE A
-    buf[pos++] = 0x00; buf[pos++] = 0x01; // QCLASS IN
-
-    out_len = pos;
-    uint16_t udp_payload = static_cast<uint16_t>(pos - 34);
-    uint16_t ip_payload  = static_cast<uint16_t>(pos - 14);
-    udp->len         = htons(udp_payload);
-    ipv4->tot_len    = htons(ip_payload);
-    return buf;
-}
-
 // DHCP DISCOVER: 42-byte UDP (src=68, dst=67) + DhcpWireHeader + options
 std::array<uint8_t, 512> SelfTest::make_dhcp_discover(size_t& out_len) {
     std::array<uint8_t, 512> buf{};
-    auto* eth  = reinterpret_cast<Net::EthernetHeader*>(buf.data());
-    auto* ipv4 = reinterpret_cast<Net::IPv4Header*>(buf.data() + 14);
-    auto* udp  = reinterpret_cast<Net::UDPHeader*>(buf.data() + 34);
+    auto* eth  = reinterpret_cast<Utils::Net::EthernetHeader*>(buf.data());
+    auto* ipv4 = reinterpret_cast<Utils::Net::IPv4Header*>(buf.data() + 14);
+    auto* udp  = reinterpret_cast<Utils::Net::UDPHeader*>(buf.data() + 34);
 
     eth->proto     = htons(0x0800);
     ipv4->ver_ihl  = 0x45;
     ipv4->protocol = 17;
-    ipv4->saddr    = Net::IPv4Net{};             // 0.0.0.0 (DISCOVER)
-    ipv4->daddr    = Net::IPv4Net{0xFFFFFFFF};   // broadcast
+    ipv4->saddr    = Utils::Net::IPv4Net{};
+    ipv4->daddr    = Utils::Net::IPv4Net{0xFFFFFFFF};
 
     udp->source = htons(68);
     udp->dest   = htons(67);
@@ -191,13 +137,12 @@ std::array<uint8_t, 512> SelfTest::make_dhcp_discover(size_t& out_len) {
     dhcp->hlen         = 6;
     dhcp->xid          = htonl(0xDEADBEEF);
     dhcp->magic_cookie = htonl(0x63825363);
-    // Synthetic client MAC
     dhcp->chaddr[0] = 0xAA; dhcp->chaddr[1] = 0xBB; dhcp->chaddr[2] = 0xCC;
     dhcp->chaddr[3] = 0xDD; dhcp->chaddr[4] = 0xEE; dhcp->chaddr[5] = 0xFF;
 
     size_t opt = 42 + sizeof(DhcpWireHeader);
-    buf[opt++] = 53; buf[opt++] = 1; buf[opt++] = 1; // DHCP Message Type = DISCOVER
-    buf[opt++] = 255; // End option
+    buf[opt++] = 53; buf[opt++] = 1; buf[opt++] = 1;
+    buf[opt++] = 255;
 
     out_len = opt;
     uint16_t udp_len = static_cast<uint16_t>(opt - 34);
@@ -207,18 +152,17 @@ std::array<uint8_t, 512> SelfTest::make_dhcp_discover(size_t& out_len) {
     return buf;
 }
 
-// ── Sub-tests ────────────────────────────────────────────────────────────────
+// NAT tests
 
 void SelfTest::test_nat(Report& r) {
-    // make_unique: NatEngine has ~1.3 MB internal arrays — too large for stack
-    auto nat = std::make_unique<Logic::NatEngine>();
-    Net::IPv4Net wan_ip = Config::parse_ip_str("10.0.0.1").value();
+    auto nat = std::make_unique<Engine::Nat::NatEngine>();
+    Utils::Net::IPv4Net wan_ip = Config::parse_ip_str("10.0.0.1").value();
     nat->set_wan_ip(wan_ip);
 
-    Net::IPv4Net lan_ip = Config::parse_ip_str("192.168.1.100").value();
-    Net::IPv4Net ext_ip = Config::parse_ip_str("8.8.8.8").value();
+    Utils::Net::IPv4Net lan_ip = Config::parse_ip_str("192.168.1.100").value();
+    Utils::Net::IPv4Net ext_ip = Config::parse_ip_str("8.8.8.8").value();
     auto buf = make_udp_pkt(lan_ip, ext_ip, 54321, 12345);
-    auto pkt = Net::ParsedPacket::parse(std::span<uint8_t>{buf.data(), 42});
+    auto pkt = Utils::Net::ParsedPacket::parse(std::span<uint8_t>{buf.data(), 42});
 
     bool ok = nat->process_outbound(pkt);
 
@@ -234,9 +178,9 @@ void SelfTest::test_nat(Report& r) {
 
     std::array<uint8_t, 42> icmp_req{};
     {
-        auto* eth  = reinterpret_cast<Net::EthernetHeader*>(icmp_req.data());
-        auto* ipv4 = reinterpret_cast<Net::IPv4Header*>(icmp_req.data() + 14);
-        auto* icmp = reinterpret_cast<Net::IcmpEchoHeader*>(icmp_req.data() + 34);
+        auto* eth  = reinterpret_cast<Utils::Net::EthernetHeader*>(icmp_req.data());
+        auto* ipv4 = reinterpret_cast<Utils::Net::IPv4Header*>(icmp_req.data() + 14);
+        auto* icmp = reinterpret_cast<Utils::Net::IcmpEchoHeader*>(icmp_req.data() + 34);
         eth->proto        = htons(0x0800);
         ipv4->ver_ihl     = 0x45;
         ipv4->protocol    = 1;
@@ -254,7 +198,7 @@ void SelfTest::test_nat(Report& r) {
         icmp->sequence    = htons(1);
         icmp->check       = htons(fold_icmp_checksum(icmp, 8));
     }
-    auto pkt_icmp = Net::ParsedPacket::parse(std::span<uint8_t>{icmp_req.data(), icmp_req.size()});
+    auto pkt_icmp = Utils::Net::ParsedPacket::parse(std::span<uint8_t>{icmp_req.data(), icmp_req.size()});
     bool icmp_out = nat->process_outbound(pkt_icmp);
     auto* ie = pkt_icmp.icmp_echo();
     const bool icmp_snat = icmp_out && pkt_icmp.ipv4->saddr == wan_ip && ie
@@ -262,9 +206,9 @@ void SelfTest::test_nat(Report& r) {
 
     std::array<uint8_t, 42> icmp_rep{};
     {
-        auto* eth  = reinterpret_cast<Net::EthernetHeader*>(icmp_rep.data());
-        auto* ipv4 = reinterpret_cast<Net::IPv4Header*>(icmp_rep.data() + 14);
-        auto* icmp = reinterpret_cast<Net::IcmpEchoHeader*>(icmp_rep.data() + 34);
+        auto* eth  = reinterpret_cast<Utils::Net::EthernetHeader*>(icmp_rep.data());
+        auto* ipv4 = reinterpret_cast<Utils::Net::IPv4Header*>(icmp_rep.data() + 14);
+        auto* icmp = reinterpret_cast<Utils::Net::IcmpEchoHeader*>(icmp_rep.data() + 34);
         eth->proto        = htons(0x0800);
         ipv4->ver_ihl     = 0x45;
         ipv4->protocol    = 1;
@@ -282,7 +226,7 @@ void SelfTest::test_nat(Report& r) {
         icmp->sequence    = htons(1);
         icmp->check       = htons(fold_icmp_checksum(icmp, 8));
     }
-    auto pkt_rep = Net::ParsedPacket::parse(std::span<uint8_t>{icmp_rep.data(), icmp_rep.size()});
+    auto pkt_rep = Utils::Net::ParsedPacket::parse(std::span<uint8_t>{icmp_rep.data(), icmp_rep.size()});
     bool icmp_in  = nat->process_inbound(pkt_rep);
     auto* ir      = pkt_rep.icmp_echo();
     const bool icmp_dnat = icmp_in && pkt_rep.ipv4->daddr == lan_ip && ir && ir->id == htons(4242);
@@ -292,98 +236,26 @@ void SelfTest::test_nat(Report& r) {
           icmp_pass ? "echo SNAT/DNAT id map and checksums" : "ICMP NAT path failed");
 }
 
-void SelfTest::test_dns(Report& r) {
-    // Save and restore global static DNS count to avoid side-effects on live engine
-    size_t saved_count = Config::STATIC_DNS_COUNT;
-
-    // ── DNS_Static_Record ──
-    Config::upsert_static_dns("test.local", "1.2.3.4");
-    auto dns_static = std::make_unique<Logic::DnsEngine>();
-    dns_static->reload_static_records();
-
-    size_t pkt_len = 0;
-    Net::IPv4Net cli = Config::parse_ip_str("192.168.1.100").value();
-    Net::IPv4Net srv = Config::parse_ip_str("8.8.8.8").value();
-    auto dns_buf = make_dns_query(cli, srv, "test.local", pkt_len);
-    // Span must include tail room for DnsEngine::do_bounce (+16 bytes).
-    const size_t static_cap = std::min(pkt_len + 64, dns_buf.size());
-    auto pkt_static = Net::ParsedPacket::parse(
-        std::span<uint8_t>{dns_buf.data(), static_cap});
-    using enum Logic::DnsQueryDisposition;
-    const auto static_disp = dns_static->process_query(pkt_static, -1);
-    const bool static_pass = (static_disp == ReplySendFailed);
-    r.add("DNS_Static", static_pass,
-          static_pass ? "static hit; ReplySendFailed with invalid bounce fd (expected)"
-                      : "unexpected DNS disposition for static record");
-
-    Config::STATIC_DNS_COUNT = saved_count; // restore global state
-
-    // ── DNS_Cache_Miss ──
-    auto dns_miss = std::make_unique<Logic::DnsEngine>();
-    size_t len2 = 0;
-    auto miss_buf = make_dns_query(cli, srv, "unknown.invalid", len2);
-    auto pkt_miss = Net::ParsedPacket::parse(
-        std::span<uint8_t>{miss_buf.data(), len2});
-    const bool miss_pass = (dns_miss->process_query(pkt_miss, -1) == NotHandled);
-    r.add("DNS_CacheMiss", miss_pass,
-          miss_pass ? "unknown domain NotHandled (cache miss)" : "unexpected cache hit");
-
-    // ── DNS_Redirect ──
-    auto dns_redir = std::make_unique<Logic::DnsEngine>();
-    Net::IPv4Net upstream = Config::parse_ip_str("9.9.9.9").value();
-    Net::IPv4Net gw       = Config::parse_ip_str("192.168.1.1").value();
-    dns_redir->set_upstream({upstream, Net::IPv4Net{}});
-    dns_redir->set_redirect(true);
-    dns_redir->set_gateway_ip(gw);
-    size_t len3 = 0;
-    auto redir_buf = make_dns_query(cli, gw, "redirect.test", len3);
-    auto pkt_redir = Net::ParsedPacket::parse(
-        std::span<uint8_t>{redir_buf.data(), len3});
-    const auto redir_disp = dns_redir->process_query(pkt_redir, -1); // Redirected + daddr rewrite
-    bool redir_pass = (redir_disp == Redirected) && pkt_redir.is_valid_ipv4()
-                      && (pkt_redir.ipv4->daddr == upstream);
-    r.add("DNS_Redirect", redir_pass,
-          redir_pass ? "daddr redirected to upstream" : "daddr not rewritten");
-
-    // ── DNS_Redirect_SecondaryFallback (primary unset, use secondary) ──
-    auto dns_secfb = std::make_unique<Logic::DnsEngine>();
-    Net::IPv4Net sec_fb = Config::parse_ip_str("1.1.1.1").value();
-    dns_secfb->set_upstream({Net::IPv4Net{}, sec_fb});
-    dns_secfb->set_gateway_ip(gw);
-    size_t len4 = 0;
-    auto buf4 = make_dns_query(cli, gw, "secondary.fallback", len4);
-    auto pkt_sec = Net::ParsedPacket::parse(std::span<uint8_t>{buf4.data(), len4});
-    const auto disp_sec = dns_secfb->process_query(pkt_sec, -1);
-    bool secfb_pass = (disp_sec == Redirected) && pkt_sec.is_valid_ipv4()
-                      && (pkt_sec.ipv4->daddr == sec_fb);
-    r.add("DNS_RedirectSecondary", secfb_pass,
-          secfb_pass ? "daddr redirected to secondary when primary is zero"
-                     : "secondary fallback failed");
-}
-
+// DHCP tests
 void SelfTest::test_dhcp(Report& r) {
-    Logic::DhcpEngine dhcp(
+    Engine::Dhcp::DhcpEngine dhcp(
         "192.168.1.1",
-        Logic::DhcpPoolConfig{
-            Net::parse_ipv4("192.168.1.100"),
-            Net::parse_ipv4("192.168.1.200"),
+        Engine::Dhcp::DhcpPoolConfig{
+            Utils::Net::parse_ipv4("192.168.1.100"),
+            Utils::Net::parse_ipv4("192.168.1.200"),
             std::chrono::seconds{86400}});
 
     size_t pkt_len = 0;
     auto dhcp_buf = make_dhcp_discover(pkt_len);
-    auto pkt = Net::ParsedPacket::parse(
+    auto pkt = Utils::Net::ParsedPacket::parse(
         std::span<uint8_t>{dhcp_buf.data(), pkt_len});
 
-    dhcp.intercept_request(pkt); // enqueue into request_queue
-
-    // socketpair(AF_UNIX, SOCK_DGRAM): DhcpEngine replies via TxFrameOutput::send_best_effort.
-    // recv on the peer socket confirms bytes were written.
+    dhcp.intercept_request(pkt); 
     int sv[2] = {-1, -1};
     bool dhcp_pass = false;
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) == 0) {
         dhcp.process_background_tasks(sv[1]);
         uint8_t probe[1];
-        // Non-blocking recv: no sleep, MSG_DONTWAIT only.
         ssize_t n = recv(sv[0], probe, 1, MSG_DONTWAIT);
         dhcp_pass = (n > 0);
         ::close(sv[0]);
@@ -393,96 +265,8 @@ void SelfTest::test_dhcp(Report& r) {
           dhcp_pass ? "DISCOVER processed, OFFER sent" : "no OFFER response received");
 }
 
-void SelfTest::test_firewall(Report& r) {
-    // make_unique: FirewallEngine has ~5 MB table — must be heap-allocated
-    size_t saved_policy_count;
-    {
-        std::lock_guard<std::mutex> lk(Config::device_policy_mutex);
-        saved_policy_count = Config::DEVICE_POLICY_COUNT;
-    }
-
-    // ── FW_Block ──
-    auto fw_block = std::make_unique<Logic::FirewallEngine>();
-    Net::IPv4Net block_ip = Config::parse_ip_str("192.168.1.200").value();
-    Config::DevicePolicy p{};
-    p.ip      = block_ip;
-    p.blocked = true;
-    Config::upsert_device_policy(p);
-    fw_block->sync_blocked_ips();
-    bool block_pass = fw_block->is_blocked_ip(block_ip);
-    r.add("FW_Block", block_pass,
-          block_pass ? "blocked IP correctly rejected" : "is_blocked_ip returned false");
-
-    {
-        std::lock_guard<std::mutex> lk(Config::device_policy_mutex);
-        Config::DEVICE_POLICY_COUNT = saved_policy_count;
-    }
-
-    // ── FW_Session ──
-    auto fw_sess = std::make_unique<Logic::FirewallEngine>();
-    Net::IPv4Net lan_ip = Config::parse_ip_str("192.168.1.100").value();
-    Net::IPv4Net srv_ip = Config::parse_ip_str("1.2.3.4").value();
-
-    // Outbound SYN: flags = 0x5002 (data_offset=5, SYN=1)
-    auto syn_buf = make_tcp_pkt(lan_ip, srv_ip, 54321, 80, 0x5002);
-    auto syn_pkt = Net::ParsedPacket::parse(
-        std::span<uint8_t>{syn_buf.data(), 54});
-    fw_sess->track_outbound(syn_pkt);
-
-    // Inbound SYN-ACK: flags = 0x5012 (data_offset=5, SYN=1, ACK=1)
-    auto ack_buf = make_tcp_pkt(srv_ip, lan_ip, 80, 54321, 0x5012);
-    auto ack_pkt = Net::ParsedPacket::parse(
-        std::span<uint8_t>{ack_buf.data(), 54});
-    bool session_pass = fw_sess->check_inbound(ack_pkt);
-    r.add("FW_Session", session_pass,
-          session_pass ? "SYN-ACK allowed by conntrack" : "SYN-ACK unexpectedly blocked");
-}
-
-void SelfTest::test_classifier(Report& r) {
-    Net::IPv4Net src = Config::parse_ip_str("192.168.1.100").value();
-    Net::IPv4Net dst = Config::parse_ip_str("8.8.8.8").value();
-
-    // ── PRIO_DNS: UDP dst=53 → Critical ──
-    {
-        Logic::HeuristicProcessor proc;
-        auto buf = make_udp_pkt(src, dst, 40000, 53);
-        auto pkt = Net::ParsedPacket::parse(std::span<uint8_t>{buf.data(), 42});
-        bool pass = (proc.process(pkt) == Net::Priority::Critical);
-        r.add("PRIO_DNS", pass,
-              pass ? "UDP/53 classified Critical" : "wrong priority for DNS");
-    }
-
-    // ── PRIO_Gaming: small UDP dst=3074 → High ──
-    {
-        Logic::HeuristicProcessor proc;
-        auto buf = make_udp_pkt(src, dst, 40000, 3074);
-        auto pkt = Net::ParsedPacket::parse(std::span<uint8_t>{buf.data(), 42});
-        bool pass = (proc.process(pkt) == Net::Priority::High);
-        r.add("PRIO_Gaming", pass,
-              pass ? "UDP/3074 classified High" : "wrong priority for game port");
-    }
-
-    // ── PRIO_Normal: 1200-byte UDP to high port → Normal ──
-    // sport/dport must avoid Config::GAME_PORT_TABLE_DOUBLE (e.g. 50000–50004 Discord voice).
-    {
-        Logic::HeuristicProcessor proc;
-        std::array<uint8_t, 1200> big{};
-        auto hdr = make_udp_pkt(src, dst, 40000, 45000);
-        std::memcpy(big.data(), hdr.data(), 42);
-        auto* ipv4 = reinterpret_cast<Net::IPv4Header*>(big.data() + 14);
-        auto* udp  = reinterpret_cast<Net::UDPHeader*>(big.data() + 34);
-        ipv4->tot_len = htons(static_cast<uint16_t>(1200 - 14));
-        udp->len      = htons(static_cast<uint16_t>(1200 - 14 - 20));
-        auto pkt = Net::ParsedPacket::parse(std::span<uint8_t>{big.data(), 1200});
-        bool pass = (proc.process(pkt) == Net::Priority::Normal);
-        r.add("PRIO_Normal", pass,
-              pass ? "1200B UDP classified Normal" : "wrong priority for bulk traffic");
-    }
-}
-
-// Hardware checks: open /sys and /proc nodes with raw fds (no ifstream, no path heap).
+// Hardware check
 void SelfTest::test_system(Report& r) {
-    // SYS_Temp: /sys/class/thermal/thermal_zone0/temp
     {
         char buf[16]{};
         int fd = ::open("/sys/class/thermal/thermal_zone0/temp", O_RDONLY);
@@ -496,7 +280,6 @@ void SelfTest::test_system(Report& r) {
               pass ? "CPU thermal sensor readable" : "cannot read /sys/class/thermal");
     }
 
-    // SYS_Memory: /proc/meminfo, scan for MemTotal
     {
         char mbuf[512]{};
         bool pass = false;
@@ -517,7 +300,6 @@ void SelfTest::test_system(Report& r) {
               pass ? "MemTotal parsed from /proc/meminfo" : "cannot read memory info");
     }
 
-    // SYS_Ifaces: /sys/class/net — count non-lo interfaces
     {
         uint8_t iface_count = 0;
         DIR* d = opendir("/sys/class/net");

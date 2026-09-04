@@ -1,11 +1,6 @@
 #pragma once
 // Callback delivery uses std::function; structured types carry multi-field results.
 // The worker runs on a std::thread; the caller should join() after start().
-// Hardware checks use raw fds on /sys and /proc (implementations in SelfTest.cpp).
-//
-// POSIX headers (<netinet/in.h>, <sys/socket.h>, <fcntl.h>, <unistd.h>, <dirent.h>)
-// and engine headers are confined to SelfTest.cpp; this header exposes only the
-// public interface types Report, TestCase, and SelfTest.
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -13,13 +8,12 @@
 #include <thread>
 #include <cstdint>
 
-#include "Headers.hpp"
+#include "Headers_util.hpp"
+#include "SystemOptimizer_util.hpp"
 
 namespace HPGTP::SelfTest {
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Test case row: name, pass flag, and short human-readable detail.
-// ─────────────────────────────────────────────────────────────────────────────
 struct TestCase {
     std::array<char, 64>  name{};
     bool                  pass{false};
@@ -41,12 +35,10 @@ struct Report {
     }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SelfTest — worker thread plus optional result callback.
-//   start()          -> launches std::thread running run()
-//   join()           -> blocks until the worker finishes
-//   registerCallback -> stores std::function<void(const Report&)>
-// ─────────────────────────────────────────────────────────────────────────────
+// SelfTest - worker thread plus optional result callback.
+// start() -> launches std::thread running run()
+// join() -> blocks until the worker finishes
+// registerCallback -> stores std::function<void(const Report&)>
 class SelfTest {
 public:
     using ResultCallback = std::function<void(const Report&)>;
@@ -54,10 +46,11 @@ public:
 
     ~SelfTest() { if (uthread_.joinable()) uthread_.join(); }
 
-    // Ignores duplicate start while a worker is still joinable (call join() first).
+    // Ignores duplicate start while a worker is still joinable.
     void start() {
         if (uthread_.joinable()) return;
         uthread_ = std::thread([this] {
+            HPGTP::Utils::System::set_current_thread_affinity_control(); // self-test: control cores 0-1
             struct Active {
                 std::atomic<bool>& a;
                 explicit Active(std::atomic<bool>& x) : a(x) {
@@ -79,31 +72,22 @@ public:
 private:
     void run();
 
-    // ── Packet builders — implementations in SelfTest.cpp ───────────────────
-    static std::array<uint8_t, 42>  make_udp_pkt(Net::IPv4Net sip, Net::IPv4Net dip,
+    // Packet builders - implementations in SelfTest.cpp
+    static std::array<uint8_t, 42>  make_udp_pkt(Utils::Net::IPv4Net sip, Utils::Net::IPv4Net dip,
                                                    uint16_t sport, uint16_t dport);
-    static std::array<uint8_t, 54>  make_tcp_pkt(Net::IPv4Net sip, Net::IPv4Net dip,
+    static std::array<uint8_t, 54>  make_tcp_pkt(Utils::Net::IPv4Net sip, Utils::Net::IPv4Net dip,
                                                    uint16_t sport, uint16_t dport,
                                                    uint16_t flags);
-    static std::array<uint8_t, 512> make_dns_query(Net::IPv4Net sip, Net::IPv4Net dip,
-                                                    const char* host_dotted,
-                                                    size_t& out_len);
     static std::array<uint8_t, 512> make_dhcp_discover(size_t& out_len);
 
-    // ── Sub-tests — implementations in SelfTest.cpp ─────────────────────────
+    // Sub-tests - implementations in SelfTest.cpp
     void test_nat(Report& r);
-    void test_dns(Report& r);
     void test_dhcp(Report& r);
-    void test_firewall(Report& r);
-    void test_classifier(Report& r);
     void test_system(Report& r);
 
     ResultCallback callback_;
     std::thread    uthread_;
     std::atomic<bool> worker_running_{false};
 };
-
-// Last self-test report — written once before GUI starts, read by Dashboard on init
-inline Report LAST_REPORT{};
 
 } // namespace HPGTP::SelfTest

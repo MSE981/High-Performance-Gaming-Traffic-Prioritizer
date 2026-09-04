@@ -1,14 +1,4 @@
 #!/usr/bin/env bash
-# =============================================================================
-# start_release.sh — high-performance gaming traffic prioritizer (release / production GUI)
-# One-shot setup and launch for Raspberry Pi 5 + DSI 800x1280 portrait display
-#
-# Usage:  chmod +x start_release.sh && sudo ./start_release.sh
-#         Optional: user-owned build tree (e.g. after root-owned build/):
-#           sudo env HPGTP_BUILD_DIR=build-user ./start_release.sh
-#         Skip kernel prep (ip_forward, iptables MASQUERADE on WAN, NM/dnsmasq):
-#           sudo env HPGTP_SKIP_KERNEL_NET_PREP=1 ./start_release.sh
-# =============================================================================
 set -euo pipefail
 
 # -- Sanity -------------------------------------------------------------------
@@ -18,7 +8,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"   # binary loads config/config.txt relative to CWD
+cd "$SCRIPT_DIR"   
 
 BUILD_DIR="${HPGTP_BUILD_DIR:-build}"
 
@@ -27,7 +17,7 @@ NOTIFY_LOG="/tmp/hpgtp_startup.log"
 notify() { echo "${1}|${2}" >> "$NOTIFY_LOG"; }
 
 echo "=========================================================="
-echo "  High-performance gaming traffic prioritizer v3.0 (release)"
+echo "  High-performance gaming traffic prioritizer "
 echo "=========================================================="
 echo "    Root: $SCRIPT_DIR"
 echo ""
@@ -47,7 +37,6 @@ REQUIRED_PKGS=(
 
 OPTIONAL_PKGS=(
     qt6-qpa-plugins
-    speedtest-cli
 )
 
 pkg_installed() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"; }
@@ -82,7 +71,7 @@ echo "    eglfs plugin : $EGLFS_SO"
 echo "    Dependencies : OK"
 notify "[1/4] Dependencies" "eglfs: $(basename "$EGLFS_SO") | All packages OK"
 
-# -- 2. Build (release main binary; demo/ changes do not force rebuild) -------
+# -- 2. Build -------
 echo ""
 echo "[2/4] Build check..."
 
@@ -147,8 +136,7 @@ for iface in "$WAN_IFACE" "$LAN_IFACE"; do
 done
 notify "[3/4] Network" "WAN=$WAN_IFACE LAN=$LAN_IFACE | ${NET_STATUS% }"
 
-# -- 3b. Kernel hygiene for userspace NAT/forwarding -----------------------------
-# ip_forward off; drop only POSTROUTING MASQUERADE -o WAN (does not remove ts-postrouting jumps).
+# ip_forward off; drop only POSTROUTING MASQUERADE -o WAN
 echo ""
 if [[ "${HPGTP_SKIP_KERNEL_NET_PREP:-}" == "1" ]]; then
     echo "    [3b] Skipped (HPGTP_SKIP_KERNEL_NET_PREP=1)"
@@ -156,6 +144,21 @@ if [[ "${HPGTP_SKIP_KERNEL_NET_PREP:-}" == "1" ]]; then
 else
     echo "    [3b] ip_forward=0, MASQUERADE -o $WAN_IFACE removed, dnsmasq stop, NM LAN unmanaged"
     sysctl -w net.ipv4.ip_forward=0 >/dev/null
+
+    # Userspace data plane forwards packets with raw sockets
+    NFT_BIN="$(command -v nft 2>/dev/null || true)"
+    [[ -z "$NFT_BIN" && -x /usr/sbin/nft ]] && NFT_BIN=/usr/sbin/nft
+    if [[ -n "$NFT_BIN" ]]; then
+        $NFT_BIN delete table inet hpgtp 2>/dev/null || true
+        $NFT_BIN add table inet hpgtp
+        $NFT_BIN add chain inet hpgtp input '{ type filter hook input priority 0; policy accept; }'
+        $NFT_BIN add rule inet hpgtp input iif "$WAN_IFACE" tcp dport 22 accept
+        $NFT_BIN add rule inet hpgtp input iif "$WAN_IFACE" drop
+        echo "        nft INPUT drop on $WAN_IFACE (SSH 22 kept): kernel cannot RST forwarded TCP"
+    else
+        echo "        [Warn] nft not found; kernel may RST forwarded TCP on $WAN_IFACE"
+    fi
+
     n=0
     command -v iptables >/dev/null 2>&1 && {
         while iptables -t nat -C POSTROUTING -o "$WAN_IFACE" -j MASQUERADE 2>/dev/null; do
